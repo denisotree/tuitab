@@ -43,7 +43,7 @@ package() {
 
     # Short aliases
     ln -s /usr/bin/tuitab "$pkgdir/usr/bin/ttab"
-    ln -s /usr/bin/tuitab "$pkgdir/usr/bin/tt"
+    ln -s /usr/bin/tuitab "$pkgdir/usr/bin/ttb"
 
     # License
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

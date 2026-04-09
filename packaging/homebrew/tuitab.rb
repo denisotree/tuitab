@@ -45,12 +45,12 @@ class Tuitab < Formula
   def install
     bin.install "tuitab"
     bin.install_symlink bin/"tuitab" => "ttab"
-    bin.install_symlink bin/"tuitab" => "tt"
+    bin.install_symlink bin/"tuitab" => "ttb"
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/tuitab --version")
     assert_match version.to_s, shell_output("#{bin}/ttab --version")
-    assert_match version.to_s, shell_output("#{bin}/tt --version")
+    assert_match version.to_s, shell_output("#{bin}/ttb --version")
   end
 end

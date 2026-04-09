@@ -26,8 +26,8 @@ name = "ttab"
 path = "src/bin/ttab.rs"
 
 [[bin]]
-name = "tt"
-path = "src/bin/tt.rs"
+name = "ttb"
+path = "src/bin/ttb.rs"
 
 [dependencies]
 ratatui = "0.29"

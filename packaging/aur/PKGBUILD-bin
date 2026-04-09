@@ -33,6 +33,6 @@ package() {
 
     install -Dm755 "${_src_dir}/tuitab" "$pkgdir/usr/bin/tuitab"
     ln -s /usr/bin/tuitab "$pkgdir/usr/bin/ttab"
-    ln -s /usr/bin/tuitab "$pkgdir/usr/bin/tt"
+    ln -s /usr/bin/tuitab "$pkgdir/usr/bin/ttb"
     install -Dm644 "${_src_dir}/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
