@@ -11,7 +11,7 @@ documentation = "https://github.com/denisotree/tuitab#readme"
 readme = "README.md"
 keywords = ["tui", "csv", "data", "terminal", "tabular"]
 categories = ["command-line-utilities", "visualization"]
-rust-version = "1.78"
+rust-version = "1.85"
 exclude = [
     "packaging/",
     ".github/",

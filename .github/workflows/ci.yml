@@ -34,11 +34,11 @@ jobs:
         run: cargo test
 
   msrv:
-    name: MSRV (1.78)
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.78
+      - uses: dtolnay/rust-toolchain@1.85
       - uses: Swatinem/rust-cache@v2
       - run: cargo check
 
