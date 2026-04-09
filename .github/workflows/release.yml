@@ -9,6 +9,8 @@ env:
   CARGO_TERM_COLOR: always
   BIN_NAME: tuitab
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-C debuginfo=0"
 
 jobs:
   build:
