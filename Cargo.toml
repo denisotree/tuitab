@@ -21,6 +21,14 @@ exclude = [
 name = "tuitab"
 path = "src/main.rs"
 
+[[bin]]
+name = "ttab"
+path = "src/bin/ttab.rs"
+
+[[bin]]
+name = "tt"
+path = "src/bin/tt.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
