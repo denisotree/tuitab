@@ -47,6 +47,13 @@ pub fn run() -> Result<()> {
         path = Some(std::path::Path::new("."));
     }
 
+    if let Some(p) = path {
+        if !p.exists() {
+            eprintln!("Error: '{}': no such file or directory", p.display());
+            std::process::exit(1);
+        }
+    }
+
     let mut app = if use_stdin {
         if cli.data_type.is_none() {
             eprintln!("Error: When reading from stdin, you must specify the data type using the -t or --type argument.");
