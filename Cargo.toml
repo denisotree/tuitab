@@ -47,7 +47,7 @@ polars = { version = "0.46", features = ["csv", "lazy", "dtype-date", "dtype-dat
 polars-ops = { version = "0.46", features = ["pivot"] }
 libc = "0.2"
 calamine = "0.22"
-rusqlite = "0.31"
+rusqlite = "0.39"
 rust_xlsxwriter = "0.80"
 
 [profile.release]
