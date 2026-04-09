@@ -20,7 +20,9 @@ fn test_get_visible_df_returns_all_rows() {
 fn test_get_visible_df_after_sort_preserves_count() {
     let mut df = load_sample();
     df.sort_by(0, true); // Sort descending
-    let visible = df.get_visible_df().expect("get_visible_df failed after sort");
+    let visible = df
+        .get_visible_df()
+        .expect("get_visible_df failed after sort");
     assert_eq!(visible.height(), df.visible_row_count());
 }
 
@@ -35,7 +37,11 @@ fn test_build_frequency_table_basic() {
         .expect("build_frequency_table failed");
 
     // Should have 4 columns: department, Count, Pct, Bar
-    assert_eq!(columns.len(), 4, "Expected 4 columns: department, Count, Pct, Bar");
+    assert_eq!(
+        columns.len(),
+        4,
+        "Expected 4 columns: department, Count, Pct, Bar"
+    );
     assert_eq!(columns[0].name, "department");
     assert_eq!(columns[1].name, "Count");
     assert_eq!(columns[2].name, "Pct");
@@ -107,7 +113,10 @@ fn test_find_rows_by_value_exact() {
 fn test_find_rows_by_value_no_match() {
     let df = load_sample();
     let matches = df.find_rows_by_value(4, "NoSuchDepartment");
-    assert!(matches.is_empty(), "Should find no matches for non-existent department");
+    assert!(
+        matches.is_empty(),
+        "Should find no matches for non-existent department"
+    );
 }
 
 // ── P3: build_multi_frequency_table ────────────────────────────────────────

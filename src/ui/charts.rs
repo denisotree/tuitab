@@ -11,7 +11,13 @@ use std::collections::HashMap;
 
 // Colour palette for multi-colour bar charts
 const CHART_COLORS: &[Color] = &[
-    T::BLUE, T::GREEN, T::YELLOW, T::ORANGE, T::PURPLE, T::AQUA, T::RED,
+    T::BLUE,
+    T::GREEN,
+    T::YELLOW,
+    T::ORANGE,
+    T::PURPLE,
+    T::AQUA,
+    T::RED,
 ];
 
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -27,8 +33,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if let Some(ref_col) = app.chart_ref_col {
         let ref_type = s.dataframe.columns[ref_col].col_type;
         let cur_type = s.dataframe.columns[cur_col].col_type;
-        let is_date =
-            |ct: ColumnType| matches!(ct, ColumnType::Date | ColumnType::Datetime);
+        let is_date = |ct: ColumnType| matches!(ct, ColumnType::Date | ColumnType::Datetime);
         let is_numeric = |ct: ColumnType| {
             matches!(
                 ct,
@@ -41,7 +46,14 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
         if is_date(ref_type) {
             // Line chart: X = date groups, Y = aggregated numeric/count
-            render_line_chart(frame, app, ref_col, cur_col, is_numeric(cur_type), chunks[0]);
+            render_line_chart(
+                frame,
+                app,
+                ref_col,
+                cur_col,
+                is_numeric(cur_type),
+                chunks[0],
+            );
         } else {
             // Bar chart: X = categories, Y = aggregated numeric
             render_grouped_bar_chart(frame, app, ref_col, cur_col, chunks[0]);
@@ -97,9 +109,8 @@ fn histogram_bins(
 ) -> Vec<(String, u64)> {
     let mut nums: Vec<f64> = Vec::new();
     for i in 0..s.dataframe.visible_row_count() {
-        let val_str = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
-            &s.dataframe.get_val(i, col),
-        );
+        let val_str =
+            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(i, col));
         if let Ok(v) = val_str.parse::<f64>() {
             if v.is_finite() {
                 nums.push(v);
@@ -136,9 +147,7 @@ fn histogram_bins(
     let hi = nums[((n as f64 * 0.98) as usize).min(n - 1)];
     let range = (hi - lo).max(fd_width);
 
-    let num_bins = ((range / fd_width).ceil() as usize)
-        .max(2)
-        .min(max_bars);
+    let num_bins = ((range / fd_width).ceil() as usize).max(2).min(max_bars);
     let step = range / num_bins as f64;
 
     let mut buckets = vec![0u64; num_bins];
@@ -157,7 +166,11 @@ fn histogram_bins(
         .map(|i| {
             let b_start = lo + i as f64 * step;
             let b_end = lo + (i + 1) as f64 * step;
-            let label = format!("{}-{}", format_val(b_start, col_type), format_val(b_end, col_type));
+            let label = format!(
+                "{}-{}",
+                format_val(b_start, col_type),
+                format_val(b_end, col_type)
+            );
             (label, buckets[i])
         })
         .collect()
@@ -173,16 +186,11 @@ fn format_val(v: f64, col_type: ColumnType) -> String {
 
 // ── Frequency bar chart (categorical columns) ──────────────────────────────
 
-fn frequency_bars(
-    s: &crate::sheet::Sheet,
-    col: usize,
-    max_bars: usize,
-) -> Vec<(String, u64)> {
+fn frequency_bars(s: &crate::sheet::Sheet, col: usize, max_bars: usize) -> Vec<(String, u64)> {
     let mut counts: HashMap<String, u64> = HashMap::new();
     for i in 0..s.dataframe.visible_row_count() {
-        let val = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
-            &s.dataframe.get_val(i, col),
-        );
+        let val =
+            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(i, col));
         *counts.entry(val).or_insert(0) += 1;
     }
     let mut freq: Vec<(String, u64)> = counts.into_iter().collect();
@@ -235,7 +243,11 @@ fn render_line_chart(
     let s = app.stack.active();
     let ref_name = s.dataframe.columns[ref_col].name.clone();
     let cur_name = s.dataframe.columns[cur_col].name.clone();
-    let agg = if cur_is_numeric { app.chart_agg } else { ChartAgg::Count };
+    let agg = if cur_is_numeric {
+        app.chart_agg
+    } else {
+        ChartAgg::Count
+    };
 
     let (counts, vals) = collect_groups(s, ref_col, cur_col);
     if counts.is_empty() {
@@ -262,8 +274,12 @@ fn render_line_chart(
     let y_vals: Vec<f64> = data_points.iter().map(|(_, y)| *y).collect();
     let mut y_min = y_vals.iter().cloned().fold(f64::INFINITY, f64::min);
     let mut y_max = y_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    if !y_min.is_finite() { y_min = 0.0; }
-    if !y_max.is_finite() { y_max = 1.0; }
+    if !y_min.is_finite() {
+        y_min = 0.0;
+    }
+    if !y_max.is_finite() {
+        y_max = 1.0;
+    }
     let y_pad = ((y_max - y_min) * 0.05).max(1.0);
 
     // Sample up to ~6 x-axis labels
@@ -275,10 +291,7 @@ fn render_line_chart(
             } else {
                 i * (x_len - 1) / (label_count - 1)
             };
-            let label = sorted_keys[idx]
-                .chars()
-                .take(10)
-                .collect::<String>();
+            let label = sorted_keys[idx].chars().take(10).collect::<String>();
             Line::from(Span::raw(label))
         })
         .collect();
@@ -376,17 +389,28 @@ fn render_f64_bar_chart(
     let available = area.width.saturating_sub(2) as usize;
 
     // Compute formatted text values from actual f64 data
-    let max_val = bars_data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).max(1.0);
-    let text_vals: Vec<String> = bars_data.iter().map(|(_, v)| {
-        if v.fract().abs() < 0.005 {
-            format!("{}", *v as i64)
-        } else {
-            format!("{:.2}", v)
-        }
-    }).collect();
+    let max_val = bars_data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(1.0);
+    let text_vals: Vec<String> = bars_data
+        .iter()
+        .map(|(_, v)| {
+            if v.fract().abs() < 0.005 {
+                format!("{}", *v as i64)
+            } else {
+                format!("{:.2}", v)
+            }
+        })
+        .collect();
 
     // Decide layout: horizontal when labels won't fit under vertical bars
-    let max_label_len = bars_data.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(1);
+    let max_label_len = bars_data
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(1);
     let use_horizontal = n * (max_label_len.max(3) + 1) > available;
 
     if use_horizontal {
@@ -395,24 +419,31 @@ fn render_f64_bar_chart(
     }
 
     // Vertical bar chart: scale to u64, fill available width
-    let scaled: Vec<u64> = bars_data.iter().map(|(_, v)| {
-        ((v / max_val) * 10_000.0) as u64
-    }).collect();
+    let scaled: Vec<u64> = bars_data
+        .iter()
+        .map(|(_, v)| ((v / max_val) * 10_000.0) as u64)
+        .collect();
 
     // bar_width fills all available space without a hard cap
-    let bar_width = if n == 0 { 3u16 } else {
+    let bar_width = if n == 0 {
+        3u16
+    } else {
         ((available.saturating_sub(n.saturating_sub(1))) / n).max(3) as u16
     };
 
-    let bars: Vec<Bar> = bars_data.iter().enumerate().map(|(i, (label, _))| {
-        let color = CHART_COLORS[i % CHART_COLORS.len()];
-        Bar::default()
-            .value(scaled[i])
-            .label(label.as_str().into())
-            .text_value(text_vals[i].clone())
-            .style(Style::default().fg(color))
-            .value_style(Style::default().fg(T::BG0).bg(color))
-    }).collect();
+    let bars: Vec<Bar> = bars_data
+        .iter()
+        .enumerate()
+        .map(|(i, (label, _))| {
+            let color = CHART_COLORS[i % CHART_COLORS.len()];
+            Bar::default()
+                .value(scaled[i])
+                .label(label.as_str().into())
+                .text_value(text_vals[i].clone())
+                .style(Style::default().fg(color))
+                .value_style(Style::default().fg(T::BG0).bg(color))
+        })
+        .collect();
 
     let group = BarGroup::default().bars(&bars);
     let barchart = BarChart::default()
@@ -448,13 +479,27 @@ fn render_horizontal_bars(
             .title(title)
             .borders(Borders::ALL)
             .style(Style::default().fg(T::FG).bg(T::BG0));
-        frame.render_widget(Paragraph::new("No data").block(block).style(Style::default().fg(T::GREY1)), area);
+        frame.render_widget(
+            Paragraph::new("No data")
+                .block(block)
+                .style(Style::default().fg(T::GREY1)),
+            area,
+        );
         return;
     }
 
-    let max_val = bars_data.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).max(1.0);
+    let max_val = bars_data
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f64::NEG_INFINITY, f64::max)
+        .max(1.0);
     let max_text_len = text_vals.iter().map(|s| s.len()).max().unwrap_or(1);
-    let label_width = bars_data.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(1).min(24);
+    let label_width = bars_data
+        .iter()
+        .map(|(l, _)| l.chars().count())
+        .max()
+        .unwrap_or(1)
+        .min(24);
 
     // inner width = area.width - 2 borders
     let inner_w = area.width.saturating_sub(2) as usize;

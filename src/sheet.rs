@@ -198,9 +198,9 @@ impl SheetStack {
         if was_swapped {
             self.swap_in(parent_idx);
         }
-        
+
         let df = self.sheets[parent_idx].dataframe.clone();
-        
+
         if was_swapped {
             self.swap_out(parent_idx);
         }

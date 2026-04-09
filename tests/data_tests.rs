@@ -1,8 +1,8 @@
+use polars::prelude::NamedFrom;
 use std::path::Path;
 use tuitab::data::dataframe::DataFrame;
 use tuitab::data::loader::load_csv;
 use tuitab::types::ColumnType;
-use polars::prelude::NamedFrom;
 
 fn sample_path() -> &'static Path {
     Path::new("test_data/sample.csv")
@@ -42,32 +42,32 @@ fn test_get_value() {
     let df = load_csv(sample_path(), None).expect("Failed to load sample.csv");
     // First row: id=1, name="Alice Johnson"
     assert_eq!(DataFrame::anyvalue_to_string_fmt(&df.get_val(0, 0)), "1");
-    assert_eq!(DataFrame::anyvalue_to_string_fmt(&df.get_val(0, 1)), "Alice Johnson");
+    assert_eq!(
+        DataFrame::anyvalue_to_string_fmt(&df.get_val(0, 1)),
+        "Alice Johnson"
+    );
 }
 
 #[test]
 fn test_currency_dirty_float_parsing() {
     use polars::prelude::Series;
     use tuitab::data::column::ColumnMeta;
-    
+
     let mut df = DataFrame::empty();
-    let series = Series::new("Price".into(), &[
-        "$1,234.56",
-        "€-50.00",
-        "100.00₽",
-        " (10.5) ",
-        "invalid",
-    ]);
+    let series = Series::new(
+        "Price".into(),
+        &["$1,234.56", "€-50.00", "100.00₽", " (10.5) ", "invalid"],
+    );
     df.df = polars::prelude::DataFrame::new(vec![series.into()]).unwrap();
     df.columns = vec![ColumnMeta::new("Price".to_string())];
-    
+
     // Set type to Currency, which should trigger dirty float parsing
     df.set_column_type(0, ColumnType::Currency).unwrap();
-    
+
     // Check parsed values
     let s = &df.df.get_columns()[0];
     let ca = s.f64().unwrap();
-    
+
     assert_eq!(ca.get(0), Some(1234.56));
     assert_eq!(ca.get(1), Some(-50.0));
     assert_eq!(ca.get(2), Some(100.0));

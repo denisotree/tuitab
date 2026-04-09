@@ -55,9 +55,9 @@ impl DataFrame {
             AnyValue::Datetime(_v, tu, tz) => {
                 if let Ok(s) = polars::prelude::Series::from_any_values_and_dtype(
                     "".into(),
-                    &[val.clone()],
-                    &polars::prelude::DataType::Datetime(*tu, tz.clone().cloned()),
-                    true
+                    std::slice::from_ref(val),
+                    &polars::prelude::DataType::Datetime(*tu, (*tz).cloned()),
+                    true,
                 ) {
                     if let Ok(cast_s) = s.cast(&polars::prelude::DataType::String) {
                         if let Ok(ca) = cast_s.str() {
@@ -141,7 +141,8 @@ impl DataFrame {
                 ColumnType::Currency => {
                     let s = parsed_val.trim();
                     // Dirty float parsing: keep only digits, '.', and '-'
-                    let cleaned: String = s.chars()
+                    let cleaned: String = s
+                        .chars()
                         .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
                         .collect();
                     if let Ok(f) = cleaned.parse::<f64>() {
@@ -163,8 +164,10 @@ impl DataFrame {
         }
 
         let new_series = builder.finish().into_series();
-        let final_series = new_series.cast(&series.dtype()).unwrap_or(new_series);
-        self.df.with_column(final_series).map_err(|e| e.to_string())?;
+        let final_series = new_series.cast(series.dtype()).unwrap_or(new_series);
+        self.df
+            .with_column(final_series)
+            .map_err(|e| e.to_string())?;
         self.modified = true;
         self.aggregates_cache = None;
         Ok(())
@@ -190,20 +193,27 @@ impl DataFrame {
         }
 
         let series = &self.df.get_columns()[col_idx];
-        
+
         let target_dtype = match col_type {
             ColumnType::Integer => polars::prelude::DataType::Int64,
-            ColumnType::Float | ColumnType::Percentage | ColumnType::Currency => polars::prelude::DataType::Float64,
+            ColumnType::Float | ColumnType::Percentage | ColumnType::Currency => {
+                polars::prelude::DataType::Float64
+            }
             ColumnType::Boolean => polars::prelude::DataType::Boolean,
             ColumnType::Date => polars::prelude::DataType::Date,
-            ColumnType::Datetime => polars::prelude::DataType::Datetime(polars::datatypes::TimeUnit::Microseconds, None),
+            ColumnType::Datetime => {
+                polars::prelude::DataType::Datetime(polars::datatypes::TimeUnit::Microseconds, None)
+            }
             _ => polars::prelude::DataType::String,
         };
 
-        let new_series = if target_dtype == polars::prelude::DataType::Boolean && series.dtype() == &polars::prelude::DataType::String {
+        let new_series = if target_dtype == polars::prelude::DataType::Boolean
+            && series.dtype() == &polars::prelude::DataType::String
+        {
             // Custom boolean parsing
             let str_ca = series.str().map_err(|e| e.to_string())?;
-            let mut builder = polars::prelude::BooleanChunkedBuilder::new(series.name().clone(), str_ca.len());
+            let mut builder =
+                polars::prelude::BooleanChunkedBuilder::new(series.name().clone(), str_ca.len());
             for opt_s in str_ca.into_iter() {
                 if let Some(s) = opt_s {
                     let lower = s.trim().to_lowercase();
@@ -219,13 +229,17 @@ impl DataFrame {
                 }
             }
             polars::prelude::Column::from(builder.finish().into_series())
-        } else if col_type == ColumnType::Currency && series.dtype() == &polars::prelude::DataType::String {
+        } else if col_type == ColumnType::Currency
+            && series.dtype() == &polars::prelude::DataType::String
+        {
             // Dirty float parsing for Currency
             let str_ca = series.str().map_err(|e| e.to_string())?;
-            let parsed_vals: Vec<Option<f64>> = str_ca.into_iter()
+            let parsed_vals: Vec<Option<f64>> = str_ca
+                .into_iter()
                 .map(|opt_s| {
                     if let Some(s) = opt_s {
-                        let cleaned: String = s.chars()
+                        let cleaned: String = s
+                            .chars()
                             .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
                             .collect();
                         cleaned.parse::<f64>().ok()
@@ -237,7 +251,9 @@ impl DataFrame {
             let new_series = Series::new(series.name().clone(), parsed_vals);
             polars::prelude::Column::from(new_series)
         } else {
-            series.strict_cast(&target_dtype).map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
+            series
+                .strict_cast(&target_dtype)
+                .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
         };
 
         self.df.with_column(new_series).map_err(|e| e.to_string())?;
@@ -254,24 +270,34 @@ impl DataFrame {
         if col_idx >= self.columns.len() {
             return Err("Out of bounds".into());
         }
-        
+
         let is_pinned = self.columns[col_idx].pinned;
         self.columns[col_idx].pinned = !is_pinned;
-        
+
         let target_idx = if !is_pinned {
             // If pinning, move to the beginning (after already pinned ones)
             let mut insert_pos = 0;
             for i in 0..self.columns.len() {
-                if i == col_idx { continue; }
-                if self.columns[i].pinned { insert_pos += 1; } else { break; }
+                if i == col_idx {
+                    continue;
+                }
+                if self.columns[i].pinned {
+                    insert_pos += 1;
+                } else {
+                    break;
+                }
             }
             insert_pos
         } else {
             // If unpinning, move to the end of the pinned section
             let mut insert_pos = 0;
             for i in 0..self.columns.len() {
-                if i == col_idx { continue; }
-                if self.columns[i].pinned { insert_pos += 1; }
+                if i == col_idx {
+                    continue;
+                }
+                if self.columns[i].pinned {
+                    insert_pos += 1;
+                }
             }
             insert_pos
         };
@@ -399,8 +425,20 @@ impl DataFrame {
         // Native polars evaluation for supported expressions
         let mut native_results = std::collections::HashMap::new();
         if !exprs.is_empty() {
-            let indices = polars::prelude::IdxCa::new("".into(), self.row_order.iter().map(|&i| i as polars::prelude::IdxSize).collect::<Vec<_>>());
-            let visible_df = if self.row_order.len() != self.df.height() || self.row_order.iter().zip(0..self.df.height()).any(|(&a, b)| a != b) {
+            let indices = polars::prelude::IdxCa::new(
+                "".into(),
+                self.row_order
+                    .iter()
+                    .map(|&i| i as polars::prelude::IdxSize)
+                    .collect::<Vec<_>>(),
+            );
+            let visible_df = if self.row_order.len() != self.df.height()
+                || self
+                    .row_order
+                    .iter()
+                    .zip(0..self.df.height())
+                    .any(|(&a, b)| a != b)
+            {
                 self.df.take(&indices).unwrap_or_else(|_| self.df.clone())
             } else {
                 self.df.clone()
@@ -427,7 +465,10 @@ impl DataFrame {
             }
 
             // Prepare string values only if there's a fallback aggregator needed
-            let needs_fallback = col_meta.aggregators.iter().any(|agg| agg.to_expr(&col_meta.name).is_none());
+            let needs_fallback = col_meta
+                .aggregators
+                .iter()
+                .any(|agg| agg.to_expr(&col_meta.name).is_none());
             let values = if needs_fallback {
                 self.row_order
                     .iter()
@@ -449,19 +490,29 @@ impl DataFrame {
                 if !agg.is_compatible(col_meta.col_type) {
                     continue;
                 }
-                
+
                 let alias = format!("agg_{}_{}", col_idx, agg_idx);
                 let result_str = if let Some(native_val) = native_results.get(&alias) {
                     // Format native numbers with column precision
                     if let Ok(f) = native_val.parse::<f64>() {
-                        crate::data::aggregator::format_numeric(f, col_meta.col_type, col_meta.precision, col_meta.currency)
+                        crate::data::aggregator::format_numeric(
+                            f,
+                            col_meta.col_type,
+                            col_meta.precision,
+                            col_meta.currency,
+                        )
                     } else {
                         native_val.clone()
                     }
                 } else {
-                    agg.compute(&values, col_meta.col_type, col_meta.precision, col_meta.currency)
+                    agg.compute(
+                        &values,
+                        col_meta.col_type,
+                        col_meta.precision,
+                        col_meta.currency,
+                    )
                 };
-                
+
                 col_aggs.push((*agg, result_str));
             }
             computed[col_idx] = col_aggs;
@@ -490,11 +541,9 @@ impl DataFrame {
     }
 
     pub fn clear_aggregators(&mut self, col_idx: usize) {
-        if col_idx < self.columns.len() {
-            if !self.columns[col_idx].aggregators.is_empty() {
-                self.columns[col_idx].aggregators.clear();
-                self.aggregates_cache = None;
-            }
+        if col_idx < self.columns.len() && !self.columns[col_idx].aggregators.is_empty() {
+            self.columns[col_idx].aggregators.clear();
+            self.aggregates_cache = None;
         }
     }
 
@@ -527,10 +576,13 @@ impl DataFrame {
                                 polars::datatypes::TimeUnit::Milliseconds => 1000.0,
                             };
                             if let Ok(int_series) = series.cast(&polars::prelude::DataType::Int64) {
-                                if let Ok(float_series) = int_series.cast(&polars::prelude::DataType::Float64) {
+                                if let Ok(float_series) =
+                                    int_series.cast(&polars::prelude::DataType::Float64)
+                                {
                                     if let Ok(f64_ca) = float_series.f64() {
                                         let new_series_arr = f64_ca.apply_values(|v| v / divisor);
-                                        let new_series = new_series_arr.into_series().with_name(name.into());
+                                        let new_series =
+                                            new_series_arr.into_series().with_name(name.into());
                                         let _ = self.df.replace(name, new_series);
                                         dtype = polars::prelude::DataType::Float64;
                                     }
@@ -605,9 +657,11 @@ impl DataFrame {
         }
 
         let new_series = Series::new(name.into(), &new_col);
-        
+
         // Try casting to Float64 if all values are numbers (slow path consistency)
-        let final_series = new_series.cast(&polars::prelude::DataType::Float64).unwrap_or(new_series);
+        let final_series = new_series
+            .cast(&polars::prelude::DataType::Float64)
+            .unwrap_or(new_series);
 
         self.df = self
             .df
@@ -626,7 +680,7 @@ impl DataFrame {
         self.columns.push(meta);
         self.aggregates_cache = None;
         self.calc_widths(40, 1000);
-        
+
         // Move to the requested position
         let target_idx = insert_after_col + 1;
         let mut curr_idx = self.columns.len() - 1;
@@ -634,7 +688,7 @@ impl DataFrame {
             self.swap_columns(curr_idx - 1, curr_idx)?;
             curr_idx -= 1;
         }
-        
+
         Ok(())
     }
 
@@ -659,7 +713,7 @@ impl DataFrame {
 
             // Fixed-width estimate for types whose max display width is bounded
             let fixed_width: Option<u16> = match series.dtype() {
-                DataType::Boolean => Some(5),  // "false"
+                DataType::Boolean => Some(5), // "false"
                 DataType::Int8 | DataType::UInt8 => Some(4),
                 DataType::Int16 | DataType::UInt16 => Some(6),
                 DataType::Int32 | DataType::UInt32 => Some(11),
@@ -680,7 +734,7 @@ impl DataFrame {
                 if let Ok(ca) = str_series.str() {
                     ca.into_iter()
                         .take(sample_end)
-                        .filter_map(|opt| opt)
+                        .flatten()
                         .map(|s| UnicodeWidthStr::width(s) as u16)
                         .max()
                         .unwrap_or(0)
@@ -688,7 +742,9 @@ impl DataFrame {
                     // Last-resort fallback
                     (0..sample_end)
                         .filter_map(|i| series.get(i).ok())
-                        .map(|v| UnicodeWidthStr::width(Self::anyvalue_to_string(&v).as_str()) as u16)
+                        .map(|v| {
+                            UnicodeWidthStr::width(Self::anyvalue_to_string(&v).as_str()) as u16
+                        })
                         .max()
                         .unwrap_or(0)
                 }
@@ -732,7 +788,7 @@ impl DataFrame {
             if let Ok(ca) = str_series.str() {
                 ca.into_iter()
                     .take(sample_end)
-                    .filter_map(|opt| opt)
+                    .flatten()
                     .map(|s| UnicodeWidthStr::width(s) as u16)
                     .max()
                     .unwrap_or(0)
@@ -809,7 +865,13 @@ impl DataFrame {
             Ok(mask) => mask
                 .into_iter()
                 .enumerate()
-                .filter_map(|(i, opt_b)| if opt_b.unwrap_or(false) { Some(i) } else { None })
+                .filter_map(|(i, opt_b)| {
+                    if opt_b.unwrap_or(false) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
                 .collect(),
             Err(_) => Vec::new(),
         }
@@ -844,13 +906,15 @@ impl DataFrame {
         str_ca
             .into_iter()
             .enumerate()
-            .filter_map(|(i, opt_s)| {
-                if opt_s.map_or(false, |s| s == target) {
-                    Some(i)
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |(i, opt_s)| {
+                    if opt_s == Some(target) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect()
     }
 
@@ -863,7 +927,13 @@ impl DataFrame {
         &self,
         col_idx: usize,
         aggregated_cols: &[(usize, Vec<crate::data::aggregator::AggregatorKind>)],
-    ) -> Result<(polars::prelude::DataFrame, Vec<crate::data::column::ColumnMeta>), String> {
+    ) -> Result<
+        (
+            polars::prelude::DataFrame,
+            Vec<crate::data::column::ColumnMeta>,
+        ),
+        String,
+    > {
         use polars::prelude::*;
 
         let col_name = self.columns[col_idx].name.clone();
@@ -883,8 +953,7 @@ impl DataFrame {
                 if let Some(expr) = agg_kind.to_expr(&agg_col_name) {
                     let alias_name = format!("{}:{}", agg_col_name, agg_kind.name());
                     agg_exprs.push(expr.alias(&alias_name));
-                    let mut meta =
-                        crate::data::column::ColumnMeta::new(alias_name);
+                    let mut meta = crate::data::column::ColumnMeta::new(alias_name);
                     meta.col_type = crate::types::ColumnType::Float;
                     extra_metas.push(meta);
                 }
@@ -905,10 +974,7 @@ impl DataFrame {
 
         // ── Build Pct and Bar columns ──────────────────────────────────────
         let count_col = grouped.column("Count").map_err(|e| e.to_string())?;
-        let total: f64 = count_col
-            .as_materialized_series()
-            .sum::<u64>()
-            .unwrap_or(1) as f64;
+        let total: f64 = count_col.as_materialized_series().sum::<u64>().unwrap_or(1) as f64;
         let max_count: usize = count_col
             .as_materialized_series()
             .max_reduce()
@@ -970,7 +1036,13 @@ impl DataFrame {
         &self,
         group_col_indices: &[usize],
         aggregated_cols: &[(usize, Vec<crate::data::aggregator::AggregatorKind>)],
-    ) -> Result<(polars::prelude::DataFrame, Vec<crate::data::column::ColumnMeta>), String> {
+    ) -> Result<
+        (
+            polars::prelude::DataFrame,
+            Vec<crate::data::column::ColumnMeta>,
+        ),
+        String,
+    > {
         use polars::prelude::*;
 
         if group_col_indices.is_empty() {
@@ -990,7 +1062,8 @@ impl DataFrame {
 
         // ── Per-column aggregators ─────────────────────────────────────────
         let mut extra_metas: Vec<crate::data::column::ColumnMeta> = Vec::new();
-        let group_indices_set: std::collections::HashSet<usize> = group_col_indices.iter().cloned().collect();
+        let group_indices_set: std::collections::HashSet<usize> =
+            group_col_indices.iter().cloned().collect();
 
         for &(agg_col_idx, ref aggregators) in aggregated_cols {
             if group_indices_set.contains(&agg_col_idx) {
@@ -1008,7 +1081,7 @@ impl DataFrame {
             }
         }
 
-        let group_exprs: Vec<Expr> = group_names.iter().map(|n| col(n)).collect();
+        let group_exprs: Vec<Expr> = group_names.iter().map(col).collect();
 
         let grouped = visible
             .lazy()
@@ -1023,10 +1096,7 @@ impl DataFrame {
 
         // ── Pct and Bar ───────────────────────────────────────────────────
         let count_col = grouped.column("Count").map_err(|e| e.to_string())?;
-        let total: f64 = count_col
-            .as_materialized_series()
-            .sum::<u64>()
-            .unwrap_or(1) as f64;
+        let total: f64 = count_col.as_materialized_series().sum::<u64>().unwrap_or(1) as f64;
         let max_count: usize = count_col
             .as_materialized_series()
             .max_reduce()
@@ -1088,12 +1158,18 @@ impl DataFrame {
         row_index_cols: &[String],
         pivot_col: &str,
         formula: &crate::data::expression::Expr,
-    ) -> Result<(polars::prelude::DataFrame, Vec<crate::data::column::ColumnMeta>), String> {
+    ) -> Result<
+        (
+            polars::prelude::DataFrame,
+            Vec<crate::data::column::ColumnMeta>,
+        ),
+        String,
+    > {
         use polars::prelude::*;
         use polars_ops::pivot::{pivot, PivotAgg};
 
         let visible = self.get_visible_df()?;
-        
+
         // 1. Group by [index_cols + pivot_col] and aggregate using formula
         let mut group_by_cols = row_index_cols.to_vec();
         if !group_by_cols.contains(&pivot_col.to_string()) {
@@ -1104,7 +1180,7 @@ impl DataFrame {
 
         let grouped = visible
             .lazy()
-            .group_by(group_by_cols.iter().map(|s| col(s)).collect::<Vec<_>>())
+            .group_by(group_by_cols.iter().map(col).collect::<Vec<_>>())
             .agg([polars_formula.alias("pivot_value")])
             .collect()
             .map_err(|e| format!("Pivot grouping error: {}", e))?;
@@ -1113,10 +1189,10 @@ impl DataFrame {
         // on: pivot_col (becomes column headers), index: row_index_cols (stays as rows), values: "pivot_value" (cell contents)
         let pivoted = pivot(
             &grouped,
-            [pivot_col],          // on (column headers)
-            Some(row_index_cols), // index (row headers)
+            [pivot_col],           // on (column headers)
+            Some(row_index_cols),  // index (row headers)
             Some(["pivot_value"]), // values (cell contents)
-            true,                 // sort_columns
+            true,                  // sort_columns
             Some(PivotAgg::First),
             None,
         )
@@ -1128,22 +1204,28 @@ impl DataFrame {
             let series = &pivoted.get_columns()[i];
             let name = series.name().to_string();
             let mut meta = crate::data::column::ColumnMeta::new(name);
-            
+
             // Map dtype to ColumnType
             meta.col_type = match series.dtype() {
-                DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 |
-                DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => ColumnType::Integer,
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => ColumnType::Integer,
                 DataType::Float32 | DataType::Float64 => ColumnType::Float,
                 DataType::Date => ColumnType::Date,
                 DataType::Datetime(_, _) => ColumnType::Datetime,
                 _ => ColumnType::String,
             };
-            
+
             // If it's one of the index columns, mark it as pinned
             if row_index_cols.contains(&meta.name) {
                 meta.pinned = true;
             }
-            
+
             columns.push(meta);
         }
 

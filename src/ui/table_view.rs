@@ -19,59 +19,85 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // ── Calculate visible columns (Horizontal Scrolling) ─────────────────────
     let cursor_col = sheet.cursor_col;
-    
-    let pinned_cols: Vec<usize> = df.columns.iter().enumerate().filter(|(_, c)| c.pinned).map(|(i, _)| i).collect();
-    let unpinned_cols: Vec<usize> = df.columns.iter().enumerate().filter(|(_, c)| !c.pinned).map(|(i, _)| i).collect();
+
+    let pinned_cols: Vec<usize> = df
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.pinned)
+        .map(|(i, _)| i)
+        .collect();
+    let unpinned_cols: Vec<usize> = df
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.pinned)
+        .map(|(i, _)| i)
+        .collect();
 
     let mut pinned_width: u16 = 0;
     let mut visible_pinned: Vec<usize> = Vec::new();
     for &i in &pinned_cols {
         let w = df.columns[i].width + 1;
         if pinned_width + w > max_width {
-            break; 
+            break;
         }
         pinned_width += w;
         visible_pinned.push(i);
     }
-    
+
     let remaining_width = max_width.saturating_sub(pinned_width);
 
     let mut left_col = sheet.left_col;
     if !unpinned_cols.contains(&left_col) {
         left_col = unpinned_cols.first().copied().unwrap_or(0);
     }
-    
+
     if unpinned_cols.contains(&cursor_col) {
         if let Some(pos) = unpinned_cols.iter().position(|&x| x == cursor_col) {
-            let left_pos = unpinned_cols.iter().position(|&x| x == left_col).unwrap_or(0);
-            
+            let left_pos = unpinned_cols
+                .iter()
+                .position(|&x| x == left_col)
+                .unwrap_or(0);
+
             if pos < left_pos {
                 left_col = cursor_col;
             } else {
                 loop {
                     let mut w = 0;
-                    let current_left_pos = unpinned_cols.iter().position(|&x| x == left_col).unwrap_or(0);
-                    for i in current_left_pos..=pos {
-                        w += df.columns[unpinned_cols[i]].width + 1;
+                    let current_left_pos = unpinned_cols
+                        .iter()
+                        .position(|&x| x == left_col)
+                        .unwrap_or(0);
+                    for &col_idx in unpinned_cols.iter().take(pos + 1).skip(current_left_pos) {
+                        w += df.columns[col_idx].width + 1;
                     }
                     if w <= remaining_width || left_col == cursor_col {
                         break;
                     }
-                    if let Some(next_pos) = unpinned_cols.iter().position(|&x| x == left_col).map(|p| p + 1) {
+                    if let Some(next_pos) = unpinned_cols
+                        .iter()
+                        .position(|&x| x == left_col)
+                        .map(|p| p + 1)
+                    {
                         if next_pos < unpinned_cols.len() {
                             left_col = unpinned_cols[next_pos];
-                        } else { break; }
-                    } else { break; }
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
         }
     }
-    
+
     sheet.left_col = left_col;
 
     let mut visible_unpinned: Vec<usize> = Vec::new();
     let mut widths_override: Vec<u16> = Vec::new();
-    
+
     for &i in &visible_pinned {
         widths_override.push(df.columns[i].width + 1);
     }
@@ -81,7 +107,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut current_w = 0;
 
     if insert_border {
-        let border_w = 1; 
+        let border_w = 1;
         if remaining_width > border_w {
             current_w += border_w;
             border_added = true;
@@ -157,7 +183,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let (name_display, padding) = if cell_w < 2 {
                 (String::new(), 0usize)
-            } else if name_w + 1 <= cell_w {
+            } else if name_w < cell_w {
                 let padding = cell_w - name_w - 1;
                 (name_raw, padding)
             } else {
@@ -268,7 +294,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         return Cell::from(Span::styled("│", T::separator_style()));
                     }
 
-                    let mut text = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, col));
+                    let mut text = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
+                        &df.get_val(display_row, col),
+                    );
                     let col_meta = &df.columns[col];
                     let mut is_negative_currency = false;
                     if !text.is_empty() {
@@ -279,13 +307,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                             }
                         } else if col_meta.col_type == crate::types::ColumnType::Currency {
                             if let Ok(f) = text.parse::<f64>() {
-                                let sym = col_meta.currency
-                                    .map(|k| k.symbol())
-                                    .unwrap_or("$");
-                                let prefix = col_meta.currency
-                                    .map(|k| k.is_prefix())
-                                    .unwrap_or(true);
-                                
+                                let sym = col_meta.currency.map(|k| k.symbol()).unwrap_or("$");
+                                let prefix =
+                                    col_meta.currency.map(|k| k.is_prefix()).unwrap_or(true);
+
                                 if f < 0.0 {
                                     is_negative_currency = true;
                                     let abs_f = f.abs();
@@ -347,22 +372,29 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Directory coloring (Phase 13 / F1 Feature)
                     // If this is the "Name" column of a directory listing, apply colors
-                    if !is_selected && !is_active && df.columns.len() == 5 
-                        && df.columns[0].name == "Name" 
-                        && df.columns[1].name == "Is Directory" 
-                        && df.columns[4].name == "Supported" 
+                    if !is_selected
+                        && !is_active
+                        && df.columns.len() == 5
+                        && df.columns[0].name == "Name"
+                        && df.columns[1].name == "Is Directory"
+                        && df.columns[4].name == "Supported"
+                        && col == 0
                     {
-                        if col == 0 { // Name column
-                            let is_dir_str = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, 1));
-                            let is_supported_str = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, 4));
-                            
-                            if is_dir_str == "true" {
-                                style = style.fg(T::BLUE);
-                            } else if is_supported_str == "true" {
-                                style = style.fg(T::GREEN);
-                            } else {
-                                style = style.fg(T::RED);
-                            }
+                        // Name column
+                        let is_dir_str = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
+                            &df.get_val(display_row, 1),
+                        );
+                        let is_supported_str =
+                            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
+                                &df.get_val(display_row, 4),
+                            );
+
+                        if is_dir_str == "true" {
+                            style = style.fg(T::BLUE);
+                        } else if is_supported_str == "true" {
+                            style = style.fg(T::GREEN);
+                        } else {
+                            style = style.fg(T::RED);
                         }
                     }
 
@@ -469,7 +501,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     s.top_row = top_row; // Save back the bounds-checked top_row
 
     // Create a temporary relative table state for rendering the slice
-    let relative_col = visible_cols.iter().position(|&c| c == cursor_col).unwrap_or(0);
+    let relative_col = visible_cols
+        .iter()
+        .position(|&c| c == cursor_col)
+        .unwrap_or(0);
     let mut relative_state = ratatui::widgets::TableState::default()
         .with_selected(Some(active_display_row.saturating_sub(top_row)))
         .with_selected_column(Some(relative_col));

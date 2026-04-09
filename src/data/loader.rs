@@ -69,7 +69,7 @@ pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
 /// Detect the most likely delimiter by reading the first 8 KB of the file.
 /// Counts occurrences of common delimiters per line and picks the most consistent one.
 fn detect_delimiter(path: &Path) -> u8 {
-    let candidates: &[u8] = &[b',', b'\t', b'|', b';'];
+    let candidates: &[u8] = b",\t|;";
     let default = b',';
 
     let Ok(mut file) = std::fs::File::open(path) else {

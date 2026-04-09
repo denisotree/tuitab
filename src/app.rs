@@ -1,4 +1,3 @@
-use polars::prelude::*;
 use crate::clipboard;
 use crate::data::aggregator::AggregatorKind;
 use crate::data::async_loader::{self, LoadEvent};
@@ -12,6 +11,7 @@ use crate::ui;
 use crate::ui::text_input::TextInput;
 use color_eyre::Result;
 use crossterm::event::{self, Event};
+use polars::prelude::*;
 use ratatui::widgets::ScrollbarState;
 use ratatui::DefaultTerminal;
 use regex::Regex;
@@ -552,11 +552,14 @@ impl App {
 
                 if has_pinned && on_unpinned {
                     self.mode = AppMode::PivotTableInput;
-                    self.status_message = "Enter aggregation formula (e.g. sum(amount) / sum(count))".to_string();
+                    self.status_message =
+                        "Enter aggregation formula (e.g. sum(amount) / sum(count))".to_string();
                 } else if !has_pinned {
-                    self.status_message = "Pivot requires at least one pinned column (!) as row index".to_string();
+                    self.status_message =
+                        "Pivot requires at least one pinned column (!) as row index".to_string();
                 } else {
-                    self.status_message = "Cursor must be on an unpinned column to pivot".to_string();
+                    self.status_message =
+                        "Cursor must be on an unpinned column to pivot".to_string();
                 }
             }
             Action::ApplyPivotTable => {
@@ -619,18 +622,23 @@ impl App {
                 }
             }
             Action::ChartAggSelectUp => {
-                if self.chart_agg_index > 0 { self.chart_agg_index -= 1; }
+                if self.chart_agg_index > 0 {
+                    self.chart_agg_index -= 1;
+                }
             }
             Action::ChartAggSelectDown => {
                 let max = crate::types::ChartAgg::all().len() - 1;
-                if self.chart_agg_index < max { self.chart_agg_index += 1; }
+                if self.chart_agg_index < max {
+                    self.chart_agg_index += 1;
+                }
             }
             Action::ApplyChartAgg => {
                 self.chart_agg = crate::types::ChartAgg::all()[self.chart_agg_index];
                 self.mode = AppMode::Chart;
                 let s = self.stack.active();
                 let col_name = s.dataframe.columns[s.cursor_col].name.clone();
-                self.status_message = format!("Chart: {} — Press 'v', 'q' or Esc to exit", col_name);
+                self.status_message =
+                    format!("Chart: {} — Press 'v', 'q' or Esc to exit", col_name);
             }
             Action::CancelChartAgg => {
                 self.mode = AppMode::Normal;
@@ -645,12 +653,16 @@ impl App {
                 let col = s.cursor_col;
                 if col < s.dataframe.columns.len() {
                     let current_type = s.dataframe.columns[col].col_type;
-                    if let Some(idx) = crate::types::ColumnType::all().iter().position(|t| *t == current_type) {
+                    if let Some(idx) = crate::types::ColumnType::all()
+                        .iter()
+                        .position(|t| *t == current_type)
+                    {
                         self.type_select_index = idx;
                     }
                 }
                 self.mode = AppMode::TypeSelect;
-                self.status_message = "Select column type (↑↓ navigate, Enter apply, Esc cancel)".to_string();
+                self.status_message =
+                    "Select column type (↑↓ navigate, Enter apply, Esc cancel)".to_string();
             }
             Action::TypeSelectUp => {
                 let n = crate::types::ColumnType::all().len();
@@ -671,7 +683,8 @@ impl App {
                 if col_type == crate::types::ColumnType::Currency {
                     self.currency_select_index = 0;
                     self.mode = AppMode::CurrencySelect;
-                    self.status_message = "Select currency (↑↓ navigate, Enter apply, Esc cancel)".to_string();
+                    self.status_message =
+                        "Select currency (↑↓ navigate, Enter apply, Esc cancel)".to_string();
                 } else {
                     let s = self.stack.active_mut();
                     s.push_undo();
@@ -680,7 +693,8 @@ impl App {
                         Ok(_) => {
                             let col_name = self.stack.active().dataframe.columns[col].name.clone();
                             self.mode = AppMode::Normal;
-                            self.status_message = format!("Column '{}' set to {:?}", col_name, col_type);
+                            self.status_message =
+                                format!("Column '{}' set to {:?}", col_name, col_type);
                         }
                         Err(e) => {
                             self.mode = AppMode::Normal;
@@ -714,12 +728,16 @@ impl App {
                 s.push_undo();
                 let col = s.cursor_col;
                 if col < s.dataframe.columns.len() {
-                    match s.dataframe.set_column_type(col, crate::types::ColumnType::Currency) {
+                    match s
+                        .dataframe
+                        .set_column_type(col, crate::types::ColumnType::Currency)
+                    {
                         Ok(_) => {
                             s.dataframe.columns[col].currency = Some(currency);
                             s.dataframe.modified = true;
                             let col_name = s.dataframe.columns[col].name.clone();
-                            self.status_message = format!("Column '{}' set to Currency ({:?})", col_name, currency);
+                            self.status_message =
+                                format!("Column '{}' set to Currency ({:?})", col_name, currency);
                         }
                         Err(e) => {
                             self.status_message = format!("Type error: {}", e);
@@ -732,7 +750,8 @@ impl App {
             }
             Action::CancelCurrencySelect => {
                 self.mode = AppMode::TypeSelect;
-                self.status_message = "Select column type (↑↓ navigate, Enter apply, Esc cancel)".to_string();
+                self.status_message =
+                    "Select column type (↑↓ navigate, Enter apply, Esc cancel)".to_string();
             }
 
             // ── Cell editing ──────────────────────────────────────────────────
@@ -857,7 +876,8 @@ impl App {
 
             Action::EnterYPrefix => {
                 self.mode = AppMode::YPrefix;
-                self.status_message = "y: (y)row  (c)cell  (l)column  (s)selected rows  Esc=cancel".to_string();
+                self.status_message =
+                    "y: (y)row  (c)cell  (l)column  (s)selected rows  Esc=cancel".to_string();
             }
             Action::CancelYPrefix => {
                 self.mode = AppMode::Normal;
@@ -877,7 +897,12 @@ impl App {
             Action::CopyCurrentRow => {
                 let s = self.stack.active();
                 let row = s.table_state.selected().unwrap_or(0);
-                let headers: Vec<&str> = s.dataframe.columns.iter().map(|c| c.name.as_str()).collect();
+                let headers: Vec<&str> = s
+                    .dataframe
+                    .columns
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect();
                 let row_data: Vec<String> = (0..s.dataframe.col_count())
                     .map(|c| DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(row, c)))
                     .collect();
@@ -895,11 +920,13 @@ impl App {
                     .collect();
                 let text = values.join("\n");
                 match crate::clipboard::copy_text(&text) {
-                    Ok(_) => self.status_message = format!(
-                        "Copied column '{}' ({} values)",
-                        s.dataframe.columns[col].name,
-                        values.len()
-                    ),
+                    Ok(_) => {
+                        self.status_message = format!(
+                            "Copied column '{}' ({} values)",
+                            s.dataframe.columns[col].name,
+                            values.len()
+                        )
+                    }
                     Err(e) => self.status_message = format!("Clipboard error: {}", e),
                 }
                 self.mode = AppMode::Normal;
@@ -931,7 +958,6 @@ impl App {
                 self.mode = AppMode::Normal;
                 self.status_message.clear();
             }
-
 
             // ── Derived sheet ─────────────────────────────────────────────────
             Action::CreateSheetFromSelection => self.create_sheet_from_selection(),
@@ -1113,7 +1139,9 @@ impl App {
             }
             Action::TogglePartitionSelection => {
                 let s = self.stack.active();
-                let col_name = s.dataframe.columns[self.partition_select_index].name.clone();
+                let col_name = s.dataframe.columns[self.partition_select_index]
+                    .name
+                    .clone();
                 if self.partition_selected.contains(&col_name) {
                     self.partition_selected.remove(&col_name);
                 } else {
@@ -1182,10 +1210,16 @@ impl App {
         let col = s.cursor_col;
         if col < s.dataframe.columns.len() {
             let meta = &mut s.dataframe.columns[col];
-            if !matches!(meta.col_type, crate::types::ColumnType::Float | crate::types::ColumnType::Percentage | crate::types::ColumnType::Currency) {
-                 self.mode = AppMode::Normal;
-                 self.status_message = "Precision only applies to Float, Percentage, Currency".to_string();
-                 return;
+            if !matches!(
+                meta.col_type,
+                crate::types::ColumnType::Float
+                    | crate::types::ColumnType::Percentage
+                    | crate::types::ColumnType::Currency
+            ) {
+                self.mode = AppMode::Normal;
+                self.status_message =
+                    "Precision only applies to Float, Percentage, Currency".to_string();
+                return;
             }
             if delta > 0 {
                 meta.precision = meta.precision.saturating_add(1).min(6);
@@ -1262,7 +1296,8 @@ impl App {
 
         if !is_numeric {
             self.mode = AppMode::Normal;
-            self.status_message = "Partitioned percent column only works for numeric columns".to_string();
+            self.status_message =
+                "Partitioned percent column only works for numeric columns".to_string();
             return;
         }
 
@@ -1289,25 +1324,35 @@ impl App {
         // Use Polars Lazy API directly for Window Function
         use polars::prelude::*;
         let target = col(&col_name);
-        let partition_exprs: Vec<polars::prelude::Expr> = partition_cols.iter().map(|n| col(n)).collect();
-        
+        let partition_exprs: Vec<polars::prelude::Expr> = partition_cols.iter().map(col).collect();
+
         // Window expression: col / sum(col).over(partition_cols)
-        let pct_expr = (target.clone().cast(DataType::Float64) / target.sum().over(partition_exprs).cast(DataType::Float64)).alias(&new_name);
+        let pct_expr = (target.clone().cast(DataType::Float64)
+            / target.sum().over(partition_exprs).cast(DataType::Float64))
+        .alias(&new_name);
 
         s.push_undo();
-        match s.dataframe.df.clone().lazy().with_column(pct_expr).collect() {
+        match s
+            .dataframe
+            .df
+            .clone()
+            .lazy()
+            .with_column(pct_expr)
+            .collect()
+        {
             Ok(new_df) => {
                 s.dataframe.df = new_df;
                 let mut meta = crate::data::column::ColumnMeta::new(new_name.clone());
                 meta.col_type = crate::types::ColumnType::Percentage;
                 meta.precision = 2;
-                
+
                 // Find insertion position (after current col)
                 let target_idx = col_idx + 1;
                 s.dataframe.columns.insert(target_idx, meta);
-                
+
                 // Re-align df columns if necessary (though with_column appends, we might need select to reorder)
-                let names: Vec<String> = s.dataframe.columns.iter().map(|c| c.name.clone()).collect();
+                let names: Vec<String> =
+                    s.dataframe.columns.iter().map(|c| c.name.clone()).collect();
                 if let Ok(reordered_df) = s.dataframe.df.select(names) {
                     s.dataframe.df = reordered_df;
                 }
@@ -1432,7 +1477,9 @@ impl App {
 
         let start = s.table_state.selected().unwrap_or(0);
         // Pick first match after current position, wrapping around
-        let found = matches.iter().find(|&&r| r > start)
+        let found = matches
+            .iter()
+            .find(|&&r| r > start)
             .or_else(|| matches.first());
 
         if let Some(&row) = found {
@@ -1455,12 +1502,16 @@ impl App {
             }
         };
         let col = s.search_col.unwrap_or(s.cursor_col);
-        if s.dataframe.visible_row_count() == 0 { return; }
+        if s.dataframe.visible_row_count() == 0 {
+            return;
+        }
 
         let pi_pattern = format!("(?i){}", pattern);
         let matches = s.dataframe.find_matching_rows(col, &pi_pattern);
         let start = s.table_state.selected().unwrap_or(0);
-        let found = matches.iter().find(|&&r| r > start)
+        let found = matches
+            .iter()
+            .find(|&&r| r > start)
             .or_else(|| matches.first());
 
         if let Some(&row) = found {
@@ -1482,13 +1533,18 @@ impl App {
             }
         };
         let col = s.search_col.unwrap_or(s.cursor_col);
-        if s.dataframe.visible_row_count() == 0 { return; }
+        if s.dataframe.visible_row_count() == 0 {
+            return;
+        }
 
         let pi_pattern = format!("(?i){}", pattern);
         let matches = s.dataframe.find_matching_rows(col, &pi_pattern);
         let start = s.table_state.selected().unwrap_or(0);
         // Pick last match before current position, wrapping to last match overall
-        let found = matches.iter().rev().find(|&&r| r < start)
+        let found = matches
+            .iter()
+            .rev()
+            .find(|&&r| r < start)
             .or_else(|| matches.last());
 
         if let Some(&row) = found {
@@ -1516,7 +1572,9 @@ impl App {
         let count = matching_display_rows.len();
         for display_idx in matching_display_rows {
             if display_idx < s.dataframe.row_order.len() {
-                s.dataframe.selected_rows.insert(s.dataframe.row_order[display_idx]);
+                s.dataframe
+                    .selected_rows
+                    .insert(s.dataframe.row_order[display_idx]);
             }
         }
         self.status_message = format!(
@@ -1533,14 +1591,18 @@ impl App {
         let col = s.cursor_col;
 
         if input.starts_with("!=") || input.starts_with("!= ") {
-            let expr_str = if input.starts_with("!= ") { &input[3..] } else { &input[2..] };
+            let expr_str = input.strip_prefix("!= ").unwrap_or(&input[2..]);
             match Expr::parse(expr_str) {
                 Ok(expr) => {
                     let mut selected_indices = Vec::new();
                     // Fast path: Polars
                     if let Ok(polars_expr) = expr.to_polars_expr() {
                         if let Ok(visible_df) = s.dataframe.get_visible_df() {
-                            if let Ok(mask_df) = visible_df.lazy().select([polars_expr.alias("mask")]).collect() {
+                            if let Ok(mask_df) = visible_df
+                                .lazy()
+                                .select([polars_expr.alias("mask")])
+                                .collect()
+                            {
                                 if let Ok(mask_col) = mask_df.column("mask") {
                                     if let Ok(ca) = mask_col.bool() {
                                         for (i, val) in ca.into_iter().enumerate() {
@@ -1556,7 +1618,13 @@ impl App {
 
                     if selected_indices.is_empty() {
                         // Slow path: manual evaluation
-                        let col_lookup: std::collections::HashMap<&str, usize> = s.dataframe.columns.iter().enumerate().map(|(i, c)| (c.name.as_str(), i)).collect();
+                        let col_lookup: std::collections::HashMap<&str, usize> = s
+                            .dataframe
+                            .columns
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| (c.name.as_str(), i))
+                            .collect();
                         for i in 0..s.dataframe.visible_row_count() {
                             let physical = s.dataframe.row_order[i];
                             let val = expr.eval(physical, &col_lookup, &s.dataframe);
@@ -1569,7 +1637,9 @@ impl App {
                     let count = selected_indices.len();
                     for display_idx in selected_indices {
                         if display_idx < s.dataframe.row_order.len() {
-                            s.dataframe.selected_rows.insert(s.dataframe.row_order[display_idx]);
+                            s.dataframe
+                                .selected_rows
+                                .insert(s.dataframe.row_order[display_idx]);
                         }
                     }
                     self.status_message = format!("Selected {} rows by expression", count);
@@ -1597,7 +1667,9 @@ impl App {
         let count = matching_display_rows.len();
         for display_idx in matching_display_rows {
             if display_idx < s.dataframe.row_order.len() {
-                s.dataframe.selected_rows.insert(s.dataframe.row_order[display_idx]);
+                s.dataframe
+                    .selected_rows
+                    .insert(s.dataframe.row_order[display_idx]);
             }
         }
         self.status_message = format!("Selected {} rows matching /{}/", count, pattern);
@@ -1809,14 +1881,26 @@ impl App {
         let cur_type = s.dataframe.columns[cur_col].col_type;
 
         // Find the first pinned column that is not the cursor column
-        let ref_col = s.dataframe.columns.iter().enumerate()
+        let ref_col = s
+            .dataframe
+            .columns
+            .iter()
+            .enumerate()
             .find(|(i, c)| c.pinned && *i != cur_col)
             .map(|(i, _)| i);
 
         let ref_type = ref_col.map(|i| s.dataframe.columns[i].col_type);
 
         let is_date = |ct: ColumnType| matches!(ct, ColumnType::Date | ColumnType::Datetime);
-        let is_numeric = |ct: ColumnType| matches!(ct, ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency);
+        let is_numeric = |ct: ColumnType| {
+            matches!(
+                ct,
+                ColumnType::Integer
+                    | ColumnType::Float
+                    | ColumnType::Percentage
+                    | ColumnType::Currency
+            )
+        };
         let is_categorical = |ct: ColumnType| !is_date(ct) && !is_numeric(ct);
 
         let col_name = s.dataframe.columns[cur_col].name.clone();
@@ -1827,7 +1911,8 @@ impl App {
                 self.chart_ref_col = Some(ref_idx);
                 self.chart_agg_index = 0;
                 self.mode = AppMode::ChartAggSelect;
-                self.status_message = "Select aggregation for line chart (↑↓ navigate, Enter confirm)".to_string();
+                self.status_message =
+                    "Select aggregation for line chart (↑↓ navigate, Enter confirm)".to_string();
                 return;
             }
             if is_date(rtype) && is_categorical(cur_type) {
@@ -1835,7 +1920,8 @@ impl App {
                 self.chart_ref_col = Some(ref_idx);
                 self.chart_agg = ChartAgg::Count;
                 self.mode = AppMode::Chart;
-                self.status_message = format!("Line chart: count('{}') by date — Esc to exit", col_name);
+                self.status_message =
+                    format!("Line chart: count('{}') by date — Esc to exit", col_name);
                 return;
             }
             if is_categorical(rtype) && is_numeric(cur_type) {
@@ -1843,7 +1929,8 @@ impl App {
                 self.chart_ref_col = Some(ref_idx);
                 self.chart_agg_index = 0;
                 self.mode = AppMode::ChartAggSelect;
-                self.status_message = "Select aggregation for bar chart (↑↓ navigate, Enter confirm)".to_string();
+                self.status_message =
+                    "Select aggregation for bar chart (↑↓ navigate, Enter confirm)".to_string();
                 return;
             }
         }
@@ -1949,8 +2036,6 @@ impl App {
         }
     }
 
-
-
     fn open_multi_frequency_table(&mut self) {
         let s = self.stack.active();
         let pinned_cols: Vec<usize> = s
@@ -1975,7 +2060,10 @@ impl App {
             }
         }
 
-        match s.dataframe.build_multi_frequency_table(&pinned_cols, &aggregated_cols) {
+        match s
+            .dataframe
+            .build_multi_frequency_table(&pinned_cols, &aggregated_cols)
+        {
             Ok((pdf, columns)) => {
                 let row_count = pdf.height();
                 let row_order: Vec<usize> = (0..row_count).collect();
@@ -2005,8 +2093,7 @@ impl App {
                 };
                 self.stack.push(freq_sheet);
                 self.mode = AppMode::Normal;
-                self.status_message =
-                    format!("MultiFreq created ({} distinct groups)", row_count);
+                self.status_message = format!("MultiFreq created ({} distinct groups)", row_count);
             }
             Err(e) => {
                 self.status_message = format!("Error building multi-freq table: {}", e);
@@ -2051,7 +2138,12 @@ impl App {
             (index_cols, pivot_col)
         };
 
-        match self.stack.active().dataframe.create_pivot_table(&index_cols, &pivot_col, &expr) {
+        match self
+            .stack
+            .active()
+            .dataframe
+            .create_pivot_table(&index_cols, &pivot_col, &expr)
+        {
             Ok((pdf, columns)) => {
                 let row_count = pdf.height();
                 let row_order: Vec<usize> = (0..row_count).collect();
@@ -2067,7 +2159,10 @@ impl App {
                 };
                 new_df.calc_widths(40, 1000);
 
-                let mut pivot_sheet = crate::sheet::Sheet::new(format!("Pivot: {} by {}", formula_str, pivot_col), new_df);
+                let mut pivot_sheet = crate::sheet::Sheet::new(
+                    format!("Pivot: {} by {}", formula_str, pivot_col),
+                    new_df,
+                );
                 pivot_sheet.sheet_type = SheetType::PivotTable {
                     index_cols,
                     pivot_col,
@@ -2087,12 +2182,16 @@ impl App {
     pub fn open_directory_row(&mut self) {
         let s = self.stack.active();
         let df = &s.dataframe;
-        
+
         // Ensure this is a directory view
         if !s.is_dir_sheet {
             return;
         }
-        if df.columns.len() < 5 || df.columns[0].name != "Name" || df.columns[1].name != "Is Directory" || df.columns[4].name != "Supported" {
+        if df.columns.len() < 5
+            || df.columns[0].name != "Name"
+            || df.columns[1].name != "Is Directory"
+            || df.columns[4].name != "Supported"
+        {
             return;
         }
 
@@ -2102,17 +2201,27 @@ impl App {
             let supported_val = df.get_val(row_idx, 4);
 
             let name = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&name_val);
-            let is_dir = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&is_dir_val) == "true";
-            let supported = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&supported_val) == "true";
+            let is_dir =
+                crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&is_dir_val) == "true";
+            let supported =
+                crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&supported_val) == "true";
 
             let current_dir_str = s.title.clone();
-            let base_path = std::path::PathBuf::from(if current_dir_str == "." || current_dir_str.is_empty() { "." } else { &current_dir_str });
+            let base_path =
+                std::path::PathBuf::from(if current_dir_str == "." || current_dir_str.is_empty() {
+                    "."
+                } else {
+                    &current_dir_str
+                });
             let target_path = base_path.join(&name);
 
             if is_dir {
                 match crate::data::io::load_directory(&target_path) {
                     Ok(new_df) => {
-                        let mut new_sheet = crate::sheet::Sheet::new(target_path.to_string_lossy().into_owned(), new_df);
+                        let mut new_sheet = crate::sheet::Sheet::new(
+                            target_path.to_string_lossy().into_owned(),
+                            new_df,
+                        );
                         new_sheet.is_dir_sheet = true;
                         self.stack.push(new_sheet);
                     }
@@ -2123,7 +2232,10 @@ impl App {
             } else if supported {
                 match crate::data::io::load_file(&target_path, None) {
                     Ok(new_df) => {
-                        let new_sheet = crate::sheet::Sheet::new(target_path.to_string_lossy().into_owned(), new_df);
+                        let new_sheet = crate::sheet::Sheet::new(
+                            target_path.to_string_lossy().into_owned(),
+                            new_df,
+                        );
                         self.stack.push(new_sheet);
                     }
                     Err(e) => {
@@ -2136,23 +2248,30 @@ impl App {
         }
     }
 
-
     fn drill_down_freq_value(&mut self) {
         let s = self.stack.active();
         let selected_row = s.table_state.selected().unwrap_or(0);
-        if selected_row >= s.dataframe.visible_row_count() { return; }
-        
+        if selected_row >= s.dataframe.visible_row_count() {
+            return;
+        }
+
         let mut key_cols = Vec::new();
         let mut key_values = Vec::new();
 
         // The key columns in a freq table are those before the "Count" column.
         for (i, col) in s.dataframe.columns.iter().enumerate() {
-            if col.name == "Count" { break; }
+            if col.name == "Count" {
+                break;
+            }
             key_cols.push(col.name.clone());
-            key_values.push(DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(selected_row, i)));
+            key_values.push(DataFrame::anyvalue_to_string_fmt(
+                &s.dataframe.get_val(selected_row, i),
+            ));
         }
 
-        if key_cols.is_empty() { return; }
+        if key_cols.is_empty() {
+            return;
+        }
 
         if let Some(mut parent_df) = self.stack.clone_parent_dataframe() {
             // Map key columns to their indices in the parent dataframe
@@ -2171,9 +2290,12 @@ impl App {
             for (i, &parent_col_idx) in parent_col_indices.iter().enumerate() {
                 let matches_for_col = parent_df.find_rows_by_value(parent_col_idx, &key_values[i]);
                 if let Some(ref mut current_matches) = display_matches {
-                    let new_matches: std::collections::HashSet<usize> = matches_for_col.into_iter().collect();
+                    let new_matches: std::collections::HashSet<usize> =
+                        matches_for_col.into_iter().collect();
                     current_matches.retain(|idx| new_matches.contains(idx));
-                    if current_matches.is_empty() { break; }
+                    if current_matches.is_empty() {
+                        break;
+                    }
                 } else {
                     display_matches = Some(matches_for_col.into_iter().collect());
                 }
@@ -2200,7 +2322,8 @@ impl App {
 
             let vals_str = key_values.join(", ");
             let cols_str = key_cols.join(", ");
-            let sheet = crate::sheet::Sheet::new(format!("Filter: {} = {}", cols_str, vals_str), parent_df);
+            let sheet =
+                crate::sheet::Sheet::new(format!("Filter: {} = {}", cols_str, vals_str), parent_df);
             self.stack.push(sheet);
             self.status_message = format!("Drilled down into {} = {}", cols_str, vals_str);
         }
@@ -2292,10 +2415,8 @@ impl App {
 
             let vals_str = key_values.join(", ");
             let cols_str = key_cols.join(", ");
-            let sheet = crate::sheet::Sheet::new(
-                format!("Filter: {} = {}", cols_str, vals_str),
-                parent_df,
-            );
+            let sheet =
+                crate::sheet::Sheet::new(format!("Filter: {} = {}", cols_str, vals_str), parent_df);
             self.stack.push(sheet);
             self.status_message = format!("Drilled down into {} = {}", cols_str, vals_str);
         }
@@ -2304,7 +2425,9 @@ impl App {
     fn transpose_row(&mut self) {
         let s = self.stack.active();
         let selected_row = s.table_state.selected().unwrap_or(0);
-        if selected_row >= s.dataframe.visible_row_count() { return; }
+        if selected_row >= s.dataframe.visible_row_count() {
+            return;
+        }
 
         let physical_row = s.dataframe.row_order[selected_row];
 
@@ -2312,7 +2435,7 @@ impl App {
             crate::data::column::ColumnMeta::new("Column".to_string()),
             crate::data::column::ColumnMeta::new("Value".to_string()),
         ];
-        
+
         let mut col_names = Vec::new();
         let mut col_values = Vec::new();
 
@@ -2357,38 +2480,41 @@ impl App {
                 None
             } else {
                 // Detect previously transposed table: first column named "column" and pinned
-                let is_transposed = s.dataframe.columns[0].name == "column"
-                    && s.dataframe.columns[0].pinned;
+                let is_transposed =
+                    s.dataframe.columns[0].name == "column" && s.dataframe.columns[0].pinned;
 
                 // row_labels  → values in the output "column" column (one per output row)
                 // new_col_names → names of the output data columns (one per output col)
                 // data_cols_start → first source column index to treat as data
-                let (row_labels, new_col_names, data_cols_start): (Vec<String>, Vec<String>, usize) =
-                    if is_transposed {
-                        // Inverse transpose:
-                        //   new column headers = current "column" column values
-                        //   new row labels     = current data column names
-                        let row_labels = s.dataframe.columns[1..]
-                            .iter()
-                            .map(|c| c.name.clone())
-                            .collect();
-                        let new_col_names = (0..nrows)
-                            .map(|r| {
-                                let physical = s.dataframe.row_order[r];
-                                s.dataframe.get_physical(physical, 0).to_string()
-                            })
-                            .collect();
-                        (row_labels, new_col_names, 1)
-                    } else {
-                        // Normal transpose:
-                        //   new column headers = "row_{physical}" for each visible row
-                        //   new row labels     = current column names
-                        let row_labels = s.dataframe.columns.iter().map(|c| c.name.clone()).collect();
-                        let new_col_names = (0..nrows)
-                            .map(|r| format!("row_{}", s.dataframe.row_order[r]))
-                            .collect();
-                        (row_labels, new_col_names, 0)
-                    };
+                let (row_labels, new_col_names, data_cols_start): (
+                    Vec<String>,
+                    Vec<String>,
+                    usize,
+                ) = if is_transposed {
+                    // Inverse transpose:
+                    //   new column headers = current "column" column values
+                    //   new row labels     = current data column names
+                    let row_labels = s.dataframe.columns[1..]
+                        .iter()
+                        .map(|c| c.name.clone())
+                        .collect();
+                    let new_col_names = (0..nrows)
+                        .map(|r| {
+                            let physical = s.dataframe.row_order[r];
+                            s.dataframe.get_physical(physical, 0).to_string()
+                        })
+                        .collect();
+                    (row_labels, new_col_names, 1)
+                } else {
+                    // Normal transpose:
+                    //   new column headers = "row_{physical}" for each visible row
+                    //   new row labels     = current column names
+                    let row_labels = s.dataframe.columns.iter().map(|c| c.name.clone()).collect();
+                    let new_col_names = (0..nrows)
+                        .map(|r| format!("row_{}", s.dataframe.row_order[r]))
+                        .collect();
+                    (row_labels, new_col_names, 0)
+                };
 
                 let data_ncols = ncols - data_cols_start;
 
@@ -2416,10 +2542,10 @@ impl App {
                 }
 
                 for (col_idx, col_name) in new_col_names.iter().enumerate() {
-                    let col_vals: Vec<String> =
-                        (0..data_ncols).map(|i| row_data[i][col_idx].clone()).collect();
-                    let series =
-                        polars::prelude::Series::new(col_name.clone().into(), &col_vals);
+                    let col_vals: Vec<String> = (0..data_ncols)
+                        .map(|i| row_data[i][col_idx].clone())
+                        .collect();
+                    let series = polars::prelude::Series::new(col_name.clone().into(), &col_vals);
                     series_vec.push(series.into());
                 }
 
@@ -2428,13 +2554,14 @@ impl App {
 
                 let row_order: Vec<usize> = (0..data_ncols).collect();
                 let mut new_columns: Vec<crate::data::column::ColumnMeta> = if is_transposed {
-                    new_col_names.iter()
+                    new_col_names
+                        .iter()
                         .map(|n| crate::data::column::ColumnMeta::new(n.clone()))
                         .collect()
                 } else {
                     std::iter::once("column".to_string())
                         .chain(new_col_names.iter().cloned())
-                        .map(|n| crate::data::column::ColumnMeta::new(n))
+                        .map(crate::data::column::ColumnMeta::new)
                         .collect()
                 };
                 if !is_transposed && !new_columns.is_empty() {
@@ -2452,7 +2579,11 @@ impl App {
                 };
                 df.calc_widths(40, 500);
 
-                let col_count = if is_transposed { new_col_names.len() } else { new_col_names.len() + 1 };
+                let col_count = if is_transposed {
+                    new_col_names.len()
+                } else {
+                    new_col_names.len() + 1
+                };
                 let status = format!("Transposed: {} rows, {} columns", data_ncols, col_count);
                 Some((df, status))
             }
@@ -2483,9 +2614,8 @@ impl App {
 
         // Metric row names
         let metric_names = [
-            "type", "count", "nulls", "unique",
-            "min", "max", "mean", "median", "mode", "stdev", "range",
-            "q5", "q25", "q50", "q75", "q95"
+            "type", "count", "nulls", "unique", "min", "max", "mean", "median", "mode", "stdev",
+            "range", "q5", "q25", "q50", "q75", "q95",
         ];
         let n_metrics = metric_names.len();
 
@@ -2493,12 +2623,17 @@ impl App {
         let mut col_values: Vec<Vec<String>> = Vec::with_capacity(ncols);
 
         let calc_quantile = |sorted: &[f64], q: f64| -> f64 {
-            if sorted.is_empty() { return 0.0; }
+            if sorted.is_empty() {
+                return 0.0;
+            }
             let k = (sorted.len() as f64 - 1.0) * q;
             let f = k.floor() as usize;
             let c = k.ceil() as usize;
-            if f == c { sorted[f] } 
-            else { sorted[f] * (c as f64 - k) + sorted[c] * (k - f as f64) }
+            if f == c {
+                sorted[f]
+            } else {
+                sorted[f] * (c as f64 - k) + sorted[c] * (k - f as f64)
+            }
         };
 
         for i in 0..ncols {
@@ -2528,14 +2663,30 @@ impl App {
             );
 
             let nums: Vec<f64> = if is_numeric {
-                non_empty.iter().filter_map(|v| v.parse::<f64>().ok()).collect()
+                non_empty
+                    .iter()
+                    .filter_map(|v| v.parse::<f64>().ok())
+                    .collect()
             } else {
                 Vec::new()
             };
 
             let p = meta.precision as usize;
 
-            let (min_s, max_s, mean_s, median_s, mode_s, stdev_s, range_s, q5_s, q25_s, q50_s, q75_s, q95_s) = if !nums.is_empty() {
+            let (
+                min_s,
+                max_s,
+                mean_s,
+                median_s,
+                mode_s,
+                stdev_s,
+                range_s,
+                q5_s,
+                q25_s,
+                q50_s,
+                q75_s,
+                q95_s,
+            ) = if !nums.is_empty() {
                 let mut sorted = nums.clone();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let n = sorted.len() as f64;
@@ -2551,11 +2702,15 @@ impl App {
                 let range = sorted[sorted.len() - 1] - sorted[0];
                 // Mode: most frequent value
                 let mode_val = {
-                    let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let mut freq: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
                     for v in &non_empty {
                         *freq.entry(v.clone()).or_insert(0) += 1;
                     }
-                    freq.into_iter().max_by_key(|(_, c)| *c).map(|(v, _)| v).unwrap_or_default()
+                    freq.into_iter()
+                        .max_by_key(|(_, c)| *c)
+                        .map(|(v, _)| v)
+                        .unwrap_or_default()
                 };
                 (
                     format!("{:.*}", p, sorted[0]),
@@ -2577,24 +2732,52 @@ impl App {
                 let max_s = non_empty.iter().max().cloned().unwrap_or_default();
                 let range_s = format!("{} → {}", min_s, max_s);
                 let mode_val = {
-                    let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                    let mut freq: std::collections::HashMap<String, usize> =
+                        std::collections::HashMap::new();
                     for v in &non_empty {
                         *freq.entry(v.clone()).or_insert(0) += 1;
                     }
-                    freq.into_iter().max_by_key(|(_, c)| *c).map(|(v, _)| v).unwrap_or_default()
+                    freq.into_iter()
+                        .max_by_key(|(_, c)| *c)
+                        .map(|(v, _)| v)
+                        .unwrap_or_default()
                 };
-                (min_s, max_s, String::new(), String::new(), mode_val, String::new(), range_s, 
-                 String::new(), String::new(), String::new(), String::new(), String::new())
+                (
+                    min_s,
+                    max_s,
+                    String::new(),
+                    String::new(),
+                    mode_val,
+                    String::new(),
+                    range_s,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
             } else {
-                (String::new(), String::new(), String::new(), String::new(), String::new(), String::new(), String::new(),
-                 String::new(), String::new(), String::new(), String::new(), String::new())
+                (
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
             };
 
             col_values.push(vec![
-                format!("{:?}", meta.col_type),  // type
-                non_empty.len().to_string(),     // count
-                nulls.to_string(),               // nulls
-                unique_set.len().to_string(),    // unique
+                format!("{:?}", meta.col_type), // type
+                non_empty.len().to_string(),    // count
+                nulls.to_string(),              // nulls
+                unique_set.len().to_string(),   // unique
                 min_s,
                 max_s,
                 mean_s,
@@ -2614,7 +2797,10 @@ impl App {
         // First column: metric names (string)
         let metric_col = polars::prelude::Series::new(
             "metric".into(),
-            &metric_names.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            &metric_names
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
         );
         let mut series_vec: Vec<polars::prelude::Column> = vec![metric_col.into()];
 
@@ -2628,10 +2814,11 @@ impl App {
             .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
         let row_order: Vec<usize> = (0..n_metrics).collect();
-        let mut columns: Vec<crate::data::column::ColumnMeta> = std::iter::once("metric".to_string())
-            .chain(s.dataframe.columns.iter().map(|c| c.name.clone()))
-            .map(|n| crate::data::column::ColumnMeta::new(n))
-            .collect();
+        let mut columns: Vec<crate::data::column::ColumnMeta> =
+            std::iter::once("metric".to_string())
+                .chain(s.dataframe.columns.iter().map(|c| c.name.clone()))
+                .map(crate::data::column::ColumnMeta::new)
+                .collect();
         // Pin the "metric" column so it stays visible while scrolling
         columns[0].pinned = true;
 
@@ -2654,8 +2841,15 @@ impl App {
 
     fn deduplicate_by_pinned(&mut self) {
         let s = self.stack.active_mut();
-        let pinned_cols: Vec<usize> = s.dataframe.columns.iter().enumerate().filter(|(_, c)| c.pinned).map(|(i, _)| i).collect();
-        
+        let pinned_cols: Vec<usize> = s
+            .dataframe
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.pinned)
+            .map(|(i, _)| i)
+            .collect();
+
         if pinned_cols.is_empty() {
             self.mode = AppMode::Normal;
             self.status_message = "No pinned columns to deduplicate by".to_string();
@@ -2669,7 +2863,10 @@ impl App {
         let mut new_order = Vec::new();
 
         for &physical_row in s.dataframe.row_order.iter() {
-            let key: Vec<String> = pinned_cols.iter().map(|&c| s.dataframe.get_physical(physical_row, c).to_string()).collect();
+            let key: Vec<String> = pinned_cols
+                .iter()
+                .map(|&c| s.dataframe.get_physical(physical_row, c).to_string())
+                .collect();
             if seen.insert(key) {
                 new_order.push(physical_row);
             }
@@ -2681,7 +2878,7 @@ impl App {
         s.dataframe.modified = true;
         s.dataframe.aggregates_cache = None;
         s.table_state.select(Some(0));
-        
+
         let new_count = s.dataframe.visible_row_count();
         self.mode = AppMode::Normal;
         self.status_message = format!("Deduplicated: {} -> {} rows", old_count, new_count);
@@ -2694,13 +2891,13 @@ impl App {
 
         let mut errs = Vec::new();
         for agg in AggregatorKind::all() {
-            if self.agg_selected.contains(&agg) {
+            if self.agg_selected.contains(agg) {
                 if let Err(e) = s.dataframe.add_aggregator(col, *agg) {
                     errs.push(e.to_string());
                 }
             }
         }
-        
+
         s.dataframe.aggregates_cache = None;
         let _ = s.dataframe.compute_aggregates();
 
@@ -2956,12 +3153,12 @@ impl App {
         };
 
         let mut series_vec = Vec::new();
-        for col in 0..col_count {
+        for (col, col_meta) in columns.iter().enumerate().take(col_count) {
             let mut col_data = Vec::with_capacity(selected_physical.len());
             for &phys_idx in &selected_physical {
                 col_data.push(df.get_physical(phys_idx, col));
             }
-            let s = polars::prelude::Series::new(columns[col].name.clone().into(), &col_data);
+            let s = polars::prelude::Series::new(col_meta.name.clone().into(), &col_data);
             series_vec.push(s.into());
         }
         let pdf = polars::prelude::DataFrame::new(series_vec)
@@ -3053,7 +3250,7 @@ impl App {
             } else {
                 s.cursor_col -= 1;
                 s.table_state.select_column(Some(s.cursor_col));
-                self.status_message = format!("Moved column left");
+                self.status_message = "Moved column left".to_string();
             }
         }
         self.mode = AppMode::ZPrefix; // Stay in ZPrefix mode
@@ -3069,7 +3266,7 @@ impl App {
             } else {
                 s.cursor_col += 1;
                 s.table_state.select_column(Some(s.cursor_col));
-                self.status_message = format!("Moved column right");
+                self.status_message = "Moved column right".to_string();
             }
         }
         self.mode = AppMode::ZPrefix; // Stay in ZPrefix mode

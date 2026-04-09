@@ -98,11 +98,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 popup::render_partition_select_popup(frame, app, frame.area());
             }
             if app.mode == AppMode::ConfirmQuit {
-                popup::render_confirm_popup(
-                    frame,
-                    "Unsaved changes. Quit? (y/n)",
-                    frame.area(),
-                );
+                popup::render_confirm_popup(frame, "Unsaved changes. Quit? (y/n)", frame.area());
             }
             if app.mode == AppMode::Help {
                 popup::render_help_popup(frame, frame.area());

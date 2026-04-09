@@ -34,13 +34,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     use std::io::IsTerminal;
-    
+
     // Resolve path: None or "-" means stdin
     let mut path = cli.file.as_deref();
-    
+
     let is_terminal = std::io::stdin().is_terminal();
-    let use_stdin = (path.is_none() && !is_terminal)
-        || path.map(|p| p.to_str() == Some("-")).unwrap_or(false);
+    let use_stdin =
+        (path.is_none() && !is_terminal) || path.map(|p| p.to_str() == Some("-")).unwrap_or(false);
 
     // If no path was given and not piping from stdin, open the current directory
     if path.is_none() && !use_stdin {
@@ -71,19 +71,32 @@ fn main() -> Result<()> {
             unsafe {
                 let mut buf = [0u8; 256];
                 let mut real_tty_opened = false;
-                if libc::ttyname_r(libc::STDERR_FILENO, buf.as_mut_ptr() as *mut libc::c_char, buf.len()) == 0 {
+                if libc::ttyname_r(
+                    libc::STDERR_FILENO,
+                    buf.as_mut_ptr() as *mut libc::c_char,
+                    buf.len(),
+                ) == 0
+                {
                     let c_str = std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char);
                     if let Ok(path) = c_str.to_str() {
-                        if let Ok(real_tty) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+                        if let Ok(real_tty) = std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(path)
+                        {
                             libc::dup2(real_tty.as_raw_fd(), libc::STDIN_FILENO);
                             real_tty_opened = true;
                         }
                     }
                 }
-                
+
                 // Fallback to /dev/tty if stderr isn't a tty or ttyname fails
                 if !real_tty_opened {
-                    if let Ok(tty) = std::fs::OpenOptions::new().read(true).write(true).open("/dev/tty") {
+                    if let Ok(tty) = std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open("/dev/tty")
+                    {
                         libc::dup2(tty.as_raw_fd(), libc::STDIN_FILENO);
                     }
                 }

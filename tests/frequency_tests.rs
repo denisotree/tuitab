@@ -12,10 +12,7 @@ fn build_freq_data(df: &DataFrame, col: usize) -> Vec<(String, usize)> {
         let val = DataFrame::anyvalue_to_string_fmt(&df.get_val(row_idx, col));
         *counts.entry(val).or_insert(0) += 1;
     }
-    let mut freq: Vec<(String, usize)> = counts
-        .into_iter()
-        .map(|(k, v)| (k, v))
-        .collect();
+    let mut freq: Vec<(String, usize)> = counts.into_iter().collect();
     freq.sort_by(|a, b| b.1.cmp(&a.1));
     freq
 }

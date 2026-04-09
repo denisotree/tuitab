@@ -51,7 +51,9 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('V') => Action::OpenChart,
             // Pin column
             KeyCode::Char('!') => Action::TogglePinColumn,
-            KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::SHIFT) => Action::TogglePinColumn,
+            KeyCode::Char('1') if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                Action::TogglePinColumn
+            }
             // Describe sheet
             KeyCode::Char('I') => Action::DescribeSheet,
             // Type assignment prefix
@@ -274,7 +276,9 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('u') => Action::UnselectAllRows, // gu → unselect all
             KeyCode::Char('_') => Action::AdjustAllColumnWidths, // g_ → adjust all column widths
             KeyCode::Char('F') => Action::OpenMultiFrequencyTable, // gF → multi frequency table
-            KeyCode::Char('D') | KeyCode::Char('d') | KeyCode::Char('U') => Action::DeduplicateByPinned,
+            KeyCode::Char('D') | KeyCode::Char('d') | KeyCode::Char('U') => {
+                Action::DeduplicateByPinned
+            }
             KeyCode::Esc => Action::CancelGPrefix,
             _ => Action::CancelGPrefix,
         },
@@ -355,6 +359,5 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => Action::CloseHelp,
             _ => Action::CloseHelp,
         },
-
     }
 }

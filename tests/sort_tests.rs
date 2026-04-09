@@ -23,8 +23,13 @@ fn test_sort_integer_ascending() {
 fn test_sort_integer_descending() {
     let mut df = load_sample();
     df.sort_by(2, true); // sort by 'age' descending
-    let first_age: i64 = DataFrame::anyvalue_to_string_fmt(&df.get_val(0, 2)).parse::<i64>().unwrap();
-    let last_age: i64 = DataFrame::anyvalue_to_string_fmt(&df.get_val(df.visible_row_count() - 1, 2)).parse::<i64>().unwrap();
+    let first_age: i64 = DataFrame::anyvalue_to_string_fmt(&df.get_val(0, 2))
+        .parse::<i64>()
+        .unwrap();
+    let last_age: i64 =
+        DataFrame::anyvalue_to_string_fmt(&df.get_val(df.visible_row_count() - 1, 2))
+            .parse::<i64>()
+            .unwrap();
     assert!(
         first_age >= last_age,
         "First age ({}) should be >= last age ({}) in descending sort",
@@ -38,7 +43,11 @@ fn test_sort_float() {
     let mut df = load_sample();
     df.sort_by(3, false); // sort by 'salary' ascending
     let values: Vec<f64> = (0..df.visible_row_count())
-        .map(|i| DataFrame::anyvalue_to_string_fmt(&df.get_val(i, 3)).parse::<f64>().unwrap())
+        .map(|i| {
+            DataFrame::anyvalue_to_string_fmt(&df.get_val(i, 3))
+                .parse::<f64>()
+                .unwrap()
+        })
         .collect();
     for w in values.windows(2) {
         assert!(w[0] <= w[1], "salary values should be non-decreasing");

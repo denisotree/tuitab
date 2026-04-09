@@ -107,7 +107,9 @@ pub fn render_partition_select_popup(frame: &mut Frame, app: &crate::app::App, a
     frame.render_widget(Clear, popup_area);
 
     let s = app.stack.active();
-    let items: Vec<ratatui::widgets::ListItem> = s.dataframe.columns
+    let items: Vec<ratatui::widgets::ListItem> = s
+        .dataframe
+        .columns
         .iter()
         .enumerate()
         .map(|(i, col)| {
@@ -153,9 +155,7 @@ pub fn render_confirm_popup(frame: &mut Frame, message: &str, area: Rect) {
     // Create styled message with instructions
     let lines = vec![
         Line::from(""), // Vertical padding
-        Line::from(vec![
-            Span::styled(message, Style::default().fg(T::YELLOW)),
-        ])
+        Line::from(vec![Span::styled(message, Style::default().fg(T::YELLOW))]),
     ];
 
     let paragraph = Paragraph::new(lines)
@@ -176,27 +176,39 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(T::AQUA));
 
     let help_text = vec![
-        Line::from(Span::styled("── Navigation ─────────────────────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Navigation ─────────────────────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  hjkl / arrows     Move cursor"),
         Line::from("  gg / G            Go to top / bottom"),
         Line::from("  Ctrl+F/B          Page down / up"),
         Line::from("  Backspace / q     Pop sheet / quit"),
         Line::from(""),
-        Line::from(Span::styled("── Search & Selection ──────────────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Search & Selection ──────────────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  /                 Search (regex filter)"),
         Line::from("  |                 Select rows by regex"),
         Line::from("  | !=expr          Select rows by Expression"),
         Line::from("  s / u             Select / unselect row"),
         Line::from("  gs / gu           Select all / unselect all"),
         Line::from(""),
-        Line::from(Span::styled("── Clipboard ───────────────────────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Clipboard ───────────────────────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  y → y             Copy current row (TSV)"),
         Line::from("  y → c             Copy current cell"),
         Line::from("  y → l             Copy current column"),
         Line::from("  y → s             Copy selected rows"),
         Line::from("  p                 Paste rows"),
         Line::from(""),
-        Line::from(Span::styled("── Column Operations (z prefix) ────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Column Operations (z prefix) ────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  ze                Rename column"),
         Line::from("  zd                Delete column"),
         Line::from("  zi                Insert empty column"),
@@ -207,11 +219,17 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         Line::from("  !                 Pin / unpin column"),
         Line::from("  _                 Fit column width"),
         Line::from(""),
-        Line::from(Span::styled("── Type Assignment (t) ─────────────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Type Assignment (t) ─────────────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  t                Open column type menu"),
         Line::from("  tc               Currency (popup)"),
         Line::from(""),
-        Line::from(Span::styled("── Derived Sheets & Analytics ──────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── Derived Sheets & Analytics ──────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  Shift+F           Frequency table"),
         Line::from("  gF               Multi-col frequency (pinned)"),
         Line::from("  gD               Deduplicate by pinned cols"),
@@ -220,7 +238,10 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         Line::from("  =                Add computed column"),
         Line::from("  v                View chart"),
         Line::from(""),
-        Line::from(Span::styled("── File ────────────────────────────────", Style::default().fg(T::GREEN))),
+        Line::from(Span::styled(
+            "── File ────────────────────────────────",
+            Style::default().fg(T::GREEN),
+        )),
         Line::from("  Ctrl+S            Save / export"),
         Line::from("  Shift+U          Undo"),
         Line::from("  ?                This help"),

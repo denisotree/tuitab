@@ -36,7 +36,11 @@ impl EverforestTheme {
     }
 
     pub fn normal_row_style(index: usize) -> Style {
-        let bg = if index % 2 == 0 { Self::BG0 } else { Self::BG_DIM };
+        let bg = if index % 2 == 0 {
+            Self::BG0
+        } else {
+            Self::BG_DIM
+        };
         Style::default().fg(Self::FG).bg(bg)
     }
 
@@ -44,8 +48,8 @@ impl EverforestTheme {
     /// The active column cell gets an extra BOLD marker; other cells are bold too.
     pub fn active_row_style() -> Style {
         Style::default()
-            .fg(Self::BG_DIM)   // dark text on bright
-            .bg(Self::FG)       // #D3C6AA — cream/wheat background
+            .fg(Self::BG_DIM) // dark text on bright
+            .bg(Self::FG) // #D3C6AA — cream/wheat background
             .add_modifier(Modifier::BOLD)
     }
 
@@ -54,7 +58,7 @@ impl EverforestTheme {
     pub fn active_row_col_style() -> Style {
         Style::default()
             .fg(Self::BG_DIM)
-            .bg(Self::AQUA)     // teal, same as the header indicator
+            .bg(Self::AQUA) // teal, same as the header indicator
             .add_modifier(Modifier::BOLD)
     }
 
@@ -69,7 +73,11 @@ impl EverforestTheme {
     /// Row selected by the user ('s' key) — yellow accent text, normal background.
     /// **No** background fill — the row blends with alternating rows but text pops.
     pub fn selected_mark_style(index: usize) -> Style {
-        let bg = if index % 2 == 0 { Self::BG0 } else { Self::BG_DIM };
+        let bg = if index % 2 == 0 {
+            Self::BG0
+        } else {
+            Self::BG_DIM
+        };
         Style::default()
             .fg(Self::YELLOW)
             .bg(bg)
@@ -80,7 +88,7 @@ impl EverforestTheme {
     pub fn selected_active_row_style() -> Style {
         Style::default()
             .fg(Self::BG_DIM)
-            .bg(Self::YELLOW)   // yellow bg, dark text
+            .bg(Self::YELLOW) // yellow bg, dark text
             .add_modifier(Modifier::BOLD)
     }
 

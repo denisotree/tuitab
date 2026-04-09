@@ -164,7 +164,7 @@ pub enum Action {
     TypeSelectDown,
     ApplyTypeSelect,
     CancelTypeSelect,
-    
+
     // ── Currency selection ────────────────────────────────────────────────────
     CurrencySelectUp,
     CurrencySelectDown,
@@ -337,6 +337,7 @@ impl ColumnType {
 }
 
 /// Supported currency kinds for the Currency column type.
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CurrencyKind {
     USD,
@@ -427,12 +428,24 @@ impl CurrencyKind {
 
     /// Whether the symbol is a prefix (true) or suffix (false)
     pub fn is_prefix(self) -> bool {
-        match self {
-            Self::USD | Self::GBP | Self::JPY | Self::CNY | Self::AUD | Self::CAD |
-            Self::HKD | Self::SGD | Self::NZD | Self::INR | Self::TWD | Self::BRL | 
-            Self::MXN | Self::KRW | Self::CHF => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Self::USD
+                | Self::GBP
+                | Self::JPY
+                | Self::CNY
+                | Self::AUD
+                | Self::CAD
+                | Self::HKD
+                | Self::SGD
+                | Self::NZD
+                | Self::INR
+                | Self::TWD
+                | Self::BRL
+                | Self::MXN
+                | Self::KRW
+                | Self::CHF
+        )
     }
 
     pub fn display_name(self) -> &'static str {
@@ -478,7 +491,14 @@ pub enum ChartAgg {
 
 impl ChartAgg {
     pub fn all() -> &'static [ChartAgg] {
-        &[Self::Sum, Self::Count, Self::Mean, Self::Median, Self::Min, Self::Max]
+        &[
+            Self::Sum,
+            Self::Count,
+            Self::Mean,
+            Self::Median,
+            Self::Min,
+            Self::Max,
+        ]
     }
 
     pub fn label(self) -> &'static str {
@@ -498,14 +518,24 @@ impl ChartAgg {
             Self::Count => count as f64,
             Self::Sum => vals.iter().sum(),
             Self::Mean => {
-                if vals.is_empty() { 0.0 } else { vals.iter().sum::<f64>() / vals.len() as f64 }
+                if vals.is_empty() {
+                    0.0
+                } else {
+                    vals.iter().sum::<f64>() / vals.len() as f64
+                }
             }
             Self::Median => {
-                if vals.is_empty() { return 0.0; }
+                if vals.is_empty() {
+                    return 0.0;
+                }
                 let mut s = vals.to_vec();
                 s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let n = s.len();
-                if n % 2 == 0 { (s[n / 2 - 1] + s[n / 2]) / 2.0 } else { s[n / 2] }
+                if n % 2 == 0 {
+                    (s[n / 2 - 1] + s[n / 2]) / 2.0
+                } else {
+                    s[n / 2]
+                }
             }
             Self::Min => vals.iter().cloned().fold(f64::INFINITY, f64::min),
             Self::Max => vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max),

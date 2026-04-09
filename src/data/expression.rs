@@ -1,4 +1,4 @@
-use chrono::{Datelike, Timelike, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -153,7 +153,10 @@ impl Expr {
                     Op::Add => l + r,
                     Op::Sub => l - r,
                     Op::Mul => l * r,
-                    Op::Div => l.cast(polars::prelude::DataType::Float64) / r.cast(polars::prelude::DataType::Float64),
+                    Op::Div => {
+                        l.cast(polars::prelude::DataType::Float64)
+                            / r.cast(polars::prelude::DataType::Float64)
+                    }
                     Op::Eq => l.eq(r),
                     Op::NotEq => l.neq(r),
                     Op::Lt => l.lt(r),
@@ -169,15 +172,24 @@ impl Expr {
                     // Only support literals in Polars is_in for now
                     if let Expr::Literal(v) = item {
                         match v {
-                            Value::Number(n) => polars_list.push(polars::prelude::AnyValue::Float64(*n)),
-                            Value::String(s) => polars_list.push(polars::prelude::AnyValue::StringOwned(s.clone().into())),
-                            _ => return Err("Only numbers and strings supported in IN list for Polars".to_string()),
+                            Value::Number(n) => {
+                                polars_list.push(polars::prelude::AnyValue::Float64(*n))
+                            }
+                            Value::String(s) => polars_list
+                                .push(polars::prelude::AnyValue::StringOwned(s.clone().into())),
+                            _ => {
+                                return Err(
+                                    "Only numbers and strings supported in IN list for Polars"
+                                        .to_string(),
+                                )
+                            }
                         }
                     } else {
                         return Err("Only literals supported in IN list for Polars".to_string());
                     }
                 }
-                let s = polars::prelude::Series::from_any_values("".into(), &polars_list, true).map_err(|e| e.to_string())?;
+                let s = polars::prelude::Series::from_any_values("".into(), &polars_list, true)
+                    .map_err(|e| e.to_string())?;
                 Ok(l.is_in(polars::lazy::dsl::lit(s)))
             }
             Expr::If {
@@ -196,15 +208,29 @@ impl Expr {
                     .str()
                     .len_chars()
                     .cast(polars::prelude::DataType::Float64)),
-                "sum" if args.len() == 1 => Ok(args[0].to_polars_expr()?.sum().cast(polars::prelude::DataType::Float64)),
-                "count" if args.len() == 1 => Ok(args[0].to_polars_expr()?.count().cast(polars::prelude::DataType::Float64)),
-                "mean" if args.len() == 1 => Ok(args[0].to_polars_expr()?.mean().cast(polars::prelude::DataType::Float64)),
-                "max" if args.len() == 1 => Ok(args[0].to_polars_expr()?.max().cast(polars::prelude::DataType::Float64)),
-                "min" if args.len() == 1 => Ok(args[0].to_polars_expr()?.min().cast(polars::prelude::DataType::Float64)),
-                "year" | "month" | "day" | "hour" | "minute" | "today" | "now" | "date_format" => Err(format!(
-                    "Function '{}' requires slow-path evaluation",
-                    name
-                )),
+                "sum" if args.len() == 1 => Ok(args[0]
+                    .to_polars_expr()?
+                    .sum()
+                    .cast(polars::prelude::DataType::Float64)),
+                "count" if args.len() == 1 => Ok(args[0]
+                    .to_polars_expr()?
+                    .count()
+                    .cast(polars::prelude::DataType::Float64)),
+                "mean" if args.len() == 1 => Ok(args[0]
+                    .to_polars_expr()?
+                    .mean()
+                    .cast(polars::prelude::DataType::Float64)),
+                "max" if args.len() == 1 => Ok(args[0]
+                    .to_polars_expr()?
+                    .max()
+                    .cast(polars::prelude::DataType::Float64)),
+                "min" if args.len() == 1 => Ok(args[0]
+                    .to_polars_expr()?
+                    .min()
+                    .cast(polars::prelude::DataType::Float64)),
+                "year" | "month" | "day" | "hour" | "minute" | "today" | "now" | "date_format" => {
+                    Err(format!("Function '{}' requires slow-path evaluation", name))
+                }
                 _ => Err(format!(
                     "Function '{}' not supported in fast evaluation mode",
                     name
@@ -231,17 +257,29 @@ impl Expr {
                         Value::Boolean(b)
                     } else if let Ok(d) = NaiveDate::parse_from_str(&cell_text, "%Y-%m-%d") {
                         Value::Date(d)
-                    } else if let Ok(dt) = chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f%#z") {
+                    } else if let Ok(dt) =
+                        chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f%#z")
+                    {
                         Value::Datetime(dt.naive_local())
-                    } else if let Ok(dt) = chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f%#z") {
+                    } else if let Ok(dt) =
+                        chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f%#z")
+                    {
                         Value::Datetime(dt.naive_local())
-                    } else if let Ok(dt) = NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f") {
+                    } else if let Ok(dt) =
+                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f")
+                    {
                         Value::Datetime(dt)
-                    } else if let Ok(dt) = NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f") {
+                    } else if let Ok(dt) =
+                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f")
+                    {
                         Value::Datetime(dt)
-                    } else if let Ok(dt) = NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S") {
+                    } else if let Ok(dt) =
+                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S")
+                    {
                         Value::Datetime(dt)
-                    } else if let Ok(dt) = NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S") {
+                    } else if let Ok(dt) =
+                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S")
+                    {
                         Value::Datetime(dt)
                     } else if cell_text.is_empty() {
                         Value::Null
@@ -521,18 +559,20 @@ impl Expr {
                         }
                         Value::Null
                     }
-                    "today" => {
-                        Value::Date(chrono::Local::now().naive_local().date())
-                    }
-                    "now" => {
-                        Value::Datetime(chrono::Local::now().naive_local())
-                    }
+                    "today" => Value::Date(chrono::Local::now().naive_local().date()),
+                    "now" => Value::Datetime(chrono::Local::now().naive_local()),
                     "date_format" => {
                         if evaluated_args.len() == 2 {
-                            if let (Value::String(fmt), v) = (&evaluated_args[1], &evaluated_args[0]) {
+                            if let (Value::String(fmt), v) =
+                                (&evaluated_args[1], &evaluated_args[0])
+                            {
                                 match v {
-                                    Value::Date(d) => return Value::String(d.format(fmt).to_string()),
-                                    Value::Datetime(dt) => return Value::String(dt.format(fmt).to_string()),
+                                    Value::Date(d) => {
+                                        return Value::String(d.format(fmt).to_string())
+                                    }
+                                    Value::Datetime(dt) => {
+                                        return Value::String(dt.format(fmt).to_string())
+                                    }
                                     _ => return Value::Null,
                                 }
                             }
@@ -655,7 +695,9 @@ impl Parser {
                                         self.advance();
                                         break;
                                     }
-                                    tok => return Err(format!("Expected ',' or ')', got {:?}", tok)),
+                                    tok => {
+                                        return Err(format!("Expected ',' or ')', got {:?}", tok))
+                                    }
                                 }
                             }
                         }

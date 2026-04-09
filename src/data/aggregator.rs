@@ -73,14 +73,33 @@ impl AggregatorKind {
     /// Numeric aggregators (Sum, Avg, Median, Stdev, percentiles) require Integer or Float.
     pub fn is_compatible(&self, col_type: ColumnType) -> bool {
         match self {
-            Self::Count | Self::Distinct | Self::Min | Self::Max | Self::Random | Self::List | Self::Set => true,
-            Self::Sum | Self::Avg | Self::Median | Self::Stdev => matches!(col_type, ColumnType::Integer | ColumnType::Float | ColumnType::Boolean | ColumnType::Percentage | ColumnType::Currency),
-            _ => matches!(col_type, ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency),
+            Self::Count
+            | Self::Distinct
+            | Self::Min
+            | Self::Max
+            | Self::Random
+            | Self::List
+            | Self::Set => true,
+            Self::Sum | Self::Avg | Self::Median | Self::Stdev => matches!(
+                col_type,
+                ColumnType::Integer
+                    | ColumnType::Float
+                    | ColumnType::Boolean
+                    | ColumnType::Percentage
+                    | ColumnType::Currency
+            ),
+            _ => matches!(
+                col_type,
+                ColumnType::Integer
+                    | ColumnType::Float
+                    | ColumnType::Percentage
+                    | ColumnType::Currency
+            ),
         }
     }
 
     /// Map to Polars expression
-    pub fn to_expr(&self, col_name: &str) -> Option<polars::lazy::dsl::Expr> {
+    pub fn to_expr(self, col_name: &str) -> Option<polars::lazy::dsl::Expr> {
         let c = polars::lazy::dsl::col(col_name);
         match self {
             Self::Count => Some(c.count()),
@@ -91,11 +110,26 @@ impl AggregatorKind {
             Self::Max => Some(c.max()),
             Self::Median => Some(c.median()),
             Self::Stdev => Some(c.std(1)),
-            Self::P5 => Some(c.quantile(polars::lazy::dsl::lit(0.05), polars::prelude::QuantileMethod::Linear)),
-            Self::P25 => Some(c.quantile(polars::lazy::dsl::lit(0.25), polars::prelude::QuantileMethod::Linear)),
-            Self::P50 => Some(c.quantile(polars::lazy::dsl::lit(0.50), polars::prelude::QuantileMethod::Linear)),
-            Self::P75 => Some(c.quantile(polars::lazy::dsl::lit(0.75), polars::prelude::QuantileMethod::Linear)),
-            Self::P95 => Some(c.quantile(polars::lazy::dsl::lit(0.95), polars::prelude::QuantileMethod::Linear)),
+            Self::P5 => Some(c.quantile(
+                polars::lazy::dsl::lit(0.05),
+                polars::prelude::QuantileMethod::Linear,
+            )),
+            Self::P25 => Some(c.quantile(
+                polars::lazy::dsl::lit(0.25),
+                polars::prelude::QuantileMethod::Linear,
+            )),
+            Self::P50 => Some(c.quantile(
+                polars::lazy::dsl::lit(0.50),
+                polars::prelude::QuantileMethod::Linear,
+            )),
+            Self::P75 => Some(c.quantile(
+                polars::lazy::dsl::lit(0.75),
+                polars::prelude::QuantileMethod::Linear,
+            )),
+            Self::P95 => Some(c.quantile(
+                polars::lazy::dsl::lit(0.95),
+                polars::prelude::QuantileMethod::Linear,
+            )),
             _ => None,
         }
     }
@@ -122,17 +156,20 @@ impl AggregatorKind {
             }
 
             Self::Sum => {
-                let sum: f64 = values.iter().filter_map(|s| {
-                    if let Ok(n) = s.parse::<f64>() {
-                        Some(n)
-                    } else if s.to_lowercase() == "true" {
-                        Some(1.0)
-                    } else if s.to_lowercase() == "false" {
-                        Some(0.0)
-                    } else {
-                        None
-                    }
-                }).sum();
+                let sum: f64 = values
+                    .iter()
+                    .filter_map(|s| {
+                        if let Ok(n) = s.parse::<f64>() {
+                            Some(n)
+                        } else if s.to_lowercase() == "true" {
+                            Some(1.0)
+                        } else if s.to_lowercase() == "false" {
+                            Some(0.0)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
                 format_numeric(sum, col_type, precision, currency)
             }
 
@@ -146,34 +183,50 @@ impl AggregatorKind {
             }
 
             Self::Min => {
-                if matches!(col_type, ColumnType::Integer | ColumnType::Float | ColumnType::Currency) {
+                if matches!(
+                    col_type,
+                    ColumnType::Integer | ColumnType::Float | ColumnType::Currency
+                ) {
                     values
                         .iter()
                         .filter_map(|s| s.parse::<f64>().ok())
                         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                         .map(|v| format_numeric(v, col_type, precision, currency))
-                        .unwrap_or_else(String::new)
+                        .unwrap_or_default()
                 } else {
-                    values.iter().min().map(|s| s.to_string()).unwrap_or_else(String::new)
+                    values
+                        .iter()
+                        .min()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
                 }
             }
 
             Self::Max => {
-                if matches!(col_type, ColumnType::Integer | ColumnType::Float | ColumnType::Currency) {
+                if matches!(
+                    col_type,
+                    ColumnType::Integer | ColumnType::Float | ColumnType::Currency
+                ) {
                     values
                         .iter()
                         .filter_map(|s| s.parse::<f64>().ok())
                         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                         .map(|v| format_numeric(v, col_type, precision, currency))
-                        .unwrap_or_else(String::new)
+                        .unwrap_or_default()
                 } else {
-                    values.iter().max().map(|s| s.to_string()).unwrap_or_else(String::new)
+                    values
+                        .iter()
+                        .max()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default()
                 }
             }
 
             Self::Median => {
-                let mut nums: Vec<f64> =
-                    values.iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+                let mut nums: Vec<f64> = values
+                    .iter()
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .collect();
                 if nums.is_empty() {
                     return String::new();
                 }
@@ -188,7 +241,10 @@ impl AggregatorKind {
             }
 
             Self::Stdev => {
-                let nums: Vec<f64> = values.iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+                let nums: Vec<f64> = values
+                    .iter()
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .collect();
                 if nums.len() < 2 {
                     return String::new();
                 }
@@ -203,7 +259,7 @@ impl AggregatorKind {
             Self::P50 => percentile(values, 50.0, col_type, precision, currency),
             Self::P75 => percentile(values, 75.0, col_type, precision, currency),
             Self::P95 => percentile(values, 95.0, col_type, precision, currency),
-            
+
             Self::Random => {
                 use std::time::{SystemTime, UNIX_EPOCH};
                 let nanos = SystemTime::now()
@@ -216,7 +272,9 @@ impl AggregatorKind {
                 let max_chars = 50;
                 let mut result = String::new();
                 for (i, val) in values.iter().enumerate() {
-                    if i > 0 { result.push_str(", "); }
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
                     if result.len() + val.len() > max_chars {
                         result.push_str("...");
                         break;
@@ -236,7 +294,9 @@ impl AggregatorKind {
                 let max_chars = 50;
                 let mut result = String::new();
                 for (i, val) in unique.iter().enumerate() {
-                    if i > 0 { result.push_str(", "); }
+                    if i > 0 {
+                        result.push_str(", ");
+                    }
                     if result.len() + val.len() > max_chars {
                         result.push_str("...");
                         break;
@@ -257,7 +317,10 @@ fn percentile(
     precision: u8,
     currency: Option<crate::types::CurrencyKind>,
 ) -> String {
-    let mut nums: Vec<f64> = values.iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+    let mut nums: Vec<f64> = values
+        .iter()
+        .filter_map(|s| s.parse::<f64>().ok())
+        .collect();
     if nums.is_empty() {
         return String::new();
     }
@@ -308,4 +371,3 @@ pub fn format_numeric(
         format!("{:.*}", p, v)
     }
 }
-

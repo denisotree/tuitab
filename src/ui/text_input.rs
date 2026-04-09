@@ -1,4 +1,3 @@
-
 /// A universal text input widget state that supports moving the cursor and editing mid-string.
 #[derive(Debug, Clone, Default)]
 pub struct TextInput {
