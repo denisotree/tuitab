@@ -13,7 +13,7 @@ leaving the shell.
 ```text
 tuitab data.csv
 ttab   data.csv   # short alias
-tt     data.csv   # shortest alias
+ttb    data.csv   # shortest alias
 cat data.csv | tuitab -t csv
 ```
 
