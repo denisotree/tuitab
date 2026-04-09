@@ -3,7 +3,7 @@
 # AUR page: https://aur.archlinux.org/packages/tuitab-bin
 
 pkgname=tuitab-bin
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer (pre-built binary)"
 arch=('x86_64' 'aarch64')
@@ -20,8 +20,8 @@ source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::${_base_url}/tuitab-v${pkgver}
 
 # Replace SKIP with real checksums after the release is published:
 #   curl -sL <url> | sha256sum
-sha256sums_x86_64=('c54975320295a98db1a2420b255bb961eacc8cd9cb7c6f44ceb92d30196484b1')
-sha256sums_aarch64=('2a1cf4dcd7415f8532e87c4a8707b8d948f4f274b84699da69ef44afb6027584')
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
     local _src_dir="tuitab-v${pkgver}-${CARCH}-unknown-linux-gnu"
