@@ -1,0 +1,22 @@
+Source: tuitab
+Section: utils
+Priority: optional
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.6.2
+Homepage: https://github.com/denisotree/tuitab
+Vcs-Git: https://github.com/denisotree/tuitab.git
+Vcs-Browser: https://github.com/denisotree/tuitab
+Rules-Requires-Root: no
+
+Package: tuitab
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Terminal tabular data explorer
+ tuitab is a fast, keyboard-driven terminal viewer for tabular data.
+ It supports CSV, TSV, JSON, Parquet, Excel (xlsx/xls), and SQLite files.
+ .
+ Features include filtering, sorting, pivot tables, computed columns,
+ column statistics, histograms and line/bar charts, transposing, and export.
+ .
+ The package provides three command names: tuitab, ttab, and tt.

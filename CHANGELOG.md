@@ -1,0 +1,36 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2026-04-08
+
+### Added
+
+- Multi-format file support: CSV/TSV (auto-delimiter detection), JSON, Parquet, Excel (xlsx/xls), SQLite
+- Keyboard-driven navigation: vim-style `hjkl`, `g`/`G` jump, page up/down, column-width cycling
+- Row filtering: text search `/`, select by value `,`, expression filter `|!=expr`
+- Sorting: ascending/descending on any column, sort reset `r`
+- Computed columns via `=expr` with arithmetic, string ops, and date math
+- Pivot tables via `W` with column/aggregation autocomplete and input history
+- Column statistics via `I`: type, count, nulls, unique, min, max, mean, median, mode, stdev, quantiles (q5–q95)
+- Charts via `V`: histogram (Freedman-Diaconis binning), frequency bar chart, line chart (date × numeric), grouped bar chart (category × numeric). Pin a reference column with `!` for two-column charts. Aggregation popup for numeric charts
+- Table transpose via `T` (in-place, no phantom columns)
+- Frequency table via `F`
+- Row selection, yank/paste, delete
+- Sheet-from-selection via `"`
+- Clipboard integration
+- Column aggregators in footer (sum, count, avg, median, stdev, percentiles)
+- Column type assignment via `t`
+- Export to CSV/Parquet/Excel via Ctrl+S
+- Pipe mode: `cat data.csv | tuitab -t csv`
+- Everforest dark colour theme
+- Non-English keyboard remapping
+- Three binary aliases: `tuitab`, `ttab`, `tt`
+
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/denisotree/tuitab/releases/tag/v0.1.0

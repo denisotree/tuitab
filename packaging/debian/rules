@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+# debhelper rules for tuitab
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked
+
+override_dh_auto_install:
+	install -Dm755 target/release/tuitab \
+		$(CURDIR)/debian/tuitab/usr/bin/tuitab
+	# Short aliases
+	ln -s /usr/bin/tuitab \
+		$(CURDIR)/debian/tuitab/usr/bin/ttab
+	ln -s /usr/bin/tuitab \
+		$(CURDIR)/debian/tuitab/usr/bin/tt
+
+override_dh_auto_test:
+	cargo test --locked
+
+override_dh_auto_clean:
+	cargo clean

@@ -1,0 +1,21 @@
+id,name,age,salary,department
+1,Alice Johnson,30,75000.00,Engineering
+2,Bob Smith,45,92000.50,Management
+3,Carol White,28,68000.00,Engineering
+4,David Brown,35,85000.75,Marketing
+5,Eve Davis,42,78000.00,Engineering
+6,Frank Miller,38,91000.00,Management
+7,Grace Wilson,25,62000.00,HR
+8,Henry Moore,52,105000.00,Engineering
+9,Iris Taylor,31,73000.50,Marketing
+10,Jack Anderson,29,65000.00,HR
+11,Karen Thomas,47,98000.00,Management
+12,Liam Jackson,33,79000.25,Engineering
+13,Mia Harris,26,61000.00,HR
+14,Noah Martin,44,87000.00,Marketing
+15,Olivia Garcia,37,82000.50,Engineering
+16,Peter Martinez,50,110000.00,Management
+17,Quinn Robinson,27,64000.00,HR
+18,Rachel Clark,39,84000.00,Marketing
+19,Sam Rodriguez,34,76000.75,Engineering
+20,Tina Lewis,41,89000.00,Management

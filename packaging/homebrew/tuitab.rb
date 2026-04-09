@@ -1,0 +1,65 @@
+# Homebrew formula for tuitab.
+#
+# To publish this formula, create a tap repository:
+#   https://github.com/denisotree/homebrew-tuitab
+# and place this file at Formula/tuitab.rb inside that repo.
+#
+# Users install via:
+#   brew tap denisotree/tuitab
+#   brew install tuitab
+#
+# Before a release: replace sha256 values with the real checksums from
+# `shasum -a 256 <tarball>` for each GitHub Release asset.
+
+class Tuitab < Formula
+  desc "Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer"
+  homepage "https://github.com/denisotree/tuitab"
+  license "Apache-2.0"
+  head "https://github.com/denisotree/tuitab.git", branch: "main"
+
+  stable do
+    url "https://github.com/denisotree/tuitab/archive/refs/tags/v0.1.0.tar.gz"
+    sha256 "FILL_IN_AFTER_RELEASE"
+  end
+
+  # Pre-built bottles (faster install, no Rust toolchain required).
+  # Remove or update this block when releasing a new version.
+  on_macos do
+    on_arm do
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-aarch64-apple-darwin.tar.gz"
+      sha256 "FILL_IN_AFTER_RELEASE"
+    end
+    on_intel do
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-x86_64-apple-darwin.tar.gz"
+      sha256 "FILL_IN_AFTER_RELEASE"
+    end
+  end
+  on_linux do
+    on_arm do
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "FILL_IN_AFTER_RELEASE"
+    end
+    on_intel do
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "FILL_IN_AFTER_RELEASE"
+    end
+  end
+
+  # Only needed when building from source (no bottle).
+  depends_on "rust" => :build
+
+  def install
+    # Build from source when a bottle is unavailable.
+    system "cargo", "install", *std_cargo_args
+
+    # Short aliases — symlinks pointing to the main binary.
+    bin.install_symlink bin/"tuitab" => "ttab"
+    bin.install_symlink bin/"tuitab" => "tt"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/tuitab --version")
+    assert_match version.to_s, shell_output("#{bin}/ttab --version")
+    assert_match version.to_s, shell_output("#{bin}/tt --version")
+  end
+end

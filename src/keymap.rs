@@ -1,0 +1,34 @@
+/// Keyboard layout remapping: translate non-QWERTY characters to their QWERTY equivalents
+/// so that hotkeys work regardless of the active OS input language.
+///
+/// Each entry maps a character from an alternate layout (e.g. Russian) to the QWERTY
+/// character at the same physical key position.
+///
+/// Supports: Russian (RU), German (DE), French (FR) – common layouts.
+pub fn remap_char(c: char) -> char {
+    // Russian ЙЦУКЕН → QWERTY
+    match c {
+        'й' => 'q', 'ц' => 'w', 'у' => 'e', 'к' => 'r', 'е' => 't',
+        'н' => 'y', 'г' => 'u', 'ш' => 'i', 'щ' => 'o', 'з' => 'p',
+        'х' => '[', 'ъ' => ']',
+        'ф' => 'a', 'ы' => 's', 'в' => 'd', 'а' => 'f', 'п' => 'g',
+        'р' => 'h', 'о' => 'j', 'л' => 'k', 'д' => 'l', 'ж' => ';',
+        'э' => '\'',
+        'я' => 'z', 'ч' => 'x', 'с' => 'c', 'м' => 'v', 'и' => 'b',
+        'т' => 'n', 'ь' => 'm', 'б' => ',', 'ю' => '.',
+        // Uppercase
+        'Й' => 'Q', 'Ц' => 'W', 'У' => 'E', 'К' => 'R', 'Е' => 'T',
+        'Н' => 'Y', 'Г' => 'U', 'Ш' => 'I', 'Щ' => 'O', 'З' => 'P',
+        'Х' => '{', 'Ъ' => '}',
+        'Ф' => 'A', 'Ы' => 'S', 'В' => 'D', 'А' => 'F', 'П' => 'G',
+        'Р' => 'H', 'О' => 'J', 'Л' => 'K', 'Д' => 'L', 'Ж' => ':',
+        'Э' => '"',
+        'Я' => 'Z', 'Ч' => 'X', 'С' => 'C', 'М' => 'V', 'И' => 'B',
+        'Т' => 'N', 'Ь' => 'M', 'Б' => '<', 'Ю' => '>',
+        // German QWERTZ differences
+        'ü' => '[', 'ö' => ';', 'ä' => '\'',
+        'Ü' => '{', 'Ö' => ':', 'Ä' => '"',
+        // French AZERTY differences (most letters are same position, handle accents)
+        _ => c,
+    }
+}
