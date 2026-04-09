@@ -40,7 +40,7 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
-bincode = "1"
+bincode = "3"
 arboard = "3"
 polars = { version = "0.46", features = ["csv", "lazy", "dtype-date", "dtype-datetime", "strings", "json", "parquet", "serde", "serde-lazy", "timezones", "pivot", "is_in"] }
 polars-ops = { version = "0.46", features = ["pivot"] }
