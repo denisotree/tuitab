@@ -2692,7 +2692,7 @@ impl App {
                 let n = sorted.len() as f64;
                 let sum: f64 = sorted.iter().sum();
                 let mean = sum / n;
-                let median = if sorted.len() % 2 == 0 {
+                let median = if sorted.len().is_multiple_of(2) {
                     (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
                 } else {
                     sorted[sorted.len() / 2]

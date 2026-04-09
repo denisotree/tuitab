@@ -531,7 +531,7 @@ impl ChartAgg {
                 let mut s = vals.to_vec();
                 s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                 let n = s.len();
-                if n % 2 == 0 {
+                if n.is_multiple_of(2) {
                     (s[n / 2 - 1] + s[n / 2]) / 2.0
                 } else {
                     s[n / 2]

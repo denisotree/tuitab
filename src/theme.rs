@@ -36,7 +36,7 @@ impl EverforestTheme {
     }
 
     pub fn normal_row_style(index: usize) -> Style {
-        let bg = if index % 2 == 0 {
+        let bg = if index.is_multiple_of(2) {
             Self::BG0
         } else {
             Self::BG_DIM
@@ -73,7 +73,7 @@ impl EverforestTheme {
     /// Row selected by the user ('s' key) — yellow accent text, normal background.
     /// **No** background fill — the row blends with alternating rows but text pops.
     pub fn selected_mark_style(index: usize) -> Style {
-        let bg = if index % 2 == 0 {
+        let bg = if index.is_multiple_of(2) {
             Self::BG0
         } else {
             Self::BG_DIM
