@@ -30,10 +30,6 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-
     steps:
       - uses: actions/checkout@v4
 
@@ -70,18 +66,6 @@ jobs:
           cp README.md LICENSE "$STAGING/"
           tar -czf "${STAGING}.tar.gz" "$STAGING"
           echo "ASSET=${STAGING}.tar.gz" >> "$GITHUB_ENV"
-
-      - name: Package (Windows)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $TAG = $env:GITHUB_REF_NAME
-          $STAGING = "$env:BIN_NAME-$TAG-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path $STAGING
-          Copy-Item "target\${{ matrix.target }}\release\$env:BIN_NAME.exe" -Destination $STAGING
-          Copy-Item README.md, LICENSE -Destination $STAGING
-          Compress-Archive -Path $STAGING -DestinationPath "$STAGING.zip"
-          echo "ASSET=$STAGING.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
