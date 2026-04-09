@@ -20,10 +20,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
-            cross: true
           - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
@@ -38,22 +37,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build (native)
-        if: matrix.cross != true
+      - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.cross == true
-        run: cross build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
