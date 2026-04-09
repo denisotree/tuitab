@@ -16,6 +16,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -29,9 +30,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
+            cargo_build_jobs: "2"
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
+            cargo_build_jobs: "2"
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +49,8 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build
+        env:
+          CARGO_BUILD_JOBS: ${{ matrix.cargo_build_jobs || '4' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)
