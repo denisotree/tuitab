@@ -116,12 +116,14 @@ jobs:
       - name: Generate SHA256SUMS
         run: |
           cd artifacts
-          sha256sum * > SHA256SUMS
+          sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           files: |
             artifacts/*
-          # body comes from git-cliff output (trusted internal step, not user input)
+            artifacts/SHA256SUMS
           body: ${{ steps.cliff.outputs.content }}
+          fail_on_unmatched_files: true

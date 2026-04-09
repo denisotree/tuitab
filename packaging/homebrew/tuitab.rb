@@ -18,7 +18,7 @@ class Tuitab < Formula
   head "https://github.com/denisotree/tuitab.git", branch: "main"
 
   stable do
-    url "https://github.com/denisotree/tuitab/archive/refs/tags/v0.1.0.tar.gz"
+    url "https://github.com/denisotree/tuitab/archive/refs/tags/v0.1.1.tar.gz"
     sha256 "FILL_IN_AFTER_RELEASE"
   end
 
@@ -26,21 +26,21 @@ class Tuitab < Formula
   # Remove or update this block when releasing a new version.
   on_macos do
     on_arm do
-      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.1/tuitab-v0.1.1-aarch64-apple-darwin.tar.gz"
       sha256 "FILL_IN_AFTER_RELEASE"
     end
     on_intel do
-      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.1/tuitab-v0.1.1-x86_64-apple-darwin.tar.gz"
       sha256 "FILL_IN_AFTER_RELEASE"
     end
   end
   on_linux do
     on_arm do
-      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.1/tuitab-v0.1.1-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "FILL_IN_AFTER_RELEASE"
     end
     on_intel do
-      url "https://github.com/denisotree/tuitab/releases/download/v0.1.0/tuitab-v0.1.0-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/denisotree/tuitab/releases/download/v0.1.1/tuitab-v0.1.1-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "FILL_IN_AFTER_RELEASE"
     end
   end
