@@ -975,6 +975,8 @@ impl App {
             // ── Save/Export ───────────────────────────────────────────────────
             Action::SaveFile => {
                 self.saving_error = None;
+                let title = self.stack.active().title.clone();
+                self.saving_input = crate::ui::text_input::TextInput::with_value(title);
                 self.mode = AppMode::Saving;
             }
             Action::SavingInput(c) => {

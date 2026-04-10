@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SQLite files now open a table browser showing all tables with name, row count, column count, and SQL definition; pressing Enter drills into the selected table
 - Column selection in z-mode: `zs` marks a column with `*`, `zu` unmarks it; pressing `"` with selected columns creates a new sheet containing only those columns (combines with row selection)
 
+### Fixed
+- Save dialog (Ctrl+S) now pre-fills with the current sheet's filename instead of the original CLI argument
+
 ## [0.1.2] - 2026-04-09
 
 ### Added
