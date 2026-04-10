@@ -51,6 +51,8 @@ pub struct Sheet {
     pub insert_column_input: TextInput,
     /// True if this sheet represents a directory listing
     pub is_dir_sheet: bool,
+    /// For SQLite browser sheets: path to the .db file so we can open individual tables.
+    pub sqlite_db_path: Option<std::path::PathBuf>,
 
     // ── Pivot Table ───────────────────────────────────────────────────────────
     pub pivot_input: TextInput,
@@ -85,6 +87,7 @@ impl Sheet {
             rename_column_input: TextInput::new(),
             insert_column_input: TextInput::new(),
             is_dir_sheet: false,
+            sqlite_db_path: None,
             pivot_input: TextInput::new(),
             sheet_type: SheetType::Normal,
         }

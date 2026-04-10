@@ -21,7 +21,7 @@ pub fn load_file(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
         "json" => load_json(path),
         "parquet" => load_parquet(path),
         "xlsx" | "xls" => load_excel(path),
-        "db" | "sqlite" | "sqlite3" => load_sqlite(path),
+        "db" | "sqlite" | "sqlite3" => load_sqlite_overview(path),
         _ => Err(eyre!("Unsupported file format: .{}", ext)),
     }
 }
@@ -172,23 +172,8 @@ fn load_txt(path: &Path) -> Result<DataFrame> {
     })
 }
 
-fn load_sqlite(path: &Path) -> Result<DataFrame> {
-    use rusqlite::Connection;
-    let conn = Connection::open(path)?;
-
-    // Get first user table
-    let mut stmt = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1",
-    )?;
-    let mut rows = stmt.query([])?;
-
-    let table_name: String = if let Some(row) = rows.next()? {
-        row.get(0)?
-    } else {
-        return Err(eyre!("No tables found in SQLite database"));
-    };
-
-    // Read table
+/// Load the content of a single SQLite table by name.
+fn load_sqlite_table(conn: &rusqlite::Connection, table_name: &str) -> Result<DataFrame> {
     let query = format!("SELECT * FROM \"{}\"", table_name);
     let mut stmt = conn.prepare(&query)?;
     let column_names: Vec<String> = stmt
@@ -199,11 +184,9 @@ fn load_sqlite(path: &Path) -> Result<DataFrame> {
     let col_count = column_names.len();
 
     let mut cols_data: Vec<Vec<String>> = vec![Vec::new(); col_count];
-
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         for (col_idx, col_vec) in cols_data.iter_mut().enumerate() {
-            // Getting everything as string for simplicity
             let val: rusqlite::types::Value = row.get(col_idx)?;
             let str_val = match val {
                 rusqlite::types::Value::Null => String::new(),
@@ -223,6 +206,82 @@ fn load_sqlite(path: &Path) -> Result<DataFrame> {
 
     let pdf = polars::prelude::DataFrame::new(series_vec)?;
     wrap_polars_df(pdf)
+}
+
+/// Load a SQLite database as a table-browser overview.
+/// Returns a DataFrame with columns: Table, Rows, Columns, SQL.
+pub fn load_sqlite_overview(path: &Path) -> Result<DataFrame> {
+    use rusqlite::Connection;
+    let conn = Connection::open(path)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+
+    let mut table_names: Vec<String> = Vec::new();
+    let mut row_counts: Vec<String> = Vec::new();
+    let mut col_counts: Vec<String> = Vec::new();
+    let mut sql_defs: Vec<String> = Vec::new();
+
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        let sql: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+
+        // Count columns via PRAGMA
+        let col_count: usize = {
+            let pragma = format!("PRAGMA table_info(\"{}\")", name);
+            let mut ps = conn.prepare(&pragma)?;
+            let mut pr = ps.query([])?;
+            let mut n = 0usize;
+            while pr.next()?.is_some() {
+                n += 1;
+            }
+            n
+        };
+
+        // Count rows
+        let row_count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM \"{}\"", name), [], |r| {
+                r.get(0)
+            })
+            .unwrap_or(0);
+
+        table_names.push(name);
+        row_counts.push(row_count.to_string());
+        col_counts.push(col_count.to_string());
+        sql_defs.push(sql);
+    }
+
+    if table_names.is_empty() {
+        return Err(eyre!("No tables found in SQLite database"));
+    }
+
+    let series_vec = vec![
+        Series::new("Table".into(), &table_names).into(),
+        Series::new("Rows".into(), &row_counts).into(),
+        Series::new("Columns".into(), &col_counts).into(),
+        Series::new("SQL".into(), &sql_defs).into(),
+    ];
+
+    let pdf = polars::prelude::DataFrame::new(series_vec)?;
+    let mut df = wrap_polars_df(pdf)?;
+
+    if df.columns.len() == 4 {
+        df.columns[0].width = 30; // Table
+        df.columns[1].width = 10; // Rows
+        df.columns[2].width = 10; // Columns
+        df.columns[3].width = 60; // SQL
+    }
+
+    Ok(df)
+}
+
+/// Load a specific table from a SQLite file by table name.
+pub fn load_sqlite_table_by_name(path: &Path, table_name: &str) -> Result<DataFrame> {
+    use rusqlite::Connection;
+    let conn = Connection::open(path)?;
+    load_sqlite_table(&conn, table_name)
 }
 
 fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {

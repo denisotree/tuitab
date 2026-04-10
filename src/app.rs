@@ -156,7 +156,15 @@ impl App {
             // Load normal file using io::load_file which delegates properly based on extension
             let dataframe = crate::data::io::load_file(path, delim_byte)?;
             let row_count = dataframe.visible_row_count();
-            let root_sheet = Sheet::new(filename.clone(), dataframe);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let mut root_sheet = Sheet::new(filename.clone(), dataframe);
+            if matches!(ext.as_str(), "db" | "sqlite" | "sqlite3") {
+                root_sheet.sqlite_db_path = Some(path.to_path_buf());
+            }
             Ok(Self {
                 stack: SheetStack::new(root_sheet),
                 mode: AppMode::Normal,
@@ -367,6 +375,7 @@ impl App {
                 let is_freq = matches!(s.sheet_type, SheetType::FrequencyTable { .. });
                 let is_pivot = matches!(s.sheet_type, SheetType::PivotTable { .. });
                 let is_dir = s.is_dir_sheet;
+                let is_sqlite = s.sqlite_db_path.is_some();
 
                 if is_freq && self.stack.depth() >= 2 {
                     self.drill_down_freq_value();
@@ -374,6 +383,8 @@ impl App {
                     self.drill_down_pivot_value();
                 } else if is_dir {
                     self.open_directory_row();
+                } else if is_sqlite {
+                    self.open_sqlite_table_row();
                 } else {
                     // FEATURE F5: Transpose row on Enter if not special sheet
                     self.transpose_row();
@@ -2232,10 +2243,18 @@ impl App {
             } else if supported {
                 match crate::data::io::load_file(&target_path, None) {
                     Ok(new_df) => {
-                        let new_sheet = crate::sheet::Sheet::new(
+                        let mut new_sheet = crate::sheet::Sheet::new(
                             target_path.to_string_lossy().into_owned(),
                             new_df,
                         );
+                        let target_ext = target_path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if matches!(target_ext.as_str(), "db" | "sqlite" | "sqlite3") {
+                            new_sheet.sqlite_db_path = Some(target_path.clone());
+                        }
                         self.stack.push(new_sheet);
                     }
                     Err(e) => {
@@ -2244,6 +2263,48 @@ impl App {
                 }
             } else {
                 self.status_message = format!("Unsupported file: {}", name);
+            }
+        }
+    }
+
+    pub fn open_sqlite_table_row(&mut self) {
+        let s = self.stack.active();
+
+        let db_path = match &s.sqlite_db_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        if s.dataframe.columns.is_empty() || s.dataframe.columns[0].name != "Table" {
+            return;
+        }
+
+        let selected_row = match s.table_state.selected() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let table_name_val = s.dataframe.get_val(selected_row, 0);
+        let table_name =
+            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&table_name_val);
+
+        if table_name.is_empty() {
+            return;
+        }
+
+        match crate::data::io::load_sqlite_table_by_name(&db_path, &table_name) {
+            Ok(new_df) => {
+                let row_count = new_df.visible_row_count();
+                let new_sheet = crate::sheet::Sheet::new(
+                    format!("{} :: {}", db_path.display(), table_name),
+                    new_df,
+                );
+                self.stack.push(new_sheet);
+                self.status_message =
+                    format!("Opened table '{}' ({} rows)", table_name, row_count);
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to open table '{}': {}", table_name, e);
             }
         }
     }
