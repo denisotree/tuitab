@@ -1,7 +1,6 @@
 use crate::clipboard;
 use crate::data::aggregator::AggregatorKind;
 use crate::data::async_loader::{self, LoadEvent};
-use crate::data::column::ColumnMeta;
 use crate::data::dataframe::DataFrame;
 use crate::data::expression::Expr;
 use crate::event::handle_key_event;
@@ -1022,7 +1021,28 @@ impl App {
             Action::EnterZPrefix => {
                 self.mode = AppMode::ZPrefix;
                 self.status_message =
-                    "z: (e)dit name  (d)elete  (i)nsert  (<-/->) move".to_string();
+                    "z: (e)dit name  (d)elete  (i)nsert  (s)elect  (u)nselect  (<-/->) move"
+                        .to_string();
+            }
+            Action::SelectColumn => {
+                let s = self.stack.active_mut();
+                let col = s.cursor_col;
+                s.dataframe.columns[col].selected = true;
+                let sel_count = s.dataframe.columns.iter().filter(|c| c.selected).count();
+                self.status_message = format!("{} column(s) selected", sel_count);
+                self.mode = AppMode::ZPrefix;
+            }
+            Action::UnselectColumn => {
+                let s = self.stack.active_mut();
+                let col = s.cursor_col;
+                s.dataframe.columns[col].selected = false;
+                let sel_count = s.dataframe.columns.iter().filter(|c| c.selected).count();
+                self.status_message = if sel_count == 0 {
+                    "No columns selected".to_string()
+                } else {
+                    format!("{} column(s) selected", sel_count)
+                };
+                self.mode = AppMode::ZPrefix;
             }
             Action::CancelZPrefix => {
                 self.mode = AppMode::Normal;
@@ -3196,40 +3216,78 @@ impl App {
     fn create_sheet_from_selection(&mut self) {
         let s = self.stack.active();
         let df = &s.dataframe;
-        if df.selected_rows.is_empty() {
-            self.status_message = "No rows selected (use 's' to select rows first)".to_string();
+
+        let has_selected_rows = !df.selected_rows.is_empty();
+        let selected_col_indices: Vec<usize> = df
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.selected)
+            .map(|(i, _)| i)
+            .collect();
+        let has_selected_cols = !selected_col_indices.is_empty();
+
+        if !has_selected_rows && !has_selected_cols {
+            self.status_message =
+                "No rows or columns selected (use 's' to select rows, 'zs' for columns)"
+                    .to_string();
             return;
         }
-        let col_count = df.col_count();
-        let columns: Vec<ColumnMeta> = df.columns.clone();
-        let selected_physical: Vec<usize> = {
+
+        // Determine which physical rows to include
+        let selected_physical: Vec<usize> = if has_selected_rows {
             let sel = &df.selected_rows;
             df.row_order
                 .iter()
                 .filter(|&&i| sel.contains(&i))
                 .copied()
                 .collect()
+        } else {
+            // All rows in display order
+            df.row_order.iter().copied().collect()
+        };
+
+        // Determine which columns to include
+        let col_indices: Vec<usize> = if has_selected_cols {
+            selected_col_indices
+        } else {
+            (0..df.col_count()).collect()
         };
 
         let mut series_vec = Vec::new();
-        for (col, col_meta) in columns.iter().enumerate().take(col_count) {
+        let mut new_columns = Vec::new();
+        for &col in &col_indices {
+            let col_meta = df.columns[col].clone();
             let mut col_data = Vec::with_capacity(selected_physical.len());
             for &phys_idx in &selected_physical {
                 col_data.push(df.get_physical(phys_idx, col));
             }
-            let s = polars::prelude::Series::new(col_meta.name.clone().into(), &col_data);
-            series_vec.push(s.into());
+            let series = polars::prelude::Series::new(col_meta.name.clone().into(), &col_data);
+            series_vec.push(series.into());
+            new_columns.push(col_meta);
         }
+
         let pdf = polars::prelude::DataFrame::new(series_vec)
             .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
         let row_count = selected_physical.len();
         let row_order: Vec<usize> = (0..row_count).collect();
 
-        let title = format!("{} [{}sel]", s.title, selected_physical.len());
+        let title = match (has_selected_rows, has_selected_cols) {
+            (true, true) => format!(
+                "{} [{}rows, {}cols]",
+                s.title,
+                selected_physical.len(),
+                col_indices.len()
+            ),
+            (true, false) => format!("{} [{}sel]", s.title, selected_physical.len()),
+            (false, true) => format!("{} [{}cols]", s.title, col_indices.len()),
+            (false, false) => unreachable!(),
+        };
+
         let mut new_df = DataFrame {
             df: pdf,
-            columns,
+            columns: new_columns,
             row_order: row_order.clone().into(),
             original_order: row_order.into(),
             selected_rows: HashSet::new(),
@@ -3238,10 +3296,23 @@ impl App {
         };
         new_df.calc_widths(40, 1000);
 
-        let count = selected_physical.len();
+        let status = match (has_selected_rows, has_selected_cols) {
+            (true, true) => format!(
+                "Created sheet from {} rows × {} columns",
+                selected_physical.len(),
+                col_indices.len()
+            ),
+            (true, false) => format!(
+                "Created sheet from {} selected rows",
+                selected_physical.len()
+            ),
+            (false, true) => format!("Created sheet from {} selected columns", col_indices.len()),
+            (false, false) => unreachable!(),
+        };
+
         let derived = Sheet::new(title, new_df);
         self.stack.push(derived);
-        self.status_message = format!("Created sheet from {} selected rows", count);
+        self.status_message = status;
     }
 
     // ── Z Prefix (Column Operations) ──────────────────────────────────────────

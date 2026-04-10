@@ -177,7 +177,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 ""
             };
             let pin_mark = if col.pinned { "!" } else { "" };
-            let name_raw = format!("{}{}{}", pin_mark, col.name, sort_mark);
+            let sel_mark = if col.selected { "*" } else { "" };
+            let name_raw = format!("{}{}{}{}", pin_mark, sel_mark, col.name, sort_mark);
             let name_w = UnicodeWidthStr::width(name_raw.as_str());
             let cell_w = widths_override[i] as usize; // Use overridden bounded width
 

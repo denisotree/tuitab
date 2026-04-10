@@ -212,6 +212,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         Line::from("  ze                Rename column"),
         Line::from("  zd                Delete column"),
         Line::from("  zi                Insert empty column"),
+        Line::from("  zs / zu           Select / unselect column (mark with *)"),
         Line::from("  zf                Column % of Total"),
         Line::from("  zF                Partitioned Column %"),
         Line::from("  z←/→             Move column left/right"),

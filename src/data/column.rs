@@ -26,6 +26,8 @@ pub struct ColumnMeta {
     pub currency: Option<CurrencyKind>,
     /// Whether the column width is currently expanded to content width (toggle state for _ / g_)
     pub width_expanded: bool,
+    /// Whether this column is selected (zs/zu in z-prefix mode)
+    pub selected: bool,
 }
 
 impl ColumnMeta {
@@ -44,6 +46,7 @@ impl ColumnMeta {
             pinned: false,
             currency: None,
             width_expanded: true,
+            selected: false,
         }
     }
 }

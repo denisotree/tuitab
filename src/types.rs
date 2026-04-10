@@ -223,6 +223,8 @@ pub enum Action {
     InsertColumnCursorEnd,
     ApplyInsertColumn,
     CancelInsertColumn,
+    SelectColumn,
+    UnselectColumn,
     MoveColumnLeft,
     MoveColumnRight,
     AdjustColumnWidth,

@@ -290,6 +290,8 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('i') => Action::StartInsertColumn,
             KeyCode::Char('f') => Action::CreatePctColumn,
             KeyCode::Char('F') => Action::OpenPartitionSelect,
+            KeyCode::Char('s') => Action::SelectColumn,
+            KeyCode::Char('u') => Action::UnselectColumn,
             KeyCode::Left | KeyCode::Char('h') => Action::MoveColumnLeft,
             KeyCode::Right | KeyCode::Char('l') => Action::MoveColumnRight,
             // Precision: z> increase decimal places, z< decrease
