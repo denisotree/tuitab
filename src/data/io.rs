@@ -422,6 +422,27 @@ fn save_xlsx(df: &DataFrame, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Format byte count as human-readable string (like `ls -lh`).
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+#[cfg(test)]
+pub fn format_file_size_pub(bytes: u64) -> String {
+    format_file_size(bytes)
+}
+
 /// Load a directory listing into a DataFrame.
 pub fn load_directory(dir: &Path) -> Result<DataFrame> {
     use chrono::{DateTime, Local};
@@ -429,7 +450,7 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
 
     let mut names = Vec::new();
     let mut is_dirs = Vec::new();
-    let mut sizes: Vec<Option<u64>> = Vec::new();
+    let mut sizes: Vec<String> = Vec::new();
     let mut modifieds = Vec::new();
     let mut is_supported = Vec::new();
 
@@ -469,7 +490,11 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
 
             let is_dir = meta.is_dir();
 
-            let size = if is_dir { None } else { Some(meta.len()) };
+            let size = if is_dir {
+                "-".to_string()
+            } else {
+                format_file_size(meta.len())
+            };
 
             let mod_time = meta
                 .modified()
@@ -520,7 +545,7 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
     if df.columns.len() == 5 {
         df.columns[0].col_type = ColumnType::String;
         df.columns[1].col_type = ColumnType::Boolean;
-        df.columns[2].col_type = ColumnType::Integer;
+        df.columns[2].col_type = ColumnType::String;
         df.columns[3].col_type = ColumnType::Datetime;
         df.columns[4].col_type = ColumnType::Boolean;
 
