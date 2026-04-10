@@ -12,9 +12,7 @@ license=('Apache-2.0')
 depends=()
 makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Replace SKIP with the real sha256sum after the release tarball is available:
-#   curl -sL <url> | sha256sum
-sha256sums=('SKIP')
+sha256sums=('fec9f5f25281aa84c6f8efc589f5a1af9aba6a698000934600a57cbfc117d6df')
 
 prepare() {
     cd "$pkgname-$pkgver"
