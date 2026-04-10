@@ -20,8 +20,8 @@ source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::${_base_url}/tuitab-v${pkgver}
 
 # Replace SKIP with real checksums after the release is published:
 #   curl -sL <url> | sha256sum
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('789016f25dc64ce0451d1ad99c8896f617f3e2784834637c63060cfac0707854')
+sha256sums_aarch64=('05a01327e31684db70f45aa85f669d1b46923503c68130f9ebff869184bf4b2d')
 
 package() {
     local _src_dir="tuitab-v${pkgver}-${CARCH}-unknown-linux-gnu"

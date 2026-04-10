@@ -14,7 +14,7 @@ makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Replace SKIP with the real sha256sum after the release tarball is available:
 #   curl -sL <url> | sha256sum
-sha256sums=('SKIP')
+sha256sums=('2732ad928d0577bb020dbc213ce9b3a24ba5557edd71952dbd96ef48e522b1d6')
 
 prepare() {
     cd "$pkgname-$pkgver"
