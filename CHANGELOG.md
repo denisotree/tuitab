@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-10
+
+### Added
+- Human-readable file sizes in directory listing (e.g. "1.2 KB", "3.4 MB") instead of raw byte counts
+- TXT files are now read as a single-column table — each line becomes one row in a "Line" column
+- SQLite files now open a table browser showing all tables with name, row count, column count, and SQL definition; pressing Enter drills into the selected table
+
 ## [0.1.2] - 2026-04-09
 
 ### Added
@@ -45,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/denisotree/tuitab/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/denisotree/tuitab/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/denisotree/tuitab/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/denisotree/tuitab/releases/tag/v0.1.0

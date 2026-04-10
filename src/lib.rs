@@ -6,11 +6,11 @@ pub mod data;
 pub mod event;
 pub mod keymap;
 pub mod sheet;
+#[cfg(test)]
+mod test;
 pub mod theme;
 pub mod types;
 pub mod ui;
-#[cfg(test)]
-mod test;
 
 use clap::Parser;
 use color_eyre::Result;

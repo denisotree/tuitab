@@ -2285,8 +2285,7 @@ impl App {
         };
 
         let table_name_val = s.dataframe.get_val(selected_row, 0);
-        let table_name =
-            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&table_name_val);
+        let table_name = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&table_name_val);
 
         if table_name.is_empty() {
             return;
@@ -2300,8 +2299,7 @@ impl App {
                     new_df,
                 );
                 self.stack.push(new_sheet);
-                self.status_message =
-                    format!("Opened table '{}' ({} rows)", table_name, row_count);
+                self.status_message = format!("Opened table '{}' ({} rows)", table_name, row_count);
             }
             Err(e) => {
                 self.status_message = format!("Failed to open table '{}': {}", table_name, e);

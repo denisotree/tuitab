@@ -3,7 +3,7 @@
 # AUR page: https://aur.archlinux.org/packages/tuitab
 
 pkgname=tuitab
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer"
 arch=('x86_64' 'aarch64')
@@ -14,7 +14,7 @@ makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Replace SKIP with the real sha256sum after the release tarball is available:
 #   curl -sL <url> | sha256sum
-sha256sums=('2732ad928d0577bb020dbc213ce9b3a24ba5557edd71952dbd96ef48e522b1d6')
+sha256sums=('SKIP')
 
 prepare() {
     cd "$pkgname-$pkgver"
