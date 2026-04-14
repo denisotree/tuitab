@@ -1,3 +1,19 @@
+//! Central application controller.
+//!
+//! [`App`] owns the [`crate::sheet::SheetStack`] and all transient UI state.
+//! The main event loop lives in [`App::run`]:
+//!
+//! ```text
+//! loop {
+//!     ui::render(frame, app);          // draw
+//!     event → handle_key_event()       // crossterm → semantic Action
+//!     app.handle_action(action);       // mutate state
+//! }
+//! ```
+//!
+//! [`App::handle_action`] is the large dispatch table that maps every
+//! [`crate::types::Action`] variant to the corresponding state mutation.
+
 use crate::clipboard;
 use crate::data::aggregator::AggregatorKind;
 use crate::data::async_loader::{self, LoadEvent};
@@ -26,6 +42,7 @@ pub struct App {
     /// Transient message shown in the status bar
     pub status_message: String,
 
+    /// Set to `true` to signal the event loop to exit cleanly.
     pub should_quit: bool,
     /// Async loading receiver (Phase 10) — polled every frame in run()
     pub load_receiver: Option<std::sync::mpsc::Receiver<LoadEvent>>,
@@ -34,13 +51,18 @@ pub struct App {
     /// Error message for the save popup
     pub saving_error: Option<String>,
 
+    /// Cursor index within the aggregator selection popup list.
     pub agg_select_index: usize,
+    /// Set of aggregator kinds currently enabled on the cursor column.
     pub agg_selected: HashSet<AggregatorKind>,
+    /// Cursor index within the column-type selection popup.
     pub type_select_index: usize,
     /// Selected index in the currency selection popup
     pub currency_select_index: usize,
 
+    /// Cursor index within the partition-column selection popup.
     pub partition_select_index: usize,
+    /// Set of column names selected for partitioned sheet creation.
     pub partition_selected: HashSet<String>,
 
     /// Background task status (Name, Current Step, Total Steps)
@@ -49,14 +71,21 @@ pub struct App {
     pub spinner_tick: u8,
 
     // ── Expression History & Autocomplete ─────────────────────────────────────
+    /// Saved expression strings for ↑/↓ history navigation in the `=` input.
     pub expr_history: Vec<String>,
+    /// Current position in `expr_history` (`None` = not browsing history).
     pub history_idx: Option<usize>,
+    /// Column-name candidates for Tab-completion in the expression input.
     pub autocomplete_candidates: Vec<String>,
+    /// Current index within `autocomplete_candidates`.
     pub autocomplete_idx: usize,
+    /// The prefix string that triggered the current autocomplete session.
     pub autocomplete_prefix: String,
 
     // ── Pivot Table History ────────────────────────────────────────────────────
+    /// Saved pivot formula strings for ↑/↓ history in the `W` input.
     pub pivot_history: Vec<String>,
+    /// Current position in `pivot_history` (`None` = not browsing history).
     pub pivot_history_idx: Option<usize>,
 
     // ── Contextual Chart State ─────────────────────────────────────────────────
@@ -72,6 +101,11 @@ pub struct App {
 }
 
 impl App {
+    /// Construct `App` by loading a file or directory at `path`.
+    ///
+    /// For CSV/TSV files larger than 10 MB, loading is deferred to a background
+    /// thread so the UI can display a spinner while data is streamed in.
+    /// `delimiter` overrides auto-detection for CSV/TSV files.
     pub fn new(path: &Path, delimiter: Option<char>) -> Result<Self> {
         let delim_byte = delimiter.map(|c| c as u8);
 
@@ -195,7 +229,10 @@ impl App {
         }
     }
 
-    /// Construct an App by reading typed data from stdin.
+    /// Construct `App` by reading typed data from stdin.
+    ///
+    /// `data_type` must be one of `"csv"`, `"json"`, or `"parquet"`.
+    /// `delimiter` overrides auto-detection for CSV/TSV input.
     pub fn from_stdin_typed(data_type: &str, delimiter: Option<char>) -> Result<Self> {
         let delim_byte = delimiter.map(|c| c as u8);
         let dataframe = crate::data::io::load_from_stdin_typed(data_type, delim_byte)?;
@@ -307,6 +344,10 @@ impl App {
 
     // ── Action dispatcher ──────────────────────────────────────────────────────
 
+    /// Dispatch a semantic [`Action`] to mutate application state.
+    ///
+    /// Called once per key event from [`App::run`].
+    /// The action is produced by [`crate::event::handle_key_event`].
     pub fn handle_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.pop_sheet(),

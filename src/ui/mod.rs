@@ -1,3 +1,20 @@
+//! Rendering layer for tuitab, built on top of [`ratatui`].
+//!
+//! The top-level entry point is [`render`], which dispatches to sub-views based on
+//! the current [`crate::types::AppMode`]:
+//!
+//! | Sub-module | Rendered when |
+//! |---|---|
+//! | [`table_view`] | All normal and overlay modes — the main data grid |
+//! | [`status_bar`] | Always rendered below the table |
+//! | [`charts`] | [`crate::types::AppMode::Chart`] — full-screen chart view |
+//! | [`search_bar`] | [`crate::types::AppMode::Searching`] — `/` text search overlay |
+//! | [`expr_bar`] | [`crate::types::AppMode::ExpressionInput`] — `=` expression overlay |
+//! | [`edit_bar`] | [`crate::types::AppMode::Editing`] — cell edit overlay |
+//! | [`select_regex_bar`] | [`crate::types::AppMode::SelectByRegex`] — regex row selection |
+//! | [`popup`] | Modal dialogs: aggregator, type, currency, pivot, help, confirm-quit |
+//! | [`text_input`] | Reusable cursor-aware text field state (not a widget itself) |
+
 use crate::app::App;
 use crate::theme::EverforestTheme as T;
 use crate::types::AppMode;

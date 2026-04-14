@@ -2,6 +2,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A runtime value produced by evaluating an [`Expr`] against a data row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     Number(f64),
@@ -13,6 +14,8 @@ pub enum Value {
 }
 
 impl Value {
+    /// Coerce to `f64`.  Strings are parsed; booleans map to `1.0`/`0.0`;
+    /// `Null`, `Date`, and `Datetime` return `None`.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Number(n) => Some(*n),
@@ -22,6 +25,7 @@ impl Value {
         }
     }
 
+    /// Return the boolean value, or `None` if this is not `Value::Boolean`.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Boolean(b) => Some(*b),
@@ -56,21 +60,19 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    FunctionCall {
-        name: String,
-        args: Vec<Expr>,
-    },
+    /// A built-in function call, e.g. `upper(name)` or `round(price, 2)`.
+    FunctionCall { name: String, args: Vec<Expr> },
+    /// Ternary conditional: `if cond then then_branch else else_branch`.
     If {
         cond: Box<Expr>,
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
     },
-    InList {
-        left: Box<Expr>,
-        list: Vec<Expr>,
-    },
+    /// Membership test: `left in (v1, v2, ...)`.  Evaluates to a boolean.
+    InList { left: Box<Expr>, list: Vec<Expr> },
 }
 
+/// Binary operator for [`Expr::BinOp`] nodes in the expression AST.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Op {
     Add,
