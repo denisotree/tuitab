@@ -138,7 +138,7 @@ fn load_excel(path: &Path) -> Result<DataFrame> {
         series_vec.push(Series::new(headers[i].as_str().into(), &col_data).into());
     }
 
-    let pdf = polars::prelude::DataFrame::new(series_vec)?;
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
     wrap_polars_df(pdf)
 }
 
@@ -151,7 +151,7 @@ fn load_txt(path: &Path) -> Result<DataFrame> {
     let lines: Vec<String> = reader.lines().map(|l| l.unwrap_or_default()).collect();
 
     let series = Series::new("Line".into(), &lines);
-    let pdf = polars::prelude::DataFrame::new(vec![series.into()])?;
+    let pdf = polars::prelude::DataFrame::new_infer_height(vec![series.into()])?;
     let row_count = pdf.height();
 
     let mut col_meta = ColumnMeta::new("Line".to_string());
@@ -204,7 +204,7 @@ fn load_sqlite_table(conn: &rusqlite::Connection, table_name: &str) -> Result<Da
         series_vec.push(Series::new(column_names[i].as_str().into(), &col_data).into());
     }
 
-    let pdf = polars::prelude::DataFrame::new(series_vec)?;
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
     wrap_polars_df(pdf)
 }
 
@@ -264,7 +264,7 @@ pub fn load_sqlite_overview(path: &Path) -> Result<DataFrame> {
         Series::new("SQL".into(), &sql_defs).into(),
     ];
 
-    let pdf = polars::prelude::DataFrame::new(series_vec)?;
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
     let mut df = wrap_polars_df(pdf)?;
 
     if df.columns.len() == 4 {
@@ -289,7 +289,7 @@ fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
     let row_count = pdf.height();
     let mut columns = Vec::with_capacity(col_count);
 
-    for series in pdf.get_columns() {
+    for series in pdf.columns() {
         let name = series.name().to_string();
         let mut col_meta = ColumnMeta::new(name);
 
@@ -427,7 +427,7 @@ fn save_sqlite(df: &DataFrame, path: &Path) -> Result<()> {
     for row_idx in 0..nrows {
         let row_vals: Vec<String> = (0..ncols)
             .map(|ci| {
-                let series = &ordered_df.get_columns()[ci];
+                let series = &ordered_df.columns()[ci];
                 series
                     .get(row_idx)
                     .map(|v| {
@@ -483,7 +483,7 @@ fn save_xlsx(df: &DataFrame, path: &Path) -> Result<()> {
     let ncols = col_names.len();
     for row_idx in 0..nrows {
         for ci in 0..ncols {
-            let series = &ordered_df.get_columns()[ci];
+            let series = &ordered_df.columns()[ci];
             let cell_text = series
                 .get(row_idx)
                 .map(|v| {
@@ -626,7 +626,7 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
         Series::new("Supported".into(), &is_supported).into(),
     ];
 
-    let pdf = polars::prelude::DataFrame::new(series_vec)?;
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
 
     // Create our DataFrame wrapper and mark the types properly
     let mut df = wrap_polars_df(pdf)?;

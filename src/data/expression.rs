@@ -192,7 +192,7 @@ impl Expr {
                 }
                 let s = polars::prelude::Series::from_any_values("".into(), &polars_list, true)
                     .map_err(|e| e.to_string())?;
-                Ok(l.is_in(polars::lazy::dsl::lit(s)))
+                Ok(l.is_in(polars::lazy::dsl::lit(s), false))
             }
             Expr::If {
                 cond,
@@ -963,7 +963,7 @@ mod tests {
         for (i, col_data) in data.into_iter().enumerate() {
             series_vec.push(Series::new(names[i].into(), &col_data).into());
         }
-        let df = polars::prelude::DataFrame::new(series_vec).unwrap();
+        let df = polars::prelude::DataFrame::new_infer_height(series_vec).unwrap();
         let mut tui_df = crate::data::dataframe::DataFrame::empty();
         tui_df.df = df;
         tui_df

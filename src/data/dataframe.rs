@@ -88,7 +88,7 @@ impl DataFrame {
         if col >= self.df.width() || physical_row >= self.df.height() {
             return String::new();
         }
-        let series = &self.df.get_columns()[col];
+        let series = &self.df.columns()[col];
         if let Ok(any_val) = series.get(physical_row) {
             Self::anyvalue_to_string(&any_val)
         } else {
@@ -103,7 +103,7 @@ impl DataFrame {
             return AnyValue::Null;
         }
         let physical_row = self.row_order[display_row];
-        let series = &self.df.get_columns()[col];
+        let series = &self.df.columns()[col];
         series.get(physical_row).unwrap_or(AnyValue::Null)
     }
 
@@ -130,7 +130,7 @@ impl DataFrame {
         if col >= self.df.width() || physical_row >= self.df.height() {
             return Err("Out of bounds".into());
         }
-        let series = &self.df.get_columns()[col];
+        let series = &self.df.columns()[col];
         let series_name = series.name().clone();
 
         // Cast to string eagerly (handles Int/Date/Float natively via Polars)
@@ -176,7 +176,7 @@ impl DataFrame {
         let new_series = builder.finish().into_series();
         let final_series = new_series.cast(series.dtype()).unwrap_or(new_series);
         self.df
-            .with_column(final_series)
+            .with_column(final_series.into())
             .map_err(|e| e.to_string())?;
         self.modified = true;
         self.aggregates_cache = None;
@@ -206,7 +206,7 @@ impl DataFrame {
             return Ok(());
         }
 
-        let series = &self.df.get_columns()[col_idx];
+        let series = &self.df.columns()[col_idx];
 
         let target_dtype = match col_type {
             ColumnType::Integer => polars::prelude::DataType::Int64,
@@ -378,7 +378,7 @@ impl DataFrame {
         let empty_series = Series::new(name.into(), &empty_col);
 
         self.df
-            .with_column(empty_series)
+            .with_column(empty_series.into())
             .map_err(|e| e.to_string())?;
 
         let mut meta = ColumnMeta::new(name.to_string());
@@ -505,7 +505,7 @@ impl DataFrame {
                 self.row_order
                     .iter()
                     .map(|&row_idx| {
-                        let series = &self.df.get_columns()[col_idx];
+                        let series = &self.df.columns()[col_idx];
                         if let Ok(v) = series.get(row_idx) {
                             Self::anyvalue_to_string(&v)
                         } else {
@@ -624,7 +624,7 @@ impl DataFrame {
                                         let new_series_arr = f64_ca.apply_values(|v| v / divisor);
                                         let new_series =
                                             new_series_arr.into_series().with_name(name.into());
-                                        let _ = self.df.replace(name, new_series);
+                                        let _ = self.df.replace(name, new_series.into());
                                         dtype = polars::prelude::DataType::Float64;
                                     }
                                 }
@@ -750,7 +750,7 @@ impl DataFrame {
             if col_idx >= self.df.width() {
                 continue;
             }
-            let series = self.df.get_columns()[col_idx].as_materialized_series();
+            let series = self.df.columns()[col_idx].as_materialized_series();
 
             // Fixed-width estimate for types whose max display width is bounded
             let fixed_width: Option<u16> = match series.dtype() {
@@ -806,7 +806,7 @@ impl DataFrame {
 
         let total_rows = self.df.height();
         let sample_end = sample_size.min(total_rows);
-        let series = self.df.get_columns()[col_idx].as_materialized_series();
+        let series = self.df.columns()[col_idx].as_materialized_series();
 
         let fixed_width: Option<u16> = match series.dtype() {
             DataType::Boolean => Some(5),
@@ -1045,10 +1045,10 @@ impl DataFrame {
         // ── Assemble final DataFrame ───────────────────────────────────────
         let mut final_df = grouped.clone();
         final_df
-            .with_column(Series::new("Pct".into(), &pct_values))
+            .with_column(Series::new("Pct".into(), &pct_values).into())
             .map_err(|e| e.to_string())?;
         final_df
-            .with_column(Series::new("Bar".into(), &bar_values))
+            .with_column(Series::new("Bar".into(), &bar_values).into())
             .map_err(|e| e.to_string())?;
 
         // ── Build ColumnMeta list matching the DataFrame column order ──────
@@ -1166,10 +1166,10 @@ impl DataFrame {
 
         let mut final_df = grouped.clone();
         final_df
-            .with_column(Series::new("Pct".into(), &pct_values))
+            .with_column(Series::new("Pct".into(), &pct_values).into())
             .map_err(|e| e.to_string())?;
         final_df
-            .with_column(Series::new("Bar".into(), &bar_values))
+            .with_column(Series::new("Bar".into(), &bar_values).into())
             .map_err(|e| e.to_string())?;
 
         // ── ColumnMeta ────────────────────────────────────────────────────
@@ -1210,7 +1210,7 @@ impl DataFrame {
         String,
     > {
         use polars::prelude::*;
-        use polars_ops::pivot::{pivot, PivotAgg};
+        use std::sync::Arc;
 
         let visible = self.get_visible_df()?;
 
@@ -1229,23 +1229,52 @@ impl DataFrame {
             .collect()
             .map_err(|e| format!("Pivot grouping error: {}", e))?;
 
-        // 2. Pivot the result
-        // on: pivot_col (becomes column headers), index: row_index_cols (stays as rows), values: "pivot_value" (cell contents)
-        let pivoted = pivot(
-            &grouped,
-            [pivot_col],           // on (column headers)
-            Some(row_index_cols),  // index (row headers)
-            Some(["pivot_value"]), // values (cell contents)
-            true,                  // sort_columns
-            Some(PivotAgg::First),
-            None,
-        )
-        .map_err(|e| format!("Pivot error: {}", e))?;
+        // 2. Pivot the result using LazyFrame::pivot (polars ≥0.53 API)
+        // on_columns must be a DataFrame of unique pivot column values
+        let pivot_series = grouped
+            .column(pivot_col)
+            .map_err(|e| e.to_string())?
+            .as_materialized_series()
+            .clone();
+        let unique_vals = pivot_series.unique_stable().map_err(|e| e.to_string())?;
+        let on_columns_df = Arc::new(
+            DataFrame::new_infer_height(vec![unique_vals.into()]).map_err(|e| e.to_string())?,
+        );
+
+        let index_names: Arc<[PlSmallStr]> = row_index_cols
+            .iter()
+            .map(|s| PlSmallStr::from(s.as_str()))
+            .collect::<Vec<_>>()
+            .into();
+
+        let pivoted = grouped
+            .clone()
+            .lazy()
+            .pivot(
+                Selector::ByName {
+                    names: Arc::from([PlSmallStr::from(pivot_col)]),
+                    strict: true,
+                },
+                on_columns_df,
+                Selector::ByName {
+                    names: index_names,
+                    strict: true,
+                },
+                Selector::ByName {
+                    names: Arc::from([PlSmallStr::from_static("pivot_value")]),
+                    strict: true,
+                },
+                col("pivot_value").first(),
+                true,
+                "_".into(),
+            )
+            .collect()
+            .map_err(|e| format!("Pivot error: {}", e))?;
 
         // 3. Build ColumnMeta
         let mut columns = Vec::new();
         for i in 0..pivoted.width() {
-            let series = &pivoted.get_columns()[i];
+            let series = &pivoted.columns()[i];
             let name = series.name().to_string();
             let mut meta = crate::data::column::ColumnMeta::new(name);
 

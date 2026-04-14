@@ -12,11 +12,13 @@ use std::path::Path;
 pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
     let delim = delimiter.unwrap_or_else(|| detect_delimiter(path));
 
-    let lf = LazyCsvReader::new(path)
-        .with_separator(delim)
-        .with_has_header(true)
-        .with_infer_schema_length(None)
-        .finish()?;
+    let lf = LazyCsvReader::new(
+        PlRefPath::try_from_path(path).map_err(|e| color_eyre::eyre::eyre!("{}", e))?,
+    )
+    .with_separator(delim)
+    .with_has_header(true)
+    .with_infer_schema_length(None)
+    .finish()?;
 
     let pdf = lf.collect()?;
 
@@ -25,7 +27,7 @@ pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
 
     let mut columns = Vec::with_capacity(col_count);
 
-    for series in pdf.get_columns() {
+    for series in pdf.columns() {
         let name = series.name().to_string();
         let mut col_meta = ColumnMeta::new(name);
 

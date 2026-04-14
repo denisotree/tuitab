@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-14
+
+### Changed
+- polars dependency updated from 0.46 to 0.53; fixes docs.rs build failure caused by `polars-ops 0.46` accessing private nightly Rust stdlib functions (`core::unicode::Case_Ignorable`, `core::unicode::Cased`)
+
 ## [0.1.4] - 2026-04-14
 
 ### Changed
@@ -63,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/denisotree/tuitab/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/denisotree/tuitab/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/denisotree/tuitab/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/denisotree/tuitab/compare/v0.1.1...v0.1.2
