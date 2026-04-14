@@ -52,7 +52,7 @@ polars-ops = { version = "0.53", features = ["pivot"] }
 libc = "0.2"
 calamine = "0.22"
 rusqlite = { version = "0.31", features = [] }
-rust_xlsxwriter = "0.80"
+rust_xlsxwriter = "0.94"
 
 [package.metadata.docs.rs]
 # Build only for Linux x86_64 (docs.rs default); enables bundled SQLite so
