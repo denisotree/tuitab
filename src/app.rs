@@ -2568,7 +2568,7 @@ impl App {
 
         let s1 = polars::prelude::Series::new("Column".into(), &col_names);
         let s2 = polars::prelude::Series::new("Value".into(), &col_values);
-        let pdf = polars::prelude::DataFrame::new(vec![s1.into(), s2.into()])
+        let pdf = polars::prelude::DataFrame::new_infer_height(vec![s1.into(), s2.into()])
             .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
         let row_count = col_names.len();
@@ -2671,7 +2671,7 @@ impl App {
                     series_vec.push(series.into());
                 }
 
-                let pdf = polars::prelude::DataFrame::new(series_vec)
+                let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)
                     .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
                 let row_order: Vec<usize> = (0..data_ncols).collect();
@@ -2932,7 +2932,7 @@ impl App {
             series_vec.push(series.into());
         }
 
-        let pdf = polars::prelude::DataFrame::new(series_vec)
+        let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)
             .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
         let row_order: Vec<usize> = (0..n_metrics).collect();
@@ -3200,7 +3200,7 @@ impl App {
                     );
                     series_vec.push(s.into());
                 }
-                if let Ok(new_df) = polars::prelude::DataFrame::new(series_vec) {
+                if let Ok(new_df) = polars::prelude::DataFrame::new_infer_height(series_vec) {
                     let original_height = df.df.height();
                     if original_height == 0 {
                         df.df = new_df;
@@ -3310,7 +3310,7 @@ impl App {
             new_columns.push(col_meta);
         }
 
-        let pdf = polars::prelude::DataFrame::new(series_vec)
+        let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)
             .unwrap_or_else(|_| polars::prelude::DataFrame::empty());
 
         let row_count = selected_physical.len();

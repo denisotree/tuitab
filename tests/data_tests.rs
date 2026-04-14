@@ -58,14 +58,14 @@ fn test_currency_dirty_float_parsing() {
         "Price".into(),
         &["$1,234.56", "€-50.00", "100.00₽", " (10.5) ", "invalid"],
     );
-    df.df = polars::prelude::DataFrame::new(vec![series.into()]).unwrap();
+    df.df = polars::prelude::DataFrame::new_infer_height(vec![series.into()]).unwrap();
     df.columns = vec![ColumnMeta::new("Price".to_string())];
 
     // Set type to Currency, which should trigger dirty float parsing
     df.set_column_type(0, ColumnType::Currency).unwrap();
 
     // Check parsed values
-    let s = &df.df.get_columns()[0];
+    let s = &df.df.columns()[0];
     let ca = s.f64().unwrap();
 
     assert_eq!(ca.get(0), Some(1234.56));
@@ -84,7 +84,7 @@ fn test_expression_after_rename() {
     let mut df = DataFrame::empty();
     let s1 = Series::new("old_sum".into(), &[10.0, 20.0]);
     let s2 = Series::new("old_count".into(), &[2.0, 4.0]);
-    df.df = polars::prelude::DataFrame::new(vec![s1.into(), s2.into()]).unwrap();
+    df.df = polars::prelude::DataFrame::new_infer_height(vec![s1.into(), s2.into()]).unwrap();
     df.columns = vec![
         ColumnMeta::new("old_sum".to_string()),
         ColumnMeta::new("old_count".to_string()),
