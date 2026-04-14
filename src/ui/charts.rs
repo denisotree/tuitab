@@ -438,7 +438,7 @@ fn render_f64_bar_chart(
             let color = CHART_COLORS[i % CHART_COLORS.len()];
             Bar::default()
                 .value(scaled[i])
-                .label(label.as_str().into())
+                .label(label.as_str())
                 .text_value(text_vals[i].clone())
                 .style(Style::default().fg(color))
                 .value_style(Style::default().fg(T::BG0).bg(color))
