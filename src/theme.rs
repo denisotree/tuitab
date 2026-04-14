@@ -1,3 +1,9 @@
+//! Everforest Dark Medium color palette and pre-composed [`ratatui`] style helpers.
+//!
+//! [`EverforestTheme`] is a unit struct used as a namespace for `const Color` values
+//! and functions that return pre-composed [`ratatui::style::Style`] objects.
+//! Import it with `use crate::theme::EverforestTheme as T;` to keep call sites short.
+
 use ratatui::style::{Color, Modifier, Style};
 
 /// Everforest Dark Medium color palette and style helpers
@@ -28,6 +34,7 @@ impl EverforestTheme {
 
     // ── Style helpers ─────────────────────────────────────────────────────────
 
+    /// Bold green text on [`Self::BG3`] (header/status background) for table column headers.
     pub fn header_style() -> Style {
         Style::default()
             .fg(Self::GREEN)
@@ -35,6 +42,7 @@ impl EverforestTheme {
             .add_modifier(Modifier::BOLD)
     }
 
+    /// Alternating row background: [`Self::BG0`] for even-indexed rows, [`Self::BG_DIM`] for odd.
     pub fn normal_row_style(index: usize) -> Style {
         let bg = if index.is_multiple_of(2) {
             Self::BG0

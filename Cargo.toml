@@ -1,13 +1,13 @@
 [package]
 name = "tuitab"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 authors = ["denisotree"]
 description = "Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer with filtering, sorting, pivot tables, and charts"
 license = "Apache-2.0"
 repository = "https://github.com/denisotree/tuitab"
 homepage = "https://github.com/denisotree/tuitab"
-documentation = "https://github.com/denisotree/tuitab#readme"
+documentation = "https://docs.rs/tuitab"
 readme = "README.md"
 keywords = ["tui", "csv", "data", "terminal", "tabular"]
 categories = ["command-line-utilities", "visualization"]
@@ -16,6 +16,11 @@ exclude = [
     ".github/",
     "docs/",
 ]
+
+[features]
+# Enable statically-bundled SQLite for docs.rs and other environments
+# that do not have libsqlite3 installed.
+bundled-sqlite = ["rusqlite/bundled"]
 
 [[bin]]
 name = "tuitab"
@@ -46,8 +51,15 @@ polars = { version = "0.46", features = ["csv", "lazy", "dtype-date", "dtype-dat
 polars-ops = { version = "0.46", features = ["pivot"] }
 libc = "0.2"
 calamine = "0.22"
-rusqlite = "0.31"
+rusqlite = { version = "0.31", features = [] }
 rust_xlsxwriter = "0.80"
+
+[package.metadata.docs.rs]
+# Build only for Linux x86_64 (docs.rs default); enables bundled SQLite so
+# the crate compiles without a system libsqlite3-dev.
+features = ["bundled-sqlite"]
+targets = ["x86_64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [profile.release]
 opt-level = 3

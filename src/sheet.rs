@@ -1,3 +1,15 @@
+//! Sheet stack — the navigation model for tuitab.
+//!
+//! A [`Sheet`] holds one data view: a [`crate::data::dataframe::DataFrame`] plus all UI
+//! state that belongs to it (cursor position, active sort, search pattern, undo history,
+//! and per-mode input widgets).
+//!
+//! A [`SheetStack`] owns a stack of sheets.  Opening a derived view (frequency table,
+//! pivot table, filtered selection) pushes a new sheet; pressing `Esc`/`q` pops it and
+//! restores the previous view.  To keep memory usage bounded, any sheet that is not on
+//! top of the stack is transparently serialised to a temporary directory via
+//! [`crate::data::swap`] and swapped back in when it becomes active again.
+
 use crate::data::dataframe::DataFrame;
 use crate::data::swap;
 use crate::types::SheetType;

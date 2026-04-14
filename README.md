@@ -3,7 +3,7 @@
 [![CI](https://github.com/denisotree/tuitab/actions/workflows/ci.yml/badge.svg)](https://github.com/denisotree/tuitab/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/tuitab.svg)](https://crates.io/crates/tuitab)
 [![docs.rs](https://img.shields.io/docsrs/tuitab)](https://docs.rs/tuitab)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/denisotree/tuitab/blob/master/LICENSE)
 
 A fast, keyboard-driven terminal explorer for tabular data.
 Open CSV, JSON, Parquet, Excel and SQLite files directly in your terminal —
@@ -216,8 +216,8 @@ tuitab useful, check out VisiData too.
 ## Contributing
 
 Bug reports, feature requests, and pull requests are welcome.
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+See [CONTRIBUTING.md](https://github.com/denisotree/tuitab/blob/master/CONTRIBUTING.md) for guidelines.
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+Apache-2.0 — see [LICENSE](https://github.com/denisotree/tuitab/blob/master/LICENSE).

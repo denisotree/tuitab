@@ -96,7 +96,8 @@ impl DataFrame {
         }
     }
 
-    /// Get value at (display_row, col) using row_order indirection.
+    /// Return the cell value at (`display_row`, `col`) honouring the current
+    /// `row_order` indirection so that sort and filter are transparent to callers.
     pub fn get_val(&self, display_row: usize, col: usize) -> AnyValue<'_> {
         if col >= self.df.width() || display_row >= self.row_order.len() {
             return AnyValue::Null;
@@ -106,11 +107,20 @@ impl DataFrame {
         series.get(physical_row).unwrap_or(AnyValue::Null)
     }
 
+    /// Format a Polars [`AnyValue`] to a display [`String`].
+    ///
+    /// Public thin wrapper around the private `anyvalue_to_string` helper.
+    /// Datetime values are rendered using Polars's own string cast to preserve
+    /// timezone and precision information.
     pub fn anyvalue_to_string_fmt(val: &AnyValue) -> String {
         Self::anyvalue_to_string(val)
     }
 
-    /// Update a specific cell in physical row order by replacing the column.
+    /// Overwrite the cell at physical (`physical_row`, `col`) with `value`.
+    ///
+    /// Percentage and currency columns receive special pre-processing before the
+    /// value is written back into the Polars series.  Marks the frame as
+    /// `modified` and clears the aggregates cache.
     pub fn set_cell(
         &mut self,
         physical_row: usize,
@@ -183,6 +193,10 @@ impl DataFrame {
         self.columns.len()
     }
 
+    /// Cast column `col_idx` to `col_type`.
+    ///
+    /// Updates both the Polars `Series` dtype and the corresponding [`crate::data::column::ColumnMeta`].
+    /// Returns an error string if the Polars cast fails (e.g. non-numeric string → integer).
     pub fn set_column_type(&mut self, col_idx: usize, col_type: ColumnType) -> Result<(), String> {
         if col_idx >= self.columns.len() {
             return Err("Column out of bounds".into());
@@ -266,6 +280,11 @@ impl DataFrame {
 
     // ── Column Operations (Phase 21) ──────────────────────────────────────────
 
+    /// Pin or unpin column `col_idx`.
+    ///
+    /// Pinned columns are physically moved to the front of the frame (just after
+    /// any already-pinned columns).  Unpinned columns are moved to the end of
+    /// the pinned block.  Returns the new physical index of the column.
     pub fn toggle_pin_column(&mut self, col_idx: usize) -> Result<usize, String> {
         if col_idx >= self.columns.len() {
             return Err("Out of bounds".into());
@@ -318,6 +337,9 @@ impl DataFrame {
         Ok(target_idx)
     }
 
+    /// Rename column at `col_idx` to `new_name`.
+    ///
+    /// Updates both the Polars schema and the [`crate::data::column::ColumnMeta`] name.
     pub fn rename_column(&mut self, col_idx: usize, new_name: &str) -> Result<(), String> {
         if col_idx >= self.columns.len() {
             return Err("Column index out of bounds".to_string());
@@ -332,6 +354,7 @@ impl DataFrame {
         Ok(())
     }
 
+    /// Remove column at `col_idx` from the Polars frame and the `columns` metadata.
     pub fn drop_column(&mut self, col_idx: usize) -> Result<(), String> {
         if col_idx >= self.columns.len() {
             return Err("Column index out of bounds".to_string());
@@ -344,6 +367,8 @@ impl DataFrame {
         Ok(())
     }
 
+    /// Insert a new empty string column named `name` at position `col_idx`,
+    /// shifting all columns at `col_idx` and beyond one position to the right.
     pub fn insert_empty_column(&mut self, col_idx: usize, name: &str) -> Result<(), String> {
         if self.columns.iter().any(|c| c.name == name) {
             return Err("Column name already exists".to_string());
@@ -372,6 +397,8 @@ impl DataFrame {
         Ok(())
     }
 
+    /// Swap the positions of columns `col1` and `col2` in both the Polars schema
+    /// and the `columns` metadata vector.
     pub fn swap_columns(&mut self, col1: usize, col2: usize) -> Result<(), String> {
         if col1 >= self.columns.len() || col2 >= self.columns.len() {
             return Err("Column index out of bounds".to_string());
@@ -396,6 +423,11 @@ impl DataFrame {
     // ── Aggregators ────────────────────────────────────────────────────────────
 
     /// Compute all active aggregators for every column.
+    ///
+    /// Results are cached in `aggregates_cache` so subsequent calls within the same
+    /// frame are free.  The cache is invalidated whenever the data changes
+    /// (cell edit, sort, filter, column mutation).
+    /// Returns a column-indexed list of `(AggregatorKind, display_string)` pairs.
     pub fn compute_aggregates(&mut self) -> Vec<Vec<(AggregatorKind, String)>> {
         if let Some(ref cache) = self.aggregates_cache {
             return cache.clone();
@@ -522,6 +554,10 @@ impl DataFrame {
         computed
     }
 
+    /// Append `agg` to the active aggregators on column `col_idx`.
+    ///
+    /// Returns an error if the aggregator is not compatible with the column type
+    /// (e.g. `Sum` on a string column).
     pub fn add_aggregator(
         &mut self,
         col_idx: usize,
@@ -549,6 +585,11 @@ impl DataFrame {
 
     // ── Computed columns ──────────────────────────────────────────────────────
 
+    /// Evaluate `expr` against every row and append the result as a new column named `name`,
+    /// inserted immediately after `insert_after_col`.
+    ///
+    /// Tries the Polars lazy API first for best performance; falls back to a
+    /// row-by-row interpreter if the expression contains unsupported constructs.
     pub fn add_computed_column(
         &mut self,
         name: &str,
@@ -809,8 +850,11 @@ impl DataFrame {
 
     // ── Vectorized helpers ────────────────────────────────────────────────────
 
-    /// Build a sub-DataFrame containing only the currently visible rows.
+    /// Return a Polars [`polars::prelude::DataFrame`] containing only the currently visible
+    /// (filtered) rows in display order.
+    ///
     /// Avoids row-by-row access by using Polars `take()` with an index array.
+    /// Used for clipboard copy and file export.
     pub fn get_visible_df(&self) -> Result<polars::prelude::DataFrame, String> {
         // Fast path: full DataFrame is already the visible set
         if self.row_order.len() == self.df.height()

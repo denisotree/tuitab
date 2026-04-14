@@ -49,12 +49,17 @@ pub enum AppMode {
     ChartAggSelect,
 }
 
+/// Distinguishes a regular data sheet from derived views.
+///
+/// Stored on each [`crate::sheet::Sheet`] so the app knows how to refresh
+/// the sheet when the parent data changes or when the user re-opens a view.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SheetType {
+    /// A regular sheet containing loaded or user-edited data.
     Normal,
-    FrequencyTable {
-        group_cols: Vec<String>,
-    },
+    /// A frequency-table aggregation derived from `group_cols` of a parent sheet.
+    FrequencyTable { group_cols: Vec<String> },
+    /// A pivot table derived from `index_cols`, `pivot_col`, and `formula`.
     PivotTable {
         index_cols: Vec<String>,
         pivot_col: String,
