@@ -51,7 +51,7 @@ jobs:
 
       - name: Build
         env:
-          CARGO_BUILD_JOBS: ${{ matrix.cargo_build_jobs || '4' }}
+          CARGO_BUILD_JOBS: ${{ matrix.cargo_build_jobs || '2' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)

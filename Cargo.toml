@@ -63,5 +63,5 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [profile.release]
 opt-level = 3
-lto = true
+lto = "thin"
 strip = true
