@@ -13,7 +13,7 @@ fn build_freq_data(df: &DataFrame, col: usize) -> Vec<(String, usize)> {
         *counts.entry(val).or_insert(0) += 1;
     }
     let mut freq: Vec<(String, usize)> = counts.into_iter().collect();
-    freq.sort_by(|a, b| b.1.cmp(&a.1));
+    freq.sort_by_key(|b| std::cmp::Reverse(b.1));
     freq
 }
 

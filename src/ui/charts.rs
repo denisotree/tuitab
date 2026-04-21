@@ -425,11 +425,10 @@ fn render_f64_bar_chart(
         .collect();
 
     // bar_width fills all available space without a hard cap
-    let bar_width = if n == 0 {
-        3u16
-    } else {
-        ((available.saturating_sub(n.saturating_sub(1))) / n).max(3) as u16
-    };
+    let bar_width = (available.saturating_sub(n.saturating_sub(1)))
+        .checked_div(n)
+        .unwrap_or(3)
+        .max(3) as u16;
 
     let bars: Vec<Bar> = bars_data
         .iter()
