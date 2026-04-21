@@ -1,6 +1,6 @@
 [package]
 name = "tuitab"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 authors = ["denisotree"]
 description = "Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer with filtering, sorting, pivot tables, and charts"

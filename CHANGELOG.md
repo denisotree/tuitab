@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-21
+
+### Added
+- Save dialog now remembers the original file path and shows relative path by default (e.g., `db/prices.csv` instead of just `prices.csv`)
+- Tab-completion for file paths in save dialog — completes to common prefix or cycles through matching files
+- DateTime recovery: when converting a Datetime column to Date, the original time is preserved and can be restored when converting back to Datetime
+- `date()` function for computed columns — extracts date from Datetime or parses date from string (e.g., `=date(timestamp_col)`)
+- File reload via **Shift+R** — reloads current file from disk while preserving scroll position and selection
+- Automatic Date/Datetime parsing from string columns supporting multiple input formats (`%Y-%m-%d`, `%Y-%m-%d %H:%M:%S`, ISO 8601, etc.)
+
+### Changed
+- Save dialog behavior improved to work correctly with files in subdirectories
+- Source path tracking on sheets enables better save/reload functionality
+
 ## [0.1.5] - 2026-04-14
 
 ### Changed
@@ -68,7 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/denisotree/tuitab/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/denisotree/tuitab/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/denisotree/tuitab/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/denisotree/tuitab/compare/v0.1.2...v0.1.3
