@@ -28,6 +28,9 @@ pub struct ColumnMeta {
     pub width_expanded: bool,
     /// Whether this column is selected (zs/zu in z-prefix mode)
     pub selected: bool,
+    /// Backup of original Datetime values before converting to Date
+    /// Stores formatted datetime strings for recovery
+    pub backup_datetime_str: Option<Vec<Option<String>>>,
 }
 
 impl ColumnMeta {
@@ -47,6 +50,7 @@ impl ColumnMeta {
             currency: None,
             width_expanded: true,
             selected: false,
+            backup_datetime_str: None,
         }
     }
 }

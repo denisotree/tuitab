@@ -21,7 +21,9 @@ pub fn load_file(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
         "json" => load_json(path),
         "parquet" => load_parquet(path),
         "xlsx" | "xls" => load_excel(path),
-        "db" | "sqlite" | "sqlite3" => load_sqlite_overview(path),
+        "db" => load_sqlite_overview(path).or_else(|_| load_duckdb_overview(path)),
+        "sqlite" | "sqlite3" => load_sqlite_overview(path),
+        "duckdb" | "ddb" => load_duckdb_overview(path),
         _ => Err(eyre!("Unsupported file format: .{}", ext)),
     }
 }
@@ -284,7 +286,7 @@ pub fn load_sqlite_table_by_name(path: &Path, table_name: &str) -> Result<DataFr
     load_sqlite_table(&conn, table_name)
 }
 
-fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
+pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
     let col_count = pdf.width();
     let row_count = pdf.height();
     let mut columns = Vec::with_capacity(col_count);
@@ -512,6 +514,214 @@ fn save_xlsx(df: &DataFrame, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Load a DuckDB database as a table-browser overview.
+/// Returns a DataFrame with columns: Table, Rows, Columns, SQL.
+pub fn load_duckdb_overview(path: &Path) -> Result<DataFrame> {
+    use duckdb::Connection;
+    let conn = Connection::open(path)?;
+
+    // Use information_schema for reliable cross-version compatibility.
+    let mut stmt = conn.prepare(
+        "SELECT table_name \
+         FROM information_schema.tables \
+         WHERE table_schema = 'main' AND table_type = 'BASE TABLE' \
+         ORDER BY table_name",
+    )?;
+
+    let mut table_names: Vec<String> = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        table_names.push(name);
+    }
+
+    let mut row_counts: Vec<String> = Vec::new();
+    let mut col_counts: Vec<String> = Vec::new();
+
+    for name in &table_names {
+        let row_count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM \"{}\"", name.replace('"', "\"\"")),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        row_counts.push(row_count.to_string());
+
+        let col_count: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM information_schema.columns \
+                     WHERE table_schema = 'main' AND table_name = '{}'",
+                    name.replace('\'', "''")
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        col_counts.push(col_count.to_string());
+    }
+
+    if table_names.is_empty() {
+        return Err(eyre!("No tables found in DuckDB database"));
+    }
+
+    let series_vec = vec![
+        Series::new("Table".into(), &table_names).into(),
+        Series::new("Rows".into(), &row_counts).into(),
+        Series::new("Columns".into(), &col_counts).into(),
+    ];
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
+    let mut df = wrap_polars_df(pdf)?;
+    if df.columns.len() == 3 {
+        df.columns[0].width = 40;
+        df.columns[1].width = 12;
+        df.columns[2].width = 12;
+    }
+    Ok(df)
+}
+
+/// Load a specific table from a DuckDB file by table name.
+pub fn load_duckdb_table_by_name(path: &Path, table_name: &str) -> Result<DataFrame> {
+    use duckdb::Connection;
+    let conn = Connection::open(path)?;
+
+    // Fetch column names from information_schema to avoid any type inspection.
+    let safe_table = table_name.replace('\'', "''");
+    let mut col_stmt = conn.prepare(&format!(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = 'main' AND table_name = '{}' \
+         ORDER BY ordinal_position",
+        safe_table
+    ))?;
+    let mut col_rows = col_stmt.query([])?;
+    let mut col_names: Vec<String> = Vec::new();
+    while let Some(row) = col_rows.next()? {
+        let name: String = row.get(0)?;
+        col_names.push(name);
+    }
+    if col_names.is_empty() {
+        return Err(eyre!("No columns found in table: {}", table_name));
+    }
+
+    // Cast every column to VARCHAR so duckdb-rs never sees an exotic type.
+    let safe_tbl = table_name.replace('"', "\"\"");
+    let casts: Vec<String> = col_names
+        .iter()
+        .map(|c| format!("CAST(\"{}\" AS VARCHAR)", c.replace('"', "\"\"")))
+        .collect();
+    let query = format!("SELECT {} FROM \"{}\"", casts.join(", "), safe_tbl);
+
+    let mut stmt = conn.prepare(&query)?;
+    let col_count = col_names.len();
+    let mut cols_data: Vec<Vec<String>> = vec![Vec::new(); col_count];
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        for (ci, col_vec) in cols_data.iter_mut().enumerate() {
+            let val: Option<String> = row.get(ci)?;
+            col_vec.push(val.unwrap_or_default());
+        }
+    }
+
+    let mut series_vec = Vec::new();
+    for (i, col_data) in cols_data.into_iter().enumerate() {
+        series_vec.push(Series::new(col_names[i].as_str().into(), &col_data).into());
+    }
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
+    wrap_polars_df(pdf)
+}
+
+/// Return table names from a SQLite file.
+pub fn sqlite_table_names(path: &Path) -> Result<Vec<String>> {
+    use rusqlite::Connection;
+    let conn = Connection::open(path)?;
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+    let mut names = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        names.push(name);
+    }
+    Ok(names)
+}
+
+/// Return table names from a DuckDB file.
+pub fn duckdb_table_names(path: &Path) -> Result<Vec<String>> {
+    use duckdb::Connection;
+    let conn = Connection::open(path)?;
+    let mut stmt = conn.prepare(
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema = 'main' AND table_type = 'BASE TABLE' \
+         ORDER BY table_name",
+    )?;
+    let mut names = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        names.push(name);
+    }
+    Ok(names)
+}
+
+/// Return sheet names from an Excel file.
+pub fn excel_sheet_names(path: &Path) -> Result<Vec<String>> {
+    use calamine::{open_workbook_auto, Reader};
+    let workbook = open_workbook_auto(path)?;
+    Ok(workbook.sheet_names().to_owned())
+}
+
+/// Load a specific named sheet from an Excel file.
+pub fn load_excel_sheet_by_name(path: &Path, sheet_name: &str) -> Result<DataFrame> {
+    use calamine::{open_workbook_auto, Reader};
+    let mut workbook = open_workbook_auto(path)?;
+    let range = workbook
+        .worksheet_range(sheet_name)
+        .ok_or_else(|| eyre!("Sheet '{}' not found", sheet_name))??;
+
+    let mut rows = range.rows();
+    let header_row = rows
+        .next()
+        .ok_or_else(|| eyre!("Sheet '{}' has no headers", sheet_name))?;
+
+    let headers: Vec<String> = header_row.iter().map(|c| c.to_string()).collect();
+    let col_count = headers.len();
+    let mut cols_data: Vec<Vec<String>> = vec![Vec::new(); col_count];
+
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < col_count {
+                cols_data[i].push(cell.to_string());
+            }
+        }
+    }
+
+    let mut series_vec = Vec::new();
+    for (i, col_data) in cols_data.into_iter().enumerate() {
+        series_vec.push(Series::new(headers[i].as_str().into(), &col_data).into());
+    }
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
+    wrap_polars_df(pdf)
+}
+
+/// Load an xlsx file as a one-column overview listing all sheet names.
+pub fn load_excel_overview(path: &Path) -> Result<DataFrame> {
+    let names = excel_sheet_names(path)?;
+    if names.is_empty() {
+        return Err(eyre!("Excel file has no sheets"));
+    }
+    let pdf =
+        polars::prelude::DataFrame::new_infer_height(vec![
+            Series::new("Sheet".into(), &names).into()
+        ])?;
+    let mut df = wrap_polars_df(pdf)?;
+    if !df.columns.is_empty() {
+        df.columns[0].width = 40;
+    }
+    Ok(df)
+}
+
 /// Format byte count as human-readable string (like `ls -lh`).
 fn format_file_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -533,6 +743,99 @@ pub fn format_file_size_pub(bytes: u64) -> String {
     format_file_size(bytes)
 }
 
+/// Build a directory-style DataFrame from an explicit list of paths (for multi-file CLI).
+/// Returns (DataFrame, Vec of absolute paths in row order).
+pub fn load_files_list(
+    paths: &[std::path::PathBuf],
+) -> Result<(DataFrame, Vec<std::path::PathBuf>)> {
+    use chrono::{DateTime, Local};
+
+    let supported_exts: HashSet<&str> = [
+        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3", "duckdb",
+        "ddb",
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    let mut names = Vec::new();
+    let mut is_dirs = Vec::new();
+    let mut sizes: Vec<String> = Vec::new();
+    let mut modifieds = Vec::new();
+    let mut is_supported = Vec::new();
+    let mut abs_paths = Vec::new();
+
+    for p in paths {
+        let abs = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let meta =
+            std::fs::metadata(&abs).map_err(|e| eyre!("Cannot read '{}': {}", abs.display(), e))?;
+
+        let is_dir = meta.is_dir();
+        let name = abs
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| abs.to_string_lossy().to_string());
+
+        let size = if is_dir {
+            "-".to_string()
+        } else {
+            format_file_size(meta.len())
+        };
+
+        let mod_time = meta
+            .modified()
+            .ok()
+            .map(|t| {
+                let dt: DateTime<Local> = t.into();
+                dt.format("%Y-%m-%d %H:%M:%S").to_string()
+            })
+            .unwrap_or_default();
+
+        let ext = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let supported = if is_dir {
+            true
+        } else {
+            supported_exts.contains(ext.as_str())
+        };
+
+        names.push(name);
+        is_dirs.push(is_dir);
+        sizes.push(size);
+        modifieds.push(mod_time);
+        is_supported.push(supported);
+        abs_paths.push(abs);
+    }
+
+    let series_vec = vec![
+        Series::new("Name".into(), &names).into(),
+        Series::new("Is Directory".into(), &is_dirs).into(),
+        Series::new("Size".into(), &sizes).into(),
+        Series::new("Modified".into(), &modifieds).into(),
+        Series::new("Supported".into(), &is_supported).into(),
+    ];
+    let pdf = polars::prelude::DataFrame::new_infer_height(series_vec)?;
+    let mut df = wrap_polars_df(pdf)?;
+
+    if df.columns.len() == 5 {
+        df.columns[0].col_type = ColumnType::String;
+        df.columns[1].col_type = ColumnType::Boolean;
+        df.columns[2].col_type = ColumnType::String;
+        df.columns[3].col_type = ColumnType::Datetime;
+        df.columns[4].col_type = ColumnType::Boolean;
+        df.columns[0].width = 40;
+        df.columns[1].width = 15;
+        df.columns[2].width = 10;
+        df.columns[3].width = 20;
+        df.columns[4].width = 10;
+    }
+
+    Ok((df, abs_paths))
+}
+
 /// Load a directory listing into a DataFrame.
 pub fn load_directory(dir: &Path) -> Result<DataFrame> {
     use chrono::{DateTime, Local};
@@ -545,7 +848,8 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
     let mut is_supported = Vec::new();
 
     let supported_exts: HashSet<&str> = [
-        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3",
+        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3", "duckdb",
+        "ddb",
     ]
     .iter()
     .cloned()

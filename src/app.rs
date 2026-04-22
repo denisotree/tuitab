@@ -98,6 +98,53 @@ pub struct App {
 
     /// Delayed action for processing after rendering calculating overlay
     pub pending_action: Option<Action>,
+
+    // ── JOIN wizard state ──────────────────────────────────────────────────────
+    pub join_source_index: usize,
+    pub join_other_df: Option<DataFrame>,
+    pub join_other_title: String,
+    pub join_type_index: usize,
+    pub join_left_keys: Vec<String>,
+    pub join_right_keys: Vec<String>,
+    pub join_left_key_index: usize,
+    pub join_right_key_index: usize,
+    pub join_path_input: TextInput,
+    pub join_path_error: Option<String>,
+    pub join_context_items: Vec<crate::types::JoinContextItem>,
+    pub join_overview_cursor: usize,
+    pub join_overview_selected: Vec<usize>,
+    pub join_pending_queue: Vec<crate::types::JoinContextItem>,
+    pub open_in_editor_pending: bool,
+}
+
+fn load_join_context_item_df(
+    item: &crate::types::JoinContextItem,
+) -> color_eyre::Result<(crate::data::dataframe::DataFrame, String)> {
+    use crate::types::JoinContextItem;
+    match item {
+        JoinContextItem::SqliteTable {
+            db_path,
+            table_name,
+        } => crate::data::io::load_sqlite_table_by_name(db_path, table_name)
+            .map(|df| (df, table_name.clone())),
+        JoinContextItem::DuckdbTable {
+            db_path,
+            table_name,
+        } => crate::data::io::load_duckdb_table_by_name(db_path, table_name)
+            .map(|df| (df, table_name.clone())),
+        JoinContextItem::DirectoryFile { file_path } => {
+            let label = file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            crate::data::io::load_file(file_path, None).map(|df| (df, label))
+        }
+        JoinContextItem::XlsxSheet {
+            xlsx_path,
+            sheet_name,
+        } => crate::data::io::load_excel_sheet_by_name(xlsx_path, sheet_name)
+            .map(|df| (df, sheet_name.clone())),
+    }
 }
 
 impl App {
@@ -125,6 +172,7 @@ impl App {
             let row_count = dataframe.visible_row_count();
             let mut root_sheet = Sheet::new(filename.clone(), dataframe);
             root_sheet.is_dir_sheet = true;
+            root_sheet.source_path = Some(path.to_path_buf());
             Ok(Self {
                 stack: SheetStack::new(root_sheet),
                 mode: AppMode::Normal,
@@ -152,11 +200,28 @@ impl App {
                 chart_agg: crate::types::ChartAgg::Count,
                 chart_agg_index: 0,
                 pending_action: None,
+                join_source_index: 0,
+                join_other_df: None,
+                join_other_title: String::new(),
+                join_type_index: 0,
+                join_left_keys: Vec::new(),
+                join_right_keys: Vec::new(),
+                join_left_key_index: 0,
+                join_right_key_index: 0,
+                join_path_input: TextInput::new(),
+                join_path_error: None,
+                join_context_items: Vec::new(),
+                join_overview_cursor: 0,
+                join_overview_selected: Vec::new(),
+                join_pending_queue: Vec::new(),
+                open_in_editor_pending: false,
             })
         } else if file_size > ASYNC_THRESHOLD {
             let rx = async_loader::load_in_background(path.to_path_buf(), delim_byte);
             let placeholder = DataFrame::empty();
-            let root_sheet = Sheet::new(filename.clone(), placeholder);
+            let mut root_sheet = Sheet::new(filename.clone(), placeholder);
+            root_sheet.source_path = Some(path.to_path_buf());
+            root_sheet.source_delimiter = delim_byte;
             Ok(Self {
                 stack: SheetStack::new(root_sheet),
                 mode: AppMode::Loading,
@@ -184,6 +249,21 @@ impl App {
                 chart_agg: crate::types::ChartAgg::Count,
                 chart_agg_index: 0,
                 pending_action: None,
+                join_source_index: 0,
+                join_other_df: None,
+                join_other_title: String::new(),
+                join_type_index: 0,
+                join_left_keys: Vec::new(),
+                join_right_keys: Vec::new(),
+                join_left_key_index: 0,
+                join_right_key_index: 0,
+                join_path_input: TextInput::new(),
+                join_path_error: None,
+                join_context_items: Vec::new(),
+                join_overview_cursor: 0,
+                join_overview_selected: Vec::new(),
+                join_pending_queue: Vec::new(),
+                open_in_editor_pending: false,
             })
         } else {
             // Load normal file using io::load_file which delegates properly based on extension
@@ -195,9 +275,20 @@ impl App {
                 .unwrap_or("")
                 .to_lowercase();
             let mut root_sheet = Sheet::new(filename.clone(), dataframe);
-            if matches!(ext.as_str(), "db" | "sqlite" | "sqlite3") {
+            if matches!(ext.as_str(), "sqlite" | "sqlite3") {
                 root_sheet.sqlite_db_path = Some(path.to_path_buf());
+            } else if matches!(ext.as_str(), "duckdb" | "ddb") {
+                root_sheet.duckdb_db_path = Some(path.to_path_buf());
+            } else if ext == "db" {
+                // .db: detect by trying to open as SQLite
+                if crate::data::io::load_sqlite_overview(path).is_ok() {
+                    root_sheet.sqlite_db_path = Some(path.to_path_buf());
+                } else {
+                    root_sheet.duckdb_db_path = Some(path.to_path_buf());
+                }
             }
+            root_sheet.source_path = Some(path.to_path_buf());
+            root_sheet.source_delimiter = delim_byte;
             Ok(Self {
                 stack: SheetStack::new(root_sheet),
                 mode: AppMode::Normal,
@@ -225,6 +316,21 @@ impl App {
                 chart_agg: crate::types::ChartAgg::Count,
                 chart_agg_index: 0,
                 pending_action: None,
+                join_source_index: 0,
+                join_other_df: None,
+                join_other_title: String::new(),
+                join_type_index: 0,
+                join_left_keys: Vec::new(),
+                join_right_keys: Vec::new(),
+                join_left_key_index: 0,
+                join_right_key_index: 0,
+                join_path_input: TextInput::new(),
+                join_path_error: None,
+                join_context_items: Vec::new(),
+                join_overview_cursor: 0,
+                join_overview_selected: Vec::new(),
+                join_pending_queue: Vec::new(),
+                open_in_editor_pending: false,
             })
         }
     }
@@ -266,6 +372,75 @@ impl App {
             chart_agg: crate::types::ChartAgg::Count,
             chart_agg_index: 0,
             pending_action: None,
+            join_source_index: 0,
+            join_other_df: None,
+            join_other_title: String::new(),
+            join_type_index: 0,
+            join_left_keys: Vec::new(),
+            join_right_keys: Vec::new(),
+            join_left_key_index: 0,
+            join_right_key_index: 0,
+            join_path_input: TextInput::new(),
+            join_path_error: None,
+            join_context_items: Vec::new(),
+            join_overview_cursor: 0,
+            join_overview_selected: Vec::new(),
+            join_pending_queue: Vec::new(),
+            open_in_editor_pending: false,
+        })
+    }
+
+    /// Construct `App` from an explicit list of files (multi-file CLI argument).
+    pub fn from_file_list(paths: Vec<PathBuf>, delimiter: Option<char>) -> Result<Self> {
+        let _ = delimiter; // delimiter not applicable to the file-list sheet itself
+        let n = paths.len();
+        let (dataframe, abs_paths) = crate::data::io::load_files_list(&paths)?;
+        let title = format!("Selected files ({})", n);
+        let mut root_sheet = Sheet::new(title.clone(), dataframe);
+        root_sheet.is_dir_sheet = true;
+        root_sheet.explicit_row_paths = Some(abs_paths);
+        Ok(Self {
+            stack: SheetStack::new(root_sheet),
+            mode: AppMode::Normal,
+            status_message: format!("{} files", n),
+            should_quit: false,
+            load_receiver: None,
+            saving_input: TextInput::with_value(title),
+            saving_error: None,
+            agg_select_index: 0,
+            agg_selected: HashSet::new(),
+            type_select_index: 0,
+            currency_select_index: 0,
+            partition_select_index: 0,
+            partition_selected: HashSet::new(),
+            background_task: None,
+            spinner_tick: 0,
+            expr_history: Vec::new(),
+            history_idx: None,
+            autocomplete_candidates: Vec::new(),
+            autocomplete_idx: 0,
+            autocomplete_prefix: String::new(),
+            pivot_history: Vec::new(),
+            pivot_history_idx: None,
+            chart_ref_col: None,
+            chart_agg: crate::types::ChartAgg::Count,
+            chart_agg_index: 0,
+            pending_action: None,
+            join_source_index: 0,
+            join_other_df: None,
+            join_other_title: String::new(),
+            join_type_index: 0,
+            join_left_keys: Vec::new(),
+            join_right_keys: Vec::new(),
+            join_left_key_index: 0,
+            join_right_key_index: 0,
+            join_path_input: TextInput::new(),
+            join_path_error: None,
+            join_context_items: Vec::new(),
+            join_overview_cursor: 0,
+            join_overview_selected: Vec::new(),
+            join_pending_queue: Vec::new(),
+            open_in_editor_pending: false,
         })
     }
 
@@ -304,6 +479,13 @@ impl App {
                 }
             }
 
+            if self.open_in_editor_pending {
+                self.open_in_editor_pending = false;
+                if let Err(e) = self.do_open_in_editor(terminal) {
+                    self.status_message = format!("Editor error: {}", e);
+                }
+            }
+
             if self.should_quit {
                 break;
             }
@@ -338,6 +520,81 @@ impl App {
                     self.status_message = "Load thread disconnected".to_string();
                     self.load_receiver = None;
                 }
+            }
+        }
+    }
+
+    fn reload_file(&mut self) {
+        let (source_path, source_delimiter) = {
+            let s = self.stack.active();
+            (s.source_path.clone(), s.source_delimiter)
+        };
+
+        let Some(path) = source_path else {
+            self.status_message = "Cannot reload: no source path".to_string();
+            return;
+        };
+
+        let meta = std::fs::metadata(&path);
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        let file_size = meta.map(|m| m.len()).unwrap_or(0);
+
+        let saved_row = {
+            let s = self.stack.active_mut();
+            s.undo_stack.clear();
+            s.sort_col = None;
+            s.sort_desc = false;
+            s.search_pattern = None;
+            s.search_col = None;
+            s.dataframe.selected_rows.clear();
+            s.table_state.selected().unwrap_or(0)
+        };
+
+        if is_dir {
+            match crate::data::io::load_directory(&path) {
+                Ok(df) => {
+                    let row_count = df.visible_row_count();
+                    let s = self.stack.active_mut();
+                    s.dataframe = df;
+                    s.dataframe.calc_widths(40, 1000);
+                    let vis = s.dataframe.visible_row_count();
+                    s.scroll_state = ScrollbarState::new(vis.saturating_sub(1));
+                    let clamped = saved_row.min(vis.saturating_sub(1));
+                    s.table_state.select(Some(clamped));
+                    s.top_row = clamped;
+                    s.source_path = Some(path);
+                    self.status_message = format!("Reloaded — {} items", row_count);
+                }
+                Err(e) => self.status_message = format!("Reload failed: {}", e),
+            }
+        } else if file_size > 10 * 1024 * 1024 {
+            {
+                let s = self.stack.active_mut();
+                s.dataframe = DataFrame::empty();
+                s.source_path = Some(path.clone());
+                s.source_delimiter = source_delimiter;
+            }
+            self.load_receiver = Some(async_loader::load_in_background(path, source_delimiter));
+            self.mode = AppMode::Loading;
+            self.status_message = "Reloading...".to_string();
+        } else {
+            match crate::data::io::load_file(&path, source_delimiter) {
+                Ok(df) => {
+                    let row_count = df.visible_row_count();
+                    let s = self.stack.active_mut();
+                    s.dataframe = df;
+                    s.dataframe.calc_widths(40, 1000);
+                    let vis = s.dataframe.visible_row_count();
+                    s.scroll_state = ScrollbarState::new(vis.saturating_sub(1));
+                    let clamped = saved_row.min(vis.saturating_sub(1));
+                    s.table_state.select(Some(clamped));
+                    s.top_row = clamped;
+                    s.source_path = Some(path);
+                    s.source_delimiter = source_delimiter;
+                    self.mode = AppMode::Normal;
+                    self.status_message = format!("Reloaded — {} rows", row_count);
+                }
+                Err(e) => self.status_message = format!("Reload failed: {}", e),
             }
         }
     }
@@ -416,6 +673,8 @@ impl App {
                 let is_pivot = matches!(s.sheet_type, SheetType::PivotTable { .. });
                 let is_dir = s.is_dir_sheet;
                 let is_sqlite = s.sqlite_db_path.is_some();
+                let is_duckdb = s.duckdb_db_path.is_some();
+                let is_xlsx = s.xlsx_db_path.is_some();
 
                 if is_freq && self.stack.depth() >= 2 {
                     self.drill_down_freq_value();
@@ -425,6 +684,10 @@ impl App {
                     self.open_directory_row();
                 } else if is_sqlite {
                     self.open_sqlite_table_row();
+                } else if is_duckdb {
+                    self.open_duckdb_table_row();
+                } else if is_xlsx {
+                    self.open_excel_sheet_row();
                 } else {
                     // FEATURE F5: Transpose row on Enter if not special sheet
                     self.transpose_row();
@@ -437,6 +700,7 @@ impl App {
                 s.sort_col = None;
                 s.table_state.select(Some(0));
             }
+            Action::ReloadFile => self.reload_file(),
             Action::TransposeRow => self.transpose_row(),
             Action::TransposeTable => self.transpose_table(),
             Action::DescribeSheet => self.describe_sheet(),
@@ -806,6 +1070,9 @@ impl App {
             }
 
             // ── Cell editing ──────────────────────────────────────────────────
+            Action::OpenExternalEditor => {
+                self.open_in_editor_pending = true;
+            }
             Action::StartEdit => self.start_edit(),
             Action::EditInput(c) => {
                 self.stack.active_mut().edit_input.insert_char(c);
@@ -1016,8 +1283,27 @@ impl App {
             // ── Save/Export ───────────────────────────────────────────────────
             Action::SaveFile => {
                 self.saving_error = None;
-                let title = self.stack.active().title.clone();
-                self.saving_input = crate::ui::text_input::TextInput::with_value(title);
+                let default_path = self
+                    .stack
+                    .active()
+                    .source_path
+                    .as_deref()
+                    .and_then(|p| {
+                        std::env::current_dir()
+                            .ok()
+                            .and_then(|cwd| {
+                                p.strip_prefix(&cwd)
+                                    .ok()
+                                    .map(|r| r.to_string_lossy().into_owned())
+                            })
+                            .or_else(|| Some(p.to_string_lossy().into_owned()))
+                    })
+                    .unwrap_or_else(|| self.stack.active().title.clone());
+
+                self.autocomplete_candidates.clear();
+                self.autocomplete_prefix.clear();
+                self.autocomplete_idx = 0;
+                self.saving_input = crate::ui::text_input::TextInput::with_value(default_path);
                 self.mode = AppMode::Saving;
             }
             Action::SavingInput(c) => {
@@ -1042,7 +1328,7 @@ impl App {
                 self.saving_input.move_cursor_end();
             }
             Action::ApplySave => {
-                let path = PathBuf::from(self.saving_input.as_str());
+                let path = expand_tilde(self.saving_input.as_str());
                 match crate::data::io::save_file(&self.stack.active().dataframe, &path) {
                     Ok(_) => {
                         self.mode = AppMode::Normal;
@@ -1059,6 +1345,7 @@ impl App {
                 self.mode = AppMode::Normal;
                 self.saving_error = None;
             }
+            Action::SavingAutocomplete => self.saving_autocomplete(),
 
             // ── Z Prefix (Column Operations) ──────────────────────────────────
             Action::EnterZPrefix => {
@@ -1225,6 +1512,343 @@ impl App {
             Action::CancelPartitionSelect => {
                 self.mode = AppMode::Normal;
                 self.status_message.clear();
+            }
+
+            // ── JOIN wizard ───────────────────────────────────────────────────
+            Action::OpenJoin => {
+                self.join_other_df = None;
+                self.join_other_title.clear();
+                self.join_left_keys.clear();
+                self.join_right_keys.clear();
+                self.join_left_key_index = 0;
+                self.join_right_key_index = 0;
+                self.join_path_input.clear();
+                self.join_path_error = None;
+                self.join_pending_queue.clear();
+
+                let s = self.stack.active();
+                let is_overview = s.is_dir_sheet
+                    || s.sqlite_db_path.is_some()
+                    || s.duckdb_db_path.is_some()
+                    || s.xlsx_db_path.is_some();
+
+                if is_overview {
+                    self.join_context_items = self.collect_join_context_items();
+                    if self.join_context_items.is_empty() {
+                        self.status_message = "No items available for JOIN".to_string();
+                        return;
+                    }
+                    self.join_overview_cursor = 0;
+                    self.join_overview_selected.clear();
+                    self.mode = AppMode::JoinOverviewSelect;
+                    self.status_message =
+                        "JOIN: select items (Space=toggle, Enter=confirm, min 2)".to_string();
+                } else {
+                    self.join_source_index = 0;
+                    self.join_context_items = self.collect_join_context_items();
+                    self.mode = AppMode::JoinSelectSource;
+                    self.status_message =
+                        "JOIN: select source (↑↓ navigate, Enter select)".to_string();
+                }
+            }
+
+            // ── JOIN overview multi-select ─────────────────────────────────────
+            Action::JoinOverviewUp => {
+                if self.join_overview_cursor > 0 {
+                    self.join_overview_cursor -= 1;
+                }
+            }
+            Action::JoinOverviewDown => {
+                if self.join_overview_cursor + 1 < self.join_context_items.len() {
+                    self.join_overview_cursor += 1;
+                }
+            }
+            Action::JoinOverviewToggle => {
+                let idx = self.join_overview_cursor;
+                if let Some(pos) = self.join_overview_selected.iter().position(|&i| i == idx) {
+                    self.join_overview_selected.remove(pos);
+                } else {
+                    self.join_overview_selected.push(idx);
+                }
+            }
+            Action::JoinOverviewApply => {
+                if self.join_overview_selected.len() < 2 {
+                    self.status_message =
+                        "SELECT at least 2 items for JOIN (Space to toggle)".to_string();
+                    return;
+                }
+                let mut sorted_sel = self.join_overview_selected.clone();
+                sorted_sel.sort_unstable();
+                let items: Vec<crate::types::JoinContextItem> = sorted_sel
+                    .iter()
+                    .map(|&i| self.join_context_items[i].clone())
+                    .collect();
+
+                // Load both LEFT and RIGHT before mutating stack
+                let left_result = load_join_context_item_df(&items[0]);
+                let right_result = load_join_context_item_df(&items[1]);
+
+                match (left_result, right_result) {
+                    (Ok((left_df, left_title)), Ok((right_df, right_title))) => {
+                        let left_sheet = crate::sheet::Sheet::new(left_title, left_df);
+                        self.stack.push(left_sheet);
+                        self.join_other_df = Some(right_df);
+                        self.join_other_title = right_title;
+                        self.join_pending_queue = items[2..].to_vec();
+                        self.join_type_index = 0;
+                        self.join_left_keys.clear();
+                        self.join_right_keys.clear();
+                        self.join_left_key_index = 0;
+                        self.join_right_key_index = 0;
+                        self.mode = AppMode::JoinSelectType;
+                        self.status_message = "JOIN: select join type".to_string();
+                    }
+                    (Err(e), _) => {
+                        self.status_message = format!("Failed to load LEFT table: {}", e);
+                    }
+                    (_, Err(e)) => {
+                        self.status_message = format!("Failed to load RIGHT table: {}", e);
+                    }
+                }
+            }
+            Action::JoinOverviewCancel => {
+                self.mode = AppMode::Normal;
+                self.status_message.clear();
+            }
+
+            Action::JoinSourceUp => {
+                if self.join_source_index > 0 {
+                    self.join_source_index -= 1;
+                }
+            }
+            Action::JoinSourceDown => {
+                let max =
+                    self.join_context_items.len() + self.stack.sheet_titles_except_active().len();
+                if self.join_source_index < max {
+                    self.join_source_index += 1;
+                }
+            }
+            Action::JoinSourceApply => {
+                let ctx_count = self.join_context_items.len();
+                if self.join_source_index == 0 {
+                    // Browse file
+                    self.join_path_input.clear();
+                    self.join_path_error = None;
+                    self.mode = AppMode::JoinInputPath;
+                    self.status_message = "Type path to file to join with".to_string();
+                } else if self.join_source_index <= ctx_count {
+                    // Context item (sibling table / file / sheet)
+                    let item = self.join_context_items[self.join_source_index - 1].clone();
+                    match load_join_context_item_df(&item) {
+                        Ok((df, title)) => {
+                            self.join_other_df = Some(df);
+                            self.join_other_title = title;
+                            self.join_type_index = 0;
+                            self.mode = AppMode::JoinSelectType;
+                            self.status_message = "JOIN: select join type".to_string();
+                        }
+                        Err(e) => {
+                            self.status_message = format!("Failed to load: {}", e);
+                        }
+                    }
+                } else {
+                    // Stack sheet (adjusted offset past context items)
+                    let stack_idx = self.join_source_index - 1 - ctx_count;
+                    if let Some(df) = self.stack.clone_sheet_dataframe(stack_idx) {
+                        let title = self
+                            .stack
+                            .sheet_titles_except_active()
+                            .into_iter()
+                            .nth(stack_idx)
+                            .unwrap_or_default();
+                        self.join_other_df = Some(df);
+                        self.join_other_title = title;
+                        self.join_type_index = 0;
+                        self.mode = AppMode::JoinSelectType;
+                        self.status_message = "JOIN: select join type".to_string();
+                    } else {
+                        self.status_message = "Failed to access sheet".to_string();
+                    }
+                }
+            }
+            Action::JoinSourceCancel => {
+                self.mode = AppMode::Normal;
+                self.status_message.clear();
+            }
+
+            // JOIN path input
+            Action::JoinPathInput(c) => {
+                self.join_path_input.insert_char(c);
+            }
+            Action::JoinPathBackspace => {
+                self.join_path_input.delete_backward();
+            }
+            Action::JoinPathForwardDelete => {
+                self.join_path_input.delete_forward();
+            }
+            Action::JoinPathCursorLeft => {
+                self.join_path_input.move_cursor_left();
+            }
+            Action::JoinPathCursorRight => {
+                self.join_path_input.move_cursor_right();
+            }
+            Action::JoinPathCursorStart => {
+                self.join_path_input.move_cursor_start();
+            }
+            Action::JoinPathCursorEnd => {
+                self.join_path_input.move_cursor_end();
+            }
+            Action::JoinPathAutocomplete => self.join_path_autocomplete(),
+            Action::JoinPathApply => {
+                let raw = self.join_path_input.as_str().to_string();
+                let path = expand_tilde(&raw);
+                match crate::data::io::load_file(&path, None) {
+                    Ok(df) => {
+                        self.join_other_title = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| raw.clone());
+                        self.join_other_df = Some(df);
+                        self.join_type_index = 0;
+                        self.mode = AppMode::JoinSelectType;
+                        self.status_message = "JOIN: select join type".to_string();
+                    }
+                    Err(e) => {
+                        self.join_path_error = Some(format!("{}", e));
+                        self.status_message = format!("Error: {}", e);
+                    }
+                }
+            }
+            Action::JoinPathCancel => {
+                self.mode = AppMode::JoinSelectSource;
+                self.join_path_error = None;
+                self.status_message = "JOIN: select source".to_string();
+            }
+
+            // JOIN type selection
+            Action::JoinTypeUp => {
+                if self.join_type_index > 0 {
+                    self.join_type_index -= 1;
+                }
+            }
+            Action::JoinTypeDown => {
+                if self.join_type_index + 1 < crate::data::join::JoinType::all().len() {
+                    self.join_type_index += 1;
+                }
+            }
+            Action::JoinTypeApply => {
+                self.join_left_keys.clear();
+                self.join_left_key_index = 0;
+                self.mode = AppMode::JoinSelectLeftKeys;
+                self.status_message =
+                    "JOIN: select LEFT key columns (Space=toggle, Enter=next)".to_string();
+            }
+            Action::JoinTypeCancel => {
+                self.mode = AppMode::JoinSelectSource;
+                self.status_message = "JOIN: select source".to_string();
+            }
+
+            // JOIN left key selection
+            Action::JoinLeftKeyUp => {
+                if self.join_left_key_index > 0 {
+                    self.join_left_key_index -= 1;
+                }
+            }
+            Action::JoinLeftKeyDown => {
+                let n = self.stack.active().dataframe.columns.len();
+                if self.join_left_key_index + 1 < n {
+                    self.join_left_key_index += 1;
+                }
+            }
+            Action::JoinLeftKeyToggle => {
+                let col_name = self
+                    .stack
+                    .active()
+                    .dataframe
+                    .columns
+                    .get(self.join_left_key_index)
+                    .map(|c| c.name.clone());
+                if let Some(name) = col_name {
+                    if let Some(pos) = self.join_left_keys.iter().position(|k| k == &name) {
+                        self.join_left_keys.remove(pos);
+                    } else {
+                        self.join_left_keys.push(name);
+                    }
+                }
+            }
+            Action::JoinLeftKeyApply => {
+                if self.join_left_keys.is_empty() {
+                    self.status_message = "Select at least one key column".to_string();
+                } else {
+                    // Auto-pre-select right keys matching left key names
+                    let right_cols: Vec<String> = self
+                        .join_other_df
+                        .as_ref()
+                        .map(|df| df.columns.iter().map(|c| c.name.clone()).collect())
+                        .unwrap_or_default();
+                    self.join_right_keys = self
+                        .join_left_keys
+                        .iter()
+                        .filter(|lk| right_cols.contains(lk))
+                        .cloned()
+                        .collect();
+                    self.join_right_key_index = 0;
+                    self.mode = AppMode::JoinSelectRightKeys;
+                    self.status_message =
+                        "JOIN: select RIGHT key columns (Space=toggle, Enter=execute)".to_string();
+                }
+            }
+            Action::JoinLeftKeyCancel => {
+                self.mode = AppMode::JoinSelectType;
+                self.status_message = "JOIN: select join type".to_string();
+            }
+
+            // JOIN right key selection
+            Action::JoinRightKeyUp => {
+                if self.join_right_key_index > 0 {
+                    self.join_right_key_index -= 1;
+                }
+            }
+            Action::JoinRightKeyDown => {
+                let n = self
+                    .join_other_df
+                    .as_ref()
+                    .map(|df| df.columns.len())
+                    .unwrap_or(0);
+                if self.join_right_key_index + 1 < n {
+                    self.join_right_key_index += 1;
+                }
+            }
+            Action::JoinRightKeyToggle => {
+                let col_name = self
+                    .join_other_df
+                    .as_ref()
+                    .and_then(|df| df.columns.get(self.join_right_key_index))
+                    .map(|c| c.name.clone());
+                if let Some(name) = col_name {
+                    if let Some(pos) = self.join_right_keys.iter().position(|k| k == &name) {
+                        self.join_right_keys.remove(pos);
+                    } else {
+                        self.join_right_keys.push(name);
+                    }
+                }
+            }
+            Action::JoinRightKeyApply => {
+                if self.join_right_keys.len() != self.join_left_keys.len() {
+                    self.status_message = format!(
+                        "Key count mismatch: {} left vs {} right — must match",
+                        self.join_left_keys.len(),
+                        self.join_right_keys.len()
+                    );
+                } else if self.join_right_keys.is_empty() {
+                    self.status_message = "Select at least one right key column".to_string();
+                } else {
+                    self.execute_join();
+                }
+            }
+            Action::JoinRightKeyCancel => {
+                self.mode = AppMode::JoinSelectLeftKeys;
+                self.status_message = "JOIN: select LEFT key columns".to_string();
             }
 
             Action::None => {}
@@ -2280,14 +2904,30 @@ impl App {
             let supported =
                 crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&supported_val) == "true";
 
-            let current_dir_str = s.title.clone();
-            let base_path =
-                std::path::PathBuf::from(if current_dir_str == "." || current_dir_str.is_empty() {
-                    "."
-                } else {
-                    &current_dir_str
-                });
-            let target_path = base_path.join(&name);
+            // For synthetic file-list sheets, use the stored absolute path directly.
+            let target_path = if let Some(ref paths) = s.explicit_row_paths {
+                paths.get(row_idx).cloned().unwrap_or_else(|| {
+                    let current_dir_str = s.title.clone();
+                    let base_path = std::path::PathBuf::from(
+                        if current_dir_str == "." || current_dir_str.is_empty() {
+                            "."
+                        } else {
+                            &current_dir_str
+                        },
+                    );
+                    base_path.join(&name)
+                })
+            } else {
+                let current_dir_str = s.title.clone();
+                let base_path = std::path::PathBuf::from(
+                    if current_dir_str == "." || current_dir_str.is_empty() {
+                        "."
+                    } else {
+                        &current_dir_str
+                    },
+                );
+                base_path.join(&name)
+            };
 
             if is_dir {
                 match crate::data::io::load_directory(&target_path) {
@@ -2304,19 +2944,61 @@ impl App {
                     }
                 }
             } else if supported {
-                match crate::data::io::load_file(&target_path, None) {
-                    Ok(new_df) => {
+                let target_ext = target_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                // Returns (df, sqlite_db_path, duckdb_db_path, xlsx_db_path)
+                #[allow(clippy::type_complexity)]
+                let load_result: Result<
+                    (
+                        crate::data::dataframe::DataFrame,
+                        Option<std::path::PathBuf>,
+                        Option<std::path::PathBuf>,
+                        Option<std::path::PathBuf>,
+                    ),
+                    _,
+                > = if target_ext == "db" {
+                    match crate::data::io::load_sqlite_overview(&target_path) {
+                        Ok(df) => Ok((df, Some(target_path.clone()), None, None)),
+                        Err(_) => crate::data::io::load_duckdb_overview(&target_path)
+                            .map(|df| (df, None, Some(target_path.clone()), None)),
+                    }
+                } else if matches!(target_ext.as_str(), "sqlite" | "sqlite3") {
+                    crate::data::io::load_sqlite_overview(&target_path)
+                        .map(|df| (df, Some(target_path.clone()), None, None))
+                } else if matches!(target_ext.as_str(), "duckdb" | "ddb") {
+                    crate::data::io::load_duckdb_overview(&target_path)
+                        .map(|df| (df, None, Some(target_path.clone()), None))
+                } else if matches!(target_ext.as_str(), "xlsx" | "xls" | "xlsm" | "xlsb") {
+                    match crate::data::io::excel_sheet_names(&target_path) {
+                        Ok(names) if names.len() > 1 => {
+                            crate::data::io::load_excel_overview(&target_path)
+                                .map(|df| (df, None, None, Some(target_path.clone())))
+                        }
+                        _ => crate::data::io::load_file(&target_path, None)
+                            .map(|df| (df, None, None, None)),
+                    }
+                } else {
+                    crate::data::io::load_file(&target_path, None).map(|df| (df, None, None, None))
+                };
+                match load_result {
+                    Ok((new_df, sqlite_path, duckdb_path, xlsx_path)) => {
                         let mut new_sheet = crate::sheet::Sheet::new(
                             target_path.to_string_lossy().into_owned(),
                             new_df,
                         );
-                        let target_ext = target_path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        if matches!(target_ext.as_str(), "db" | "sqlite" | "sqlite3") {
-                            new_sheet.sqlite_db_path = Some(target_path.clone());
+                        new_sheet.sqlite_db_path = sqlite_path;
+                        new_sheet.duckdb_db_path = duckdb_path;
+                        new_sheet.xlsx_db_path = xlsx_path;
+                        // Track the parent directory for regular data files so J can offer siblings.
+                        if new_sheet.sqlite_db_path.is_none()
+                            && new_sheet.duckdb_db_path.is_none()
+                            && new_sheet.xlsx_db_path.is_none()
+                        {
+                            new_sheet.dir_source_path =
+                                target_path.parent().map(|p| p.to_path_buf());
                         }
                         self.stack.push(new_sheet);
                     }
@@ -2357,15 +3039,307 @@ impl App {
         match crate::data::io::load_sqlite_table_by_name(&db_path, &table_name) {
             Ok(new_df) => {
                 let row_count = new_df.visible_row_count();
-                let new_sheet = crate::sheet::Sheet::new(
+                let mut new_sheet = crate::sheet::Sheet::new(
                     format!("{} :: {}", db_path.display(), table_name),
                     new_df,
                 );
+                new_sheet.sqlite_source_path = Some(db_path.clone());
                 self.stack.push(new_sheet);
                 self.status_message = format!("Opened table '{}' ({} rows)", table_name, row_count);
             }
             Err(e) => {
                 self.status_message = format!("Failed to open table '{}': {}", table_name, e);
+            }
+        }
+    }
+
+    fn collect_join_context_items(&self) -> Vec<crate::types::JoinContextItem> {
+        use crate::types::JoinContextItem;
+        let s = self.stack.active();
+        let mut items: Vec<JoinContextItem> = Vec::new();
+
+        // SQLite: current sheet is a table (sqlite_source_path) or the overview (sqlite_db_path)
+        let sqlite_path = s.sqlite_source_path.as_ref().or(s.sqlite_db_path.as_ref());
+        if let Some(path) = sqlite_path {
+            let current_table = if s.sqlite_source_path.is_some() {
+                s.title
+                    .rsplit(" :: ")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            if let Ok(names) = crate::data::io::sqlite_table_names(path) {
+                for name in names {
+                    if name != current_table {
+                        items.push(JoinContextItem::SqliteTable {
+                            db_path: path.clone(),
+                            table_name: name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // DuckDB: same pattern
+        let duckdb_path = s.duckdb_source_path.as_ref().or(s.duckdb_db_path.as_ref());
+        if let Some(path) = duckdb_path {
+            let current_table = if s.duckdb_source_path.is_some() {
+                s.title
+                    .rsplit(" :: ")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            if let Ok(names) = crate::data::io::duckdb_table_names(path) {
+                for name in names {
+                    if name != current_table {
+                        items.push(JoinContextItem::DuckdbTable {
+                            db_path: path.clone(),
+                            table_name: name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // xlsx: current sheet is a sheet (xlsx_source_path) or the overview (xlsx_db_path)
+        let xlsx_path = s.xlsx_source_path.as_ref().or(s.xlsx_db_path.as_ref());
+        if let Some(path) = xlsx_path {
+            let current_sheet = if s.xlsx_source_path.is_some() {
+                s.title
+                    .rsplit(" :: ")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            if let Ok(names) = crate::data::io::excel_sheet_names(path) {
+                for name in names {
+                    if name != current_sheet {
+                        items.push(JoinContextItem::XlsxSheet {
+                            xlsx_path: path.clone(),
+                            sheet_name: name,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Directory: current sheet is a file opened from a dir (dir_source_path) or is a dir listing
+        let dir_path = s.dir_source_path.as_ref().or(if s.is_dir_sheet {
+            s.source_path.as_ref()
+        } else {
+            None
+        });
+        // For is_dir_sheet without source_path, use the title as directory path
+        let dir_path_owned: Option<std::path::PathBuf> = dir_path.cloned().or_else(|| {
+            if s.is_dir_sheet && !s.title.is_empty() {
+                Some(std::path::PathBuf::from(&s.title))
+            } else {
+                None
+            }
+        });
+        if let Some(dir) = dir_path_owned {
+            let current_file = if s.dir_source_path.is_some() {
+                s.source_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if let Ok(read_dir) = std::fs::read_dir(&dir) {
+                let supported_exts = [
+                    "csv", "tsv", "json", "parquet", "xlsx", "xls", "xlsm", "xlsb", "sqlite",
+                    "sqlite3", "db", "duckdb", "ddb", "txt",
+                ];
+                let mut paths: Vec<std::path::PathBuf> = read_dir
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        let ext = p
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        supported_exts.contains(&ext.as_str())
+                    })
+                    .collect();
+                paths.sort();
+                for file_path in paths {
+                    let fname = file_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    if fname != current_file {
+                        items.push(JoinContextItem::DirectoryFile { file_path });
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    fn execute_join(&mut self) {
+        let join_type = crate::data::join::JoinType::all()[self.join_type_index];
+        let left_keys = self.join_left_keys.clone();
+        let right_keys = self.join_right_keys.clone();
+        let other_title = self.join_other_title.clone();
+
+        let left_df = self.stack.active().dataframe.clone();
+        let right_df = match self.join_other_df.take() {
+            Some(df) => df,
+            None => {
+                self.status_message = "JOIN: no right-hand table loaded".to_string();
+                self.mode = AppMode::Normal;
+                return;
+            }
+        };
+
+        match crate::data::join::join_dataframes(
+            &left_df,
+            &right_df,
+            &left_keys,
+            &right_keys,
+            join_type,
+        ) {
+            Ok(result_df) => {
+                let row_count = result_df.visible_row_count();
+                let left_title = self.stack.active().title.clone();
+                let result_title = format!("{} JOIN {}", left_title, other_title);
+                let new_sheet = crate::sheet::Sheet::new(result_title, result_df);
+                self.stack.push(new_sheet);
+
+                // Continue chained join if items are queued
+                if !self.join_pending_queue.is_empty() {
+                    let next = self.join_pending_queue.remove(0);
+                    match load_join_context_item_df(&next) {
+                        Ok((df, title)) => {
+                            self.join_other_df = Some(df);
+                            self.join_other_title = title;
+                            self.join_left_keys.clear();
+                            self.join_right_keys.clear();
+                            self.join_left_key_index = 0;
+                            self.join_right_key_index = 0;
+                            self.mode = AppMode::JoinSelectType;
+                            let remaining = self.join_pending_queue.len();
+                            self.status_message = if remaining > 0 {
+                                format!("JOIN: {} more table(s) to add — select type", remaining)
+                            } else {
+                                "JOIN: select join type".to_string()
+                            };
+                        }
+                        Err(e) => {
+                            self.join_pending_queue.clear();
+                            self.mode = AppMode::Normal;
+                            self.status_message = format!(
+                                "JOIN result: {} rows (next load failed: {})",
+                                row_count, e
+                            );
+                        }
+                    }
+                } else {
+                    self.mode = AppMode::Normal;
+                    self.status_message = format!("JOIN result: {} rows", row_count);
+                }
+            }
+            Err(e) => {
+                self.join_other_df = Some(right_df); // restore so user can try again
+                self.status_message = format!("JOIN error: {}", e);
+                self.mode = AppMode::JoinSelectRightKeys;
+            }
+        }
+    }
+
+    pub fn open_duckdb_table_row(&mut self) {
+        let s = self.stack.active();
+
+        let db_path = match &s.duckdb_db_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        if s.dataframe.columns.is_empty() || s.dataframe.columns[0].name != "Table" {
+            return;
+        }
+
+        let selected_row = match s.table_state.selected() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let table_name_val = s.dataframe.get_val(selected_row, 0);
+        let table_name = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&table_name_val);
+
+        if table_name.is_empty() {
+            return;
+        }
+
+        match crate::data::io::load_duckdb_table_by_name(&db_path, &table_name) {
+            Ok(new_df) => {
+                let row_count = new_df.visible_row_count();
+                let mut new_sheet = crate::sheet::Sheet::new(
+                    format!("{} :: {}", db_path.display(), table_name),
+                    new_df,
+                );
+                new_sheet.duckdb_source_path = Some(db_path.clone());
+                self.stack.push(new_sheet);
+                self.status_message = format!("Opened table '{}' ({} rows)", table_name, row_count);
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to open table '{}': {}", table_name, e);
+            }
+        }
+    }
+
+    pub fn open_excel_sheet_row(&mut self) {
+        let s = self.stack.active();
+
+        let xlsx_path = match &s.xlsx_db_path {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        if s.dataframe.columns.is_empty() || s.dataframe.columns[0].name != "Sheet" {
+            return;
+        }
+
+        let selected_row = match s.table_state.selected() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let sheet_name_val = s.dataframe.get_val(selected_row, 0);
+        let sheet_name = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&sheet_name_val);
+
+        if sheet_name.is_empty() {
+            return;
+        }
+
+        match crate::data::io::load_excel_sheet_by_name(&xlsx_path, &sheet_name) {
+            Ok(new_df) => {
+                let row_count = new_df.visible_row_count();
+                let mut new_sheet = crate::sheet::Sheet::new(
+                    format!("{} :: {}", xlsx_path.display(), sheet_name),
+                    new_df,
+                );
+                new_sheet.xlsx_source_path = Some(xlsx_path.clone());
+                self.stack.push(new_sheet);
+                self.status_message = format!("Opened sheet '{}' ({} rows)", sheet_name, row_count);
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to open sheet '{}': {}", sheet_name, e);
             }
         }
     }
@@ -3066,6 +4040,85 @@ impl App {
         }
     }
 
+    fn do_open_in_editor(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+        use crossterm::{
+            cursor, execute,
+            terminal::{
+                disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+            },
+        };
+        use std::io::{self, Write as _};
+
+        // Resolve current cell
+        let s = self.stack.active();
+        let display_row = match s.table_state.selected() {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        if display_row >= s.dataframe.row_order.len() {
+            return Ok(());
+        }
+        let col = s.cursor_col;
+        if col >= s.dataframe.columns.len() {
+            return Ok(());
+        }
+        let physical_row = s.dataframe.row_order[display_row];
+        let current_value = s.dataframe.get_physical(physical_row, col);
+
+        // Write cell value to a temp file
+        let mut tmp = tempfile::Builder::new().suffix(".txt").tempfile()?;
+        tmp.write_all(current_value.as_bytes())?;
+        tmp.flush()?;
+        let tmp_path = tmp.path().to_path_buf();
+
+        // Suspend TUI
+        disable_raw_mode()?;
+        execute!(io::stdout(), LeaveAlternateScreen, cursor::Show)?;
+
+        // Resolve editor command
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| "vi".to_string());
+
+        let status = std::process::Command::new(&editor).arg(&tmp_path).status();
+
+        // Resume TUI (always, even on error)
+        enable_raw_mode()?;
+        execute!(io::stdout(), EnterAlternateScreen, cursor::Hide)?;
+        terminal.clear()?;
+
+        match status {
+            Ok(exit_status) if exit_status.success() => {
+                let new_content = std::fs::read_to_string(&tmp_path).unwrap_or_default();
+                // Strip a single trailing newline that editors append
+                let new_value = new_content.trim_end_matches(['\n', '\r']).to_string();
+
+                if new_value != current_value {
+                    let s = self.stack.active_mut();
+                    s.push_undo();
+                    match s.dataframe.set_cell(physical_row, col, new_value.clone()) {
+                        Ok(()) => {
+                            self.status_message = "Cell updated from editor".to_string();
+                        }
+                        Err(e) => {
+                            self.status_message = format!("Cell update failed: {}", e);
+                        }
+                    }
+                } else {
+                    self.status_message = "No changes".to_string();
+                }
+            }
+            Ok(_) => {
+                self.status_message = "Editor exited with non-zero status".to_string();
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to launch '{}': {}", editor, e);
+            }
+        }
+
+        Ok(())
+    }
+
     // ── Quick aggregate ────────────────────────────────────────────────────────
 
     fn quick_aggregate(&mut self) {
@@ -3444,10 +4497,181 @@ impl App {
         }
         self.mode = AppMode::ZPrefix; // Stay in ZPrefix mode
     }
+
+    fn saving_autocomplete(&mut self) {
+        let input = self.saving_input.as_str().to_owned();
+
+        // Split into dir part and filename prefix
+        let path = std::path::Path::new(&input);
+        let (dir, prefix) = if input.ends_with('/') {
+            (path, "")
+        } else {
+            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let prefix = path
+                .file_name()
+                .map(|f| f.to_str().unwrap_or(""))
+                .unwrap_or("");
+            (dir, prefix)
+        };
+
+        let dir_str = if dir == std::path::Path::new("") {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
+        let expanded_dir = expand_tilde(dir_str.to_str().unwrap_or("."));
+
+        // If prefix changed, rebuild candidate list
+        let full_prefix = input.trim_end_matches(prefix).to_string();
+        if self.autocomplete_prefix != full_prefix || self.autocomplete_candidates.is_empty() {
+            self.autocomplete_prefix = full_prefix.clone();
+            self.autocomplete_idx = 0;
+
+            let mut candidates: Vec<String> = std::fs::read_dir(&expanded_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    if is_dir {
+                        format!("{}/", name)
+                    } else {
+                        name
+                    }
+                })
+                .filter(|name| name.starts_with(prefix))
+                .collect();
+
+            candidates.sort();
+            self.autocomplete_candidates = candidates;
+        }
+
+        if self.autocomplete_candidates.is_empty() {
+            return;
+        }
+
+        // Find longest common prefix on first tab; cycle on subsequent tabs
+        let common = longest_common_prefix(&self.autocomplete_candidates);
+        let current_suffix = self
+            .saving_input
+            .as_str()
+            .strip_prefix(&self.autocomplete_prefix)
+            .unwrap_or("");
+
+        if common.len() > current_suffix.len() {
+            // Complete to common prefix
+            let new_value = format!("{}{}", self.autocomplete_prefix, common);
+            self.saving_input = crate::ui::text_input::TextInput::with_value(new_value);
+        } else {
+            // Cycle to next candidate
+            self.autocomplete_idx =
+                (self.autocomplete_idx + 1) % self.autocomplete_candidates.len();
+            let completion = &self.autocomplete_candidates[self.autocomplete_idx];
+            let new_value = format!("{}{}", self.autocomplete_prefix, completion);
+            self.saving_input = crate::ui::text_input::TextInput::with_value(new_value);
+        }
+    }
+
+    fn join_path_autocomplete(&mut self) {
+        let input = self.join_path_input.as_str().to_owned();
+        let path = std::path::Path::new(&input);
+        let (dir, prefix) = if input.ends_with('/') {
+            (path, "")
+        } else {
+            let dir = path.parent().unwrap_or(std::path::Path::new("."));
+            let prefix = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            (dir, prefix)
+        };
+        let dir_str = if dir == std::path::Path::new("") {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
+        let expanded_dir = expand_tilde(dir_str.to_str().unwrap_or("."));
+        let full_prefix = input.trim_end_matches(prefix).to_string();
+        if self.autocomplete_prefix != full_prefix || self.autocomplete_candidates.is_empty() {
+            self.autocomplete_prefix = full_prefix.clone();
+            self.autocomplete_idx = 0;
+            let mut candidates: Vec<String> = std::fs::read_dir(&expanded_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
+                .map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    if is_dir {
+                        format!("{}/", name)
+                    } else {
+                        name
+                    }
+                })
+                .filter(|name| name.starts_with(prefix))
+                .collect();
+            candidates.sort();
+            self.autocomplete_candidates = candidates;
+        }
+        if self.autocomplete_candidates.is_empty() {
+            return;
+        }
+        let common = longest_common_prefix(&self.autocomplete_candidates);
+        let current_suffix = self
+            .join_path_input
+            .as_str()
+            .strip_prefix(&self.autocomplete_prefix)
+            .unwrap_or("");
+        if common.len() > current_suffix.len() {
+            let new_value = format!("{}{}", self.autocomplete_prefix, common);
+            self.join_path_input = crate::ui::text_input::TextInput::with_value(new_value);
+        } else {
+            self.autocomplete_idx =
+                (self.autocomplete_idx + 1) % self.autocomplete_candidates.len();
+            let completion = &self.autocomplete_candidates[self.autocomplete_idx];
+            let new_value = format!("{}{}", self.autocomplete_prefix, completion);
+            self.join_path_input = crate::ui::text_input::TextInput::with_value(new_value);
+        }
+    }
 }
 
 // Needed for quick_aggregate string formatting
 use std::fmt::Write;
+
+/// Expand a leading `~` to the user's home directory.
+fn expand_tilde(input: &str) -> std::path::PathBuf {
+    if let Some(rest) = input.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(rest);
+        }
+    } else if input == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home);
+        }
+    }
+    std::path::PathBuf::from(input)
+}
+
+fn longest_common_prefix(strs: &[String]) -> String {
+    if strs.is_empty() {
+        return String::new();
+    }
+    let first = &strs[0];
+    let mut len = first.len();
+    for s in &strs[1..] {
+        len = len.min(
+            first
+                .chars()
+                .zip(s.chars())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    first[..first
+        .char_indices()
+        .nth(len)
+        .map(|(i, _)| i)
+        .unwrap_or(first.len())]
+        .to_owned()
+}
 
 /// Build an ASCII block-character histogram bar for a frequency table cell.
 /// Uses Unicode block elements (▏▎▍▌▋▊▉█) for sub-character precision.

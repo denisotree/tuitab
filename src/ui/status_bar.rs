@@ -49,6 +49,12 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::PartitionSelect => " PART.   ",
         AppMode::Help => " HELP   ",
         AppMode::ChartAggSelect => " CHART  ",
+        AppMode::JoinSelectSource
+        | AppMode::JoinInputPath
+        | AppMode::JoinSelectType
+        | AppMode::JoinSelectLeftKeys
+        | AppMode::JoinSelectRightKeys
+        | AppMode::JoinOverviewSelect => " JOIN   ",
     };
 
     frame.render_widget(

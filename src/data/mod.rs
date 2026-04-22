@@ -20,6 +20,7 @@ pub mod column;
 pub mod dataframe;
 pub mod expression;
 pub mod io;
+pub mod join;
 pub mod loader;
 pub mod sort;
 pub mod swap;

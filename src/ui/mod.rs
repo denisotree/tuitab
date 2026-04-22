@@ -57,7 +57,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | AppMode::PivotTableInput
         | AppMode::PartitionSelect
         | AppMode::Help
-        | AppMode::ChartAggSelect => {
+        | AppMode::ChartAggSelect
+        | AppMode::JoinSelectSource
+        | AppMode::JoinInputPath
+        | AppMode::JoinSelectType
+        | AppMode::JoinSelectLeftKeys
+        | AppMode::JoinSelectRightKeys
+        | AppMode::JoinOverviewSelect => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -139,6 +145,52 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             }
             if app.mode == AppMode::ChartAggSelect {
                 popup::render_chart_agg_popup(frame, app, frame.area());
+            }
+            if app.mode == AppMode::JoinOverviewSelect {
+                popup::render_join_overview_select_popup(frame, app, frame.area());
+            }
+            if app.mode == AppMode::JoinSelectSource {
+                popup::render_join_source_popup(frame, app, frame.area());
+            }
+            if app.mode == AppMode::JoinInputPath {
+                use crate::ui::search_bar;
+                search_bar::render_join_path_bar(frame, app);
+            }
+            if app.mode == AppMode::JoinSelectType {
+                popup::render_join_type_popup(frame, app, frame.area());
+            }
+            if app.mode == AppMode::JoinSelectLeftKeys {
+                let cols: Vec<String> = app
+                    .stack
+                    .active()
+                    .dataframe
+                    .columns
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+                popup::render_join_key_popup(
+                    frame,
+                    "LEFT key columns",
+                    &cols,
+                    &app.join_left_keys,
+                    app.join_left_key_index,
+                    frame.area(),
+                );
+            }
+            if app.mode == AppMode::JoinSelectRightKeys {
+                let cols: Vec<String> = if let Some(ref df) = app.join_other_df {
+                    df.columns.iter().map(|c| c.name.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+                popup::render_join_key_popup(
+                    frame,
+                    "RIGHT key columns",
+                    &cols,
+                    &app.join_right_keys,
+                    app.join_right_key_index,
+                    frame.area(),
+                );
             }
         }
         AppMode::Loading => {

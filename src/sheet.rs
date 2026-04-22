@@ -65,6 +65,24 @@ pub struct Sheet {
     pub is_dir_sheet: bool,
     /// For SQLite browser sheets: path to the .db file so we can open individual tables.
     pub sqlite_db_path: Option<std::path::PathBuf>,
+    /// For DuckDB browser sheets: path to the .duckdb/.ddb file.
+    pub duckdb_db_path: Option<std::path::PathBuf>,
+    /// Full path of the file or directory that was loaded to produce this sheet.
+    pub source_path: Option<std::path::PathBuf>,
+    /// Per-row absolute paths for synthetic file-list sheets (multi-file CLI arg).
+    pub explicit_row_paths: Option<Vec<std::path::PathBuf>>,
+    /// SQLite DB path this table was drilled-into from (set on table sheets, not overview).
+    pub sqlite_source_path: Option<std::path::PathBuf>,
+    /// DuckDB DB path this table was drilled-into from.
+    pub duckdb_source_path: Option<std::path::PathBuf>,
+    /// Directory path this file was opened from.
+    pub dir_source_path: Option<std::path::PathBuf>,
+    /// For xlsx overview sheets: path to the xlsx file (mirrors sqlite_db_path).
+    pub xlsx_db_path: Option<std::path::PathBuf>,
+    /// For xlsx data sheets: path to the xlsx file they came from.
+    pub xlsx_source_path: Option<std::path::PathBuf>,
+    /// CSV/TSV delimiter byte used when loading this sheet.
+    pub source_delimiter: Option<u8>,
 
     // ── Pivot Table ───────────────────────────────────────────────────────────
     pub pivot_input: TextInput,
@@ -100,6 +118,15 @@ impl Sheet {
             insert_column_input: TextInput::new(),
             is_dir_sheet: false,
             sqlite_db_path: None,
+            duckdb_db_path: None,
+            source_path: None,
+            source_delimiter: None,
+            explicit_row_paths: None,
+            sqlite_source_path: None,
+            duckdb_source_path: None,
+            dir_source_path: None,
+            xlsx_db_path: None,
+            xlsx_source_path: None,
             pivot_input: TextInput::new(),
             sheet_type: SheetType::Normal,
         }
@@ -199,6 +226,34 @@ impl SheetStack {
         let new_top = self.sheets.len() - 1;
         self.swap_in(new_top);
         popped
+    }
+
+    /// Titles of all sheets except the active (topmost) one.
+    pub fn sheet_titles_except_active(&self) -> Vec<String> {
+        let len = self.sheets.len();
+        if len <= 1 {
+            return Vec::new();
+        }
+        self.sheets[..len - 1]
+            .iter()
+            .map(|s| s.title.clone())
+            .collect()
+    }
+
+    /// Clone the DataFrame at the given stack index (briefly swapping it in if needed).
+    pub fn clone_sheet_dataframe(&mut self, idx: usize) -> Option<DataFrame> {
+        if idx >= self.sheets.len() {
+            return None;
+        }
+        let was_swapped = self.swapped.contains_key(&idx);
+        if was_swapped {
+            self.swap_in(idx);
+        }
+        let df = self.sheets[idx].dataframe.clone();
+        if was_swapped {
+            self.swap_out(idx);
+        }
+        Some(df)
     }
 
     /// Read a clone of the DataFrame one level below the active sheet (parent).

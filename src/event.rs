@@ -36,6 +36,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char(']') => Action::SortDescending,
             KeyCode::Enter => Action::OpenRow,
             KeyCode::Char('r') => Action::ResetSort,
+            KeyCode::Char('R') => Action::ReloadFile,
             // Search (replaces old filter)
             KeyCode::Char('/') => Action::StartSearch,
             KeyCode::Char('n') => Action::SearchNext,
@@ -60,7 +61,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('t') => Action::OpenTypeSelect,
             KeyCode::Char('T') => Action::TransposeTable,
             KeyCode::Char('e') => Action::StartEdit,
-            KeyCode::Char('E') => Action::TransposeRow,
+            KeyCode::Char('E') => Action::OpenExternalEditor,
             // Undo
             KeyCode::Char('U') => Action::Undo,
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => Action::Undo,
@@ -88,6 +89,8 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             // Derived sheet
             KeyCode::Char('"') => Action::CreateSheetFromSelection,
             KeyCode::Char('W') => Action::OpenPivotTableInput,
+            // JOIN wizard
+            KeyCode::Char('J') => Action::OpenJoin,
             // Help
             KeyCode::Char('?') => Action::ShowHelp,
             // Non-English keyboard remapping — fall through all the above, then remap
@@ -115,6 +118,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
                         '-' => Action::ClearAggregators,
                         'v' => Action::OpenChart,
                         'r' => Action::ResetSort,
+                        'R' => Action::ReloadFile,
                         'i' => Action::DescribeSheet,
                         'e' => Action::StartEdit,
                         'F' => Action::OpenFrequencyTable,
@@ -124,6 +128,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
                         'T' => Action::TransposeTable,
                         '!' => Action::TogglePinColumn,
                         'W' => Action::OpenPivotTableInput,
+                        'J' => Action::OpenJoin,
                         _ => Action::None,
                     }
                 } else {
@@ -253,6 +258,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
         AppMode::Saving => match key.code {
             KeyCode::Esc => Action::CancelSave,
             KeyCode::Enter => Action::ApplySave,
+            KeyCode::Tab => Action::SavingAutocomplete,
             KeyCode::Backspace => Action::SavingBackspace,
             KeyCode::Delete => Action::SavingForwardDelete,
             KeyCode::Left => Action::SavingCursorLeft,
@@ -360,6 +366,69 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
         AppMode::Help => match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => Action::CloseHelp,
             _ => Action::CloseHelp,
+        },
+
+        // JOIN step 1: source selection
+        AppMode::JoinSelectSource => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::JoinSourceUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::JoinSourceDown,
+            KeyCode::Enter => Action::JoinSourceApply,
+            KeyCode::Esc | KeyCode::Char('q') => Action::JoinSourceCancel,
+            _ => Action::None,
+        },
+
+        // JOIN step 1b: file path input
+        AppMode::JoinInputPath => match key.code {
+            KeyCode::Esc => Action::JoinPathCancel,
+            KeyCode::Enter => Action::JoinPathApply,
+            KeyCode::Tab => Action::JoinPathAutocomplete,
+            KeyCode::Backspace => Action::JoinPathBackspace,
+            KeyCode::Delete => Action::JoinPathForwardDelete,
+            KeyCode::Left => Action::JoinPathCursorLeft,
+            KeyCode::Right => Action::JoinPathCursorRight,
+            KeyCode::Home => Action::JoinPathCursorStart,
+            KeyCode::End => Action::JoinPathCursorEnd,
+            KeyCode::Char(c) => Action::JoinPathInput(c),
+            _ => Action::None,
+        },
+
+        // JOIN step 2: join type selection
+        AppMode::JoinSelectType => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::JoinTypeUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::JoinTypeDown,
+            KeyCode::Enter => Action::JoinTypeApply,
+            KeyCode::Esc | KeyCode::Char('q') => Action::JoinTypeCancel,
+            _ => Action::None,
+        },
+
+        // JOIN step 3: left key columns
+        AppMode::JoinSelectLeftKeys => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::JoinLeftKeyUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::JoinLeftKeyDown,
+            KeyCode::Char(' ') => Action::JoinLeftKeyToggle,
+            KeyCode::Enter => Action::JoinLeftKeyApply,
+            KeyCode::Esc | KeyCode::Char('q') => Action::JoinLeftKeyCancel,
+            _ => Action::None,
+        },
+
+        // JOIN step 4: right key columns
+        AppMode::JoinSelectRightKeys => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::JoinRightKeyUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::JoinRightKeyDown,
+            KeyCode::Char(' ') => Action::JoinRightKeyToggle,
+            KeyCode::Enter => Action::JoinRightKeyApply,
+            KeyCode::Esc | KeyCode::Char('q') => Action::JoinRightKeyCancel,
+            _ => Action::None,
+        },
+
+        // JOIN overview multi-select
+        AppMode::JoinOverviewSelect => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::JoinOverviewUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::JoinOverviewDown,
+            KeyCode::Char(' ') => Action::JoinOverviewToggle,
+            KeyCode::Enter => Action::JoinOverviewApply,
+            KeyCode::Esc | KeyCode::Char('q') => Action::JoinOverviewCancel,
+            _ => Action::None,
         },
     }
 }

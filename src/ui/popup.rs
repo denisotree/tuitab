@@ -244,7 +244,9 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
             Style::default().fg(T::GREEN),
         )),
         Line::from("  Ctrl+S            Save / export"),
+        Line::from("  R                 Reload file from disk"),
         Line::from("  Shift+U          Undo"),
+        Line::from("  J                 JOIN with another table"),
         Line::from("  ?                This help"),
     ];
 
@@ -316,6 +318,188 @@ pub fn render_currency_popup(frame: &mut Frame, app: &crate::app::App, area: Rec
             .border_style(Style::default().fg(T::PURPLE)),
     );
 
+    frame.render_widget(list, popup_area);
+}
+
+/// JOIN overview multi-select popup — shown when J is pressed on a directory/DB/xlsx overview.
+pub fn render_join_overview_select_popup(frame: &mut Frame, app: &crate::app::App, area: Rect) {
+    let popup_area = centered_rect(55, 65, area);
+    frame.render_widget(Clear, popup_area);
+
+    let items = &app.join_context_items;
+    let cursor = app.join_overview_cursor;
+    let selected = &app.join_overview_selected;
+
+    let n_selected = selected.len();
+    let list_items: Vec<ratatui::widgets::ListItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let is_cursor = i == cursor;
+            let is_sel = selected.contains(&i);
+            let check = if is_sel { "[✓]" } else { "[ ]" };
+            let arrow = if is_cursor { "▶ " } else { "  " };
+            let text = format!("{}{} {}", arrow, check, item.label());
+            let style = if is_cursor && is_sel {
+                Style::default().fg(T::YELLOW).bg(T::BG2)
+            } else if is_cursor {
+                Style::default().fg(T::FG).bg(T::BG2)
+            } else if is_sel {
+                Style::default().fg(T::GREEN)
+            } else {
+                Style::default().fg(T::FG)
+            };
+            ratatui::widgets::ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let title = format!(
+        " JOIN: select items — {} selected (Space=toggle, Enter=confirm) ",
+        n_selected
+    );
+    let list = ratatui::widgets::List::new(list_items).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(T::PURPLE)),
+    );
+    frame.render_widget(list, popup_area);
+}
+
+/// JOIN step 1 — source selection popup
+pub fn render_join_source_popup(frame: &mut Frame, app: &crate::app::App, area: Rect) {
+    let popup_area = centered_rect(50, 60, area);
+    frame.render_widget(Clear, popup_area);
+
+    let ctx_items = &app.join_context_items;
+    let ctx_count = ctx_items.len();
+    let other_titles = app.stack.sheet_titles_except_active();
+    let mut items: Vec<ratatui::widgets::ListItem> = Vec::new();
+
+    // ── [Browse file...] ──
+    let browse_active = app.join_source_index == 0;
+    let prefix = if browse_active { "▶ " } else { "  " };
+    let style = if browse_active {
+        Style::default().fg(T::YELLOW).bg(T::BG2)
+    } else {
+        Style::default().fg(T::FG)
+    };
+    items.push(ratatui::widgets::ListItem::new(format!("{}[Browse file...]", prefix)).style(style));
+
+    // ── Context items (sibling tables / files / sheets) ──
+    for (i, ctx) in ctx_items.iter().enumerate() {
+        let idx = i + 1;
+        let is_active = idx == app.join_source_index;
+        let pfx = if is_active { "▶ " } else { "  " };
+        let style = if is_active {
+            Style::default().fg(T::YELLOW).bg(T::BG2)
+        } else {
+            Style::default().fg(T::GREEN)
+        };
+        items.push(
+            ratatui::widgets::ListItem::new(format!("{}↳ {}", pfx, ctx.label())).style(style),
+        );
+    }
+
+    // ── Stack sheets ──
+    for (i, title) in other_titles.iter().enumerate() {
+        let idx = i + 1 + ctx_count;
+        let is_active = idx == app.join_source_index;
+        let pfx = if is_active { "▶ " } else { "  " };
+        let style = if is_active {
+            Style::default().fg(T::YELLOW).bg(T::BG2)
+        } else {
+            Style::default().fg(T::FG)
+        };
+        items.push(ratatui::widgets::ListItem::new(format!("{}{}", pfx, title)).style(style));
+    }
+
+    let list = ratatui::widgets::List::new(items).block(
+        Block::default()
+            .title(" JOIN: Select source (↑↓, Enter) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(T::PURPLE)),
+    );
+    frame.render_widget(list, popup_area);
+}
+
+/// JOIN step 2 — join type selection popup
+pub fn render_join_type_popup(frame: &mut Frame, app: &crate::app::App, area: Rect) {
+    use crate::data::join::JoinType;
+    let popup_area = centered_rect(40, 35, area);
+    frame.render_widget(Clear, popup_area);
+
+    let items: Vec<ratatui::widgets::ListItem> = JoinType::all()
+        .iter()
+        .enumerate()
+        .map(|(i, jt)| {
+            let is_active = i == app.join_type_index;
+            let prefix = if is_active { "▶ " } else { "  " };
+            let style = if is_active {
+                Style::default().fg(T::YELLOW).bg(T::BG2)
+            } else {
+                Style::default().fg(T::FG)
+            };
+            ratatui::widgets::ListItem::new(format!("{}{}", prefix, jt.label())).style(style)
+        })
+        .collect();
+
+    let list = ratatui::widgets::List::new(items).block(
+        Block::default()
+            .title(" JOIN: Select join type (↑↓, Enter) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(T::PURPLE)),
+    );
+    frame.render_widget(list, popup_area);
+}
+
+/// JOIN steps 3 & 4 — key column selection (shared, parameterised by title and columns)
+pub fn render_join_key_popup(
+    frame: &mut Frame,
+    title: &str,
+    columns: &[String],
+    selected_keys: &[String],
+    cursor_index: usize,
+    area: Rect,
+) {
+    let popup_area = centered_rect(45, 60, area);
+    frame.render_widget(Clear, popup_area);
+
+    let items: Vec<ratatui::widgets::ListItem> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let is_selected = selected_keys.contains(col);
+            let is_active = i == cursor_index;
+            let order = selected_keys
+                .iter()
+                .position(|k| k == col)
+                .map(|p| (p + 1).to_string())
+                .unwrap_or_default();
+            let checkbox = if is_selected {
+                format!("[{}]", order)
+            } else {
+                "[ ]".to_string()
+            };
+            let prefix = if is_active { "> " } else { "  " };
+            let text = format!("{}{} {}", prefix, checkbox, col);
+            let mut style = Style::default().fg(T::FG);
+            if is_selected {
+                style = style.fg(T::GREEN);
+            }
+            if is_active {
+                style = style.bg(T::BG2);
+            }
+            ratatui::widgets::ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let list = ratatui::widgets::List::new(items).block(
+        Block::default()
+            .title(format!(" {} (Space toggle, Enter apply) ", title))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(T::PURPLE)),
+    );
     frame.render_widget(list, popup_area);
 }
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Application mode — determines which widgets are displayed and how input is handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +48,18 @@ pub enum AppMode {
     PartitionSelect,
     /// User is selecting aggregation function for a contextual chart
     ChartAggSelect,
+    /// JOIN wizard: step 1 — pick source sheet or browse for file
+    JoinSelectSource,
+    /// JOIN wizard: step 1b — type a file path
+    JoinInputPath,
+    /// JOIN wizard: step 2 — pick join type (INNER/LEFT/RIGHT/OUTER)
+    JoinSelectType,
+    /// JOIN wizard: step 3 — pick left-side key columns (multi-select)
+    JoinSelectLeftKeys,
+    /// JOIN wizard: step 4 — pick right-side key columns (multi-select)
+    JoinSelectRightKeys,
+    /// JOIN wizard (overview mode): multi-select items to chain-join
+    JoinOverviewSelect,
 }
 
 /// Distinguishes a regular data sheet from derived views.
@@ -91,6 +104,7 @@ pub enum Action {
     DescribeSheet,
     DeduplicateByPinned,
     ResetSort,
+    ReloadFile,
 
     // ── Search (/) ────────────────────────────────────────────────────────────
     StartSearch,
@@ -203,6 +217,7 @@ pub enum Action {
     SavingCursorEnd,
     ApplySave,
     CancelSave,
+    SavingAutocomplete,
 
     // ── Z Prefix (Column Operations) ──────────────────────────────────────────
     EnterZPrefix,
@@ -284,7 +299,82 @@ pub enum Action {
     ShowHelp,
     CloseHelp,
 
+    // ── JOIN wizard ───────────────────────────────────────────────────────────
+    OpenJoin,
+    JoinSourceUp,
+    JoinSourceDown,
+    JoinSourceApply,
+    JoinSourceCancel,
+    JoinPathInput(char),
+    JoinPathBackspace,
+    JoinPathForwardDelete,
+    JoinPathCursorLeft,
+    JoinPathCursorRight,
+    JoinPathCursorStart,
+    JoinPathCursorEnd,
+    JoinPathApply,
+    JoinPathCancel,
+    JoinPathAutocomplete,
+    JoinTypeUp,
+    JoinTypeDown,
+    JoinTypeApply,
+    JoinTypeCancel,
+    JoinLeftKeyUp,
+    JoinLeftKeyDown,
+    JoinLeftKeyToggle,
+    JoinLeftKeyApply,
+    JoinLeftKeyCancel,
+    JoinRightKeyUp,
+    JoinRightKeyDown,
+    JoinRightKeyToggle,
+    JoinRightKeyApply,
+    JoinRightKeyCancel,
+
+    /// Open current cell value in $EDITOR for viewing/editing
+    OpenExternalEditor,
+
+    // ── JOIN overview multi-select ─────────────────────────────────────────────
+    JoinOverviewUp,
+    JoinOverviewDown,
+    JoinOverviewToggle,
+    JoinOverviewApply,
+    JoinOverviewCancel,
+
     None,
+}
+
+/// An item offered in the JOIN source popup, derived from the current sheet's hierarchical context.
+#[derive(Clone, Debug)]
+pub enum JoinContextItem {
+    SqliteTable {
+        db_path: PathBuf,
+        table_name: String,
+    },
+    DuckdbTable {
+        db_path: PathBuf,
+        table_name: String,
+    },
+    DirectoryFile {
+        file_path: PathBuf,
+    },
+    XlsxSheet {
+        xlsx_path: PathBuf,
+        sheet_name: String,
+    },
+}
+
+impl JoinContextItem {
+    pub fn label(&self) -> String {
+        match self {
+            Self::SqliteTable { table_name, .. } => table_name.clone(),
+            Self::DuckdbTable { table_name, .. } => table_name.clone(),
+            Self::DirectoryFile { file_path } => file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            Self::XlsxSheet { sheet_name, .. } => sheet_name.clone(),
+        }
+    }
 }
 
 /// Inferred (or user-assigned) column data type used to pick the right sort comparator.

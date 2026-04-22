@@ -581,6 +581,36 @@ impl Expr {
                         }
                         Value::Null
                     }
+                    "date" => {
+                        if evaluated_args.len() == 1 {
+                            match &evaluated_args[0] {
+                                Value::Datetime(dt) => return Value::Date(dt.date()),
+                                Value::Date(d) => return Value::Date(*d),
+                                Value::String(s) => {
+                                    // Try parsing as Date directly
+                                    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                                    {
+                                        return Value::Date(d);
+                                    }
+                                    // Try parsing as Datetime, extract date
+                                    for fmt in [
+                                        "%Y-%m-%d %H:%M:%S",
+                                        "%Y-%m-%d %H:%M:%S%.f",
+                                        "%Y-%m-%dT%H:%M:%S",
+                                        "%Y-%m-%dT%H:%M:%S%.f",
+                                    ] {
+                                        if let Ok(dt) =
+                                            chrono::NaiveDateTime::parse_from_str(s, fmt)
+                                        {
+                                            return Value::Date(dt.date());
+                                        }
+                                    }
+                                }
+                                _ => return Value::Null,
+                            }
+                        }
+                        Value::Null
+                    }
                     _ => Value::Null,
                 }
             }

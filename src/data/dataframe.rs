@@ -1,6 +1,7 @@
 use crate::data::aggregator::AggregatorKind;
 use crate::data::column::ColumnMeta;
 use crate::types::ColumnType;
+use chrono::{NaiveDate, NaiveDateTime};
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -264,6 +265,146 @@ impl DataFrame {
                 .collect();
             let new_series = Series::new(series.name().clone(), parsed_vals);
             polars::prelude::Column::from(new_series)
+        } else if col_type == ColumnType::Date
+            && series.dtype() == &polars::prelude::DataType::String
+        {
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+            let str_ca = series.str().map_err(|e| e.to_string())?;
+            let days: Vec<Option<i32>> = str_ca
+                .into_iter()
+                .map(|opt_s| {
+                    let s = opt_s?.trim();
+                    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                        return Some((d - epoch).num_days() as i32);
+                    }
+                    for fmt in [
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%d %H:%M:%S%.f",
+                        "%Y-%m-%dT%H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S%.f",
+                    ] {
+                        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+                            return Some((dt.date() - epoch).num_days() as i32);
+                        }
+                    }
+                    None
+                })
+                .collect();
+            Column::from(
+                Series::new(series.name().clone(), days)
+                    .strict_cast(&polars::prelude::DataType::Date)
+                    .map_err(|e| format!("Cannot cast to Date. Error: {}", e))?,
+            )
+        } else if col_type == ColumnType::Datetime
+            && series.dtype() == &polars::prelude::DataType::String
+        {
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap();
+            let str_ca = series.str().map_err(|e| e.to_string())?;
+            let micros: Vec<Option<i64>> = str_ca
+                .into_iter()
+                .map(|opt_s| {
+                    let s = opt_s?.trim();
+                    for fmt in [
+                        "%Y-%m-%d %H:%M:%S%.f",
+                        "%Y-%m-%d %H:%M:%S",
+                        "%Y-%m-%dT%H:%M:%S%.f",
+                        "%Y-%m-%dT%H:%M:%S",
+                    ] {
+                        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+                            let diff = dt - epoch;
+                            return diff
+                                .num_microseconds()
+                                .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                        }
+                    }
+                    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                        let dt = d.and_hms_opt(0, 0, 0).unwrap();
+                        let diff = dt - epoch;
+                        return diff
+                            .num_microseconds()
+                            .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                    }
+                    None
+                })
+                .collect();
+            Column::from(
+                Series::new(series.name().clone(), micros)
+                    .strict_cast(&polars::prelude::DataType::Datetime(
+                        TimeUnit::Microseconds,
+                        None,
+                    ))
+                    .map_err(|e| format!("Cannot cast to Datetime. Error: {}", e))?,
+            )
+        } else if col_type == ColumnType::Date
+            && series.dtype() == &polars::prelude::DataType::Datetime(TimeUnit::Microseconds, None)
+        {
+            // Datetime -> Date: save backup for recovery by converting to formatted strings
+            if let Ok(str_series) = series.cast(&polars::prelude::DataType::String) {
+                if let Ok(str_ca) = str_series.str() {
+                    let backup_strs: Vec<Option<String>> = str_ca
+                        .into_iter()
+                        .map(|s| s.map(|x| x.to_string()))
+                        .collect();
+                    self.columns[col_idx].backup_datetime_str = Some(backup_strs);
+                }
+            }
+
+            series
+                .strict_cast(&target_dtype)
+                .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
+        } else if col_type == ColumnType::Datetime
+            && series.dtype() == &polars::prelude::DataType::Date
+        {
+            // Date -> Datetime: restore from backup if available
+            let new_series = if let Some(backup) = &self.columns[col_idx].backup_datetime_str {
+                // Restore from backup by parsing the datetime strings
+                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap();
+                let micros: Vec<Option<i64>> = backup
+                    .iter()
+                    .map(|opt_s| {
+                        opt_s.as_ref().and_then(|s| {
+                            // Try parsing with microseconds
+                            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                            {
+                                let diff = dt - epoch;
+                                return diff
+                                    .num_microseconds()
+                                    .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                            }
+                            // Try without microseconds
+                            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+                                let diff = dt - epoch;
+                                return diff
+                                    .num_microseconds()
+                                    .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                            }
+                            None
+                        })
+                    })
+                    .collect();
+                Column::from(
+                    Series::new(series.name().clone(), micros)
+                        .strict_cast(&polars::prelude::DataType::Datetime(
+                            TimeUnit::Microseconds,
+                            None,
+                        ))
+                        .map_err(|e| {
+                            format!("Cannot restore Datetime from backup. Error: {}", e)
+                        })?,
+                )
+            } else {
+                // No backup: convert Date to Datetime with time 00:00:00
+                series
+                    .strict_cast(&target_dtype)
+                    .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
+            };
+            new_series
         } else {
             series
                 .strict_cast(&target_dtype)

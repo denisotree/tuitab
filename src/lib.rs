@@ -20,9 +20,9 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(version, about)]
 pub struct Cli {
-    /// Path to CSV/TSV/JSON/Parquet/Excel/SQLite file to open.
+    /// One or more files to open. Pass multiple files to browse them as a list.
     /// Use '-' to read from stdin (pipe mode).
-    pub file: Option<PathBuf>,
+    pub files: Vec<PathBuf>,
 
     /// Column delimiter (auto-detected if not specified)
     #[arg(short, long)]
@@ -39,22 +39,13 @@ pub fn run() -> Result<()> {
 
     use std::io::IsTerminal;
 
-    let mut path = cli.file.as_deref();
-
     let is_terminal = std::io::stdin().is_terminal();
-    let use_stdin =
-        (path.is_none() && !is_terminal) || path.map(|p| p.to_str() == Some("-")).unwrap_or(false);
-
-    if path.is_none() && !use_stdin {
-        path = Some(std::path::Path::new("."));
-    }
-
-    if let Some(p) = path {
-        if !p.exists() {
-            eprintln!("Error: '{}': no such file or directory", p.display());
-            std::process::exit(1);
-        }
-    }
+    let use_stdin = (!is_terminal && cli.files.is_empty())
+        || cli
+            .files
+            .first()
+            .map(|p| p.to_str() == Some("-"))
+            .unwrap_or(false);
 
     let mut app = if use_stdin {
         if cli.data_type.is_none() {
@@ -65,8 +56,25 @@ pub fn run() -> Result<()> {
             std::process::exit(1);
         }
         app::App::from_stdin_typed(cli.data_type.unwrap().as_str(), cli.delimiter)?
+    } else if cli.files.len() >= 2 {
+        for p in &cli.files {
+            if !p.exists() {
+                eprintln!("Error: '{}': no such file or directory", p.display());
+                std::process::exit(1);
+            }
+        }
+        app::App::from_file_list(cli.files, cli.delimiter)?
     } else {
-        app::App::new(path.unwrap(), cli.delimiter)?
+        let path = cli
+            .files
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        if !path.exists() {
+            eprintln!("Error: '{}': no such file or directory", path.display());
+            std::process::exit(1);
+        }
+        app::App::new(&path, cli.delimiter)?
     };
 
     #[cfg(unix)]
