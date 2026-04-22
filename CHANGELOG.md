@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-22
+
+### Added
+- JOIN contextual sources: pressing `J` now shows sibling items from the same origin — tables from the same SQLite/DuckDB database, files from the same directory, sheets from the same xlsx file
+- Multi-select JOIN from overview sheets (directory listing, SQLite/DuckDB/xlsx table browser): select N items with Space, confirm with Enter to chain-join them sequentially
+- Chain JOIN: after joining, pressing `J` again continues chaining additional tables onto the result
+- xlsx multi-sheet browser: opening an xlsx file with multiple sheets now shows a sheet overview; pressing Enter drills into the selected sheet
+- `Shift+E` — open current cell value in `$EDITOR`/`$VISUAL`/`vi`; saves back to the cell if the text was changed
+- Tilde expansion (`~/...`) in JOIN path input and save dialog — both file loading and Tab-autocomplete now correctly expand `~` to the home directory
+- Tab-completion for JOIN file path input now works with `~/` prefixes
+
+### Fixed
+- DuckDB tables with exotic column types (STRUCT, LIST, TIMESTAMP WITH TIME ZONE, etc.) no longer cause a panic on open — all values are read via `CAST(col AS VARCHAR)`
+
 ## [0.2.0] - 2026-04-21
 
 ### Added
@@ -82,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/denisotree/tuitab/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/denisotree/tuitab/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/denisotree/tuitab/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/denisotree/tuitab/compare/v0.1.3...v0.1.4
