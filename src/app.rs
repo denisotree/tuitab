@@ -266,14 +266,26 @@ impl App {
                 open_in_editor_pending: false,
             })
         } else {
-            // Load normal file using io::load_file which delegates properly based on extension
-            let dataframe = crate::data::io::load_file(path, delim_byte)?;
-            let row_count = dataframe.visible_row_count();
             let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("")
                 .to_lowercase();
+
+            // For multi-sheet xlsx: load sheet overview instead of first sheet
+            let (dataframe, xlsx_db) = if matches!(ext.as_str(), "xlsx" | "xls" | "xlsm" | "xlsb") {
+                match crate::data::io::excel_sheet_names(path) {
+                    Ok(names) if names.len() > 1 => {
+                        let df = crate::data::io::load_excel_overview(path)?;
+                        (df, Some(path.to_path_buf()))
+                    }
+                    _ => (crate::data::io::load_file(path, delim_byte)?, None),
+                }
+            } else {
+                (crate::data::io::load_file(path, delim_byte)?, None)
+            };
+
+            let row_count = dataframe.visible_row_count();
             let mut root_sheet = Sheet::new(filename.clone(), dataframe);
             if matches!(ext.as_str(), "sqlite" | "sqlite3") {
                 root_sheet.sqlite_db_path = Some(path.to_path_buf());
@@ -287,12 +299,18 @@ impl App {
                     root_sheet.duckdb_db_path = Some(path.to_path_buf());
                 }
             }
+            root_sheet.xlsx_db_path = xlsx_db;
             root_sheet.source_path = Some(path.to_path_buf());
             root_sheet.source_delimiter = delim_byte;
+            let status_message = if root_sheet.xlsx_db_path.is_some() {
+                format!("Loaded '{}' — {} sheets", filename, row_count)
+            } else {
+                format!("Loaded {} rows", row_count)
+            };
             Ok(Self {
                 stack: SheetStack::new(root_sheet),
                 mode: AppMode::Normal,
-                status_message: format!("Loaded {} rows", row_count),
+                status_message,
                 should_quit: false,
                 load_receiver: None,
                 saving_input: TextInput::with_value(filename),

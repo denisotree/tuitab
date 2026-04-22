@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-22
+
+### Fixed
+- Opening a multi-sheet xlsx file directly (e.g. `tuitab file.xlsx`) now shows the sheet overview instead of opening the first sheet
+
 ## [0.3.0] - 2026-04-22
 
 ### Added
@@ -96,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/denisotree/tuitab/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/denisotree/tuitab/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/denisotree/tuitab/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/denisotree/tuitab/compare/v0.1.4...v0.1.5
