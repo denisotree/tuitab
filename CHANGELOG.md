@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-04-23
+
+### Fixed
+- docs.rs build: remove `components` from `rust-toolchain.toml` so docs.rs correctly applies the pinned `nightly-2026-03-15` toolchain; CI jobs now install `rustfmt`/`clippy` components explicitly
+
 ## [0.3.3] - 2026-04-23
 
 ### Fixed
@@ -121,7 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/denisotree/tuitab/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/denisotree/tuitab/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/denisotree/tuitab/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/denisotree/tuitab/compare/v0.3.0...v0.3.1
