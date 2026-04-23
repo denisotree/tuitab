@@ -115,6 +115,12 @@ pub struct App {
     pub join_overview_selected: Vec<usize>,
     pub join_pending_queue: Vec<crate::types::JoinContextItem>,
     pub open_in_editor_pending: bool,
+
+    // ── Copy format popup ──────────────────────────────────────────────────────
+    /// Which copy operation is waiting for a format selection
+    pub copy_pending: Option<crate::types::CopyPending>,
+    /// Cursor index in the copy-format popup
+    pub copy_format_index: usize,
 }
 
 fn load_join_context_item_df(
@@ -215,6 +221,8 @@ impl App {
                 join_overview_selected: Vec::new(),
                 join_pending_queue: Vec::new(),
                 open_in_editor_pending: false,
+                copy_pending: None,
+                copy_format_index: 0,
             })
         } else if file_size > ASYNC_THRESHOLD {
             let rx = async_loader::load_in_background(path.to_path_buf(), delim_byte);
@@ -264,6 +272,8 @@ impl App {
                 join_overview_selected: Vec::new(),
                 join_pending_queue: Vec::new(),
                 open_in_editor_pending: false,
+                copy_pending: None,
+                copy_format_index: 0,
             })
         } else {
             let ext = path
@@ -349,6 +359,8 @@ impl App {
                 join_overview_selected: Vec::new(),
                 join_pending_queue: Vec::new(),
                 open_in_editor_pending: false,
+                copy_pending: None,
+                copy_format_index: 0,
             })
         }
     }
@@ -405,6 +417,8 @@ impl App {
             join_overview_selected: Vec::new(),
             join_pending_queue: Vec::new(),
             open_in_editor_pending: false,
+            copy_pending: None,
+            copy_format_index: 0,
         })
     }
 
@@ -459,6 +473,8 @@ impl App {
             join_overview_selected: Vec::new(),
             join_pending_queue: Vec::new(),
             open_in_editor_pending: false,
+            copy_pending: None,
+            copy_format_index: 0,
         })
     }
 
@@ -560,6 +576,7 @@ impl App {
         let saved_row = {
             let s = self.stack.active_mut();
             s.undo_stack.clear();
+            s.redo_stack.clear();
             s.sort_col = None;
             s.sort_desc = false;
             s.search_pattern = None;
@@ -640,6 +657,14 @@ impl App {
                     self.status_message = "Undo successful".to_string();
                 } else {
                     self.status_message = "Nothing to undo".to_string();
+                }
+            }
+            Action::Redo => {
+                let s = self.stack.active_mut();
+                if s.pop_redo() {
+                    self.status_message = "Redo successful".to_string();
+                } else {
+                    self.status_message = "Nothing to redo".to_string();
                 }
             }
 
@@ -1206,14 +1231,14 @@ impl App {
             }
 
             // ── Clipboard & delete ────────────────────────────────────────────
-            Action::CopySelectedRows => self.copy_selected_rows(),
             Action::PasteRows => self.paste_rows(),
             Action::DeleteSelectedRows => self.delete_selected_rows(),
 
             Action::EnterYPrefix => {
                 self.mode = AppMode::YPrefix;
                 self.status_message =
-                    "y: (y)row  (c)cell  (l)column  (s)selected rows  Esc=cancel".to_string();
+                    "y: (c)cell  (r)rows  (z)col.values  (Z)whole col  (R)whole table  Esc=cancel"
+                        .to_string();
             }
             Action::CancelYPrefix => {
                 self.mode = AppMode::Normal;
@@ -1223,48 +1248,57 @@ impl App {
                 let s = self.stack.active();
                 let row = s.table_state.selected().unwrap_or(0);
                 let col = s.cursor_col;
-                let val = DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(row, col));
+                let phys = s.dataframe.row_order.get(row).copied().unwrap_or(0);
+                let val = s.dataframe.format_display(phys, col);
                 match crate::clipboard::copy_text(&val) {
                     Ok(_) => self.status_message = format!("Copied cell value: {}", val),
                     Err(e) => self.status_message = format!("Clipboard error: {}", e),
                 }
                 self.mode = AppMode::Normal;
             }
-            Action::CopyCurrentRow => {
-                let s = self.stack.active();
-                let row = s.table_state.selected().unwrap_or(0);
-                let headers: Vec<&str> = s
-                    .dataframe
-                    .columns
-                    .iter()
-                    .map(|c| c.name.as_str())
-                    .collect();
-                let row_data: Vec<String> = (0..s.dataframe.col_count())
-                    .map(|c| DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(row, c)))
-                    .collect();
-                match crate::clipboard::copy_to_clipboard(&headers, &[row_data]) {
-                    Ok(_) => self.status_message = "Copied current row (TSV)".to_string(),
-                    Err(e) => self.status_message = format!("Clipboard error: {}", e),
+            Action::OpenCopyFormat(pending) => {
+                use crate::types::CopyPending;
+                // yz with no rows selected → copy current cell directly, no popup
+                if pending == CopyPending::SmartColumn
+                    && self.stack.active().dataframe.selected_rows.is_empty()
+                {
+                    let s = self.stack.active();
+                    let row = s.table_state.selected().unwrap_or(0);
+                    let phys = s.dataframe.row_order.get(row).copied().unwrap_or(0);
+                    let val = s.dataframe.format_display(phys, s.cursor_col);
+                    self.status_message = match crate::clipboard::copy_text(&val) {
+                        Ok(_) => format!("Copied cell value: {}", val),
+                        Err(e) => format!("Clipboard error: {}", e),
+                    };
+                    self.mode = AppMode::Normal;
+                } else {
+                    self.copy_pending = Some(pending);
+                    self.copy_format_index = 0;
+                    self.mode = AppMode::CopyFormatSelect;
                 }
-                self.mode = AppMode::Normal;
             }
-            Action::CopyCurrentColumn => {
-                let s = self.stack.active();
-                let col = s.cursor_col;
-                let values: Vec<String> = (0..s.dataframe.visible_row_count())
-                    .map(|r| DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(r, col)))
-                    .collect();
-                let text = values.join("\n");
-                match crate::clipboard::copy_text(&text) {
-                    Ok(_) => {
-                        self.status_message = format!(
-                            "Copied column '{}' ({} values)",
-                            s.dataframe.columns[col].name,
-                            values.len()
-                        )
-                    }
+            Action::CopyFormatSelectUp => {
+                if self.copy_format_index > 0 {
+                    self.copy_format_index -= 1;
+                }
+            }
+            Action::CopyFormatSelectDown => {
+                let max = self.copy_format_option_count().saturating_sub(1);
+                if self.copy_format_index < max {
+                    self.copy_format_index += 1;
+                }
+            }
+            Action::CancelCopyFormat => {
+                self.copy_pending = None;
+                self.mode = AppMode::Normal;
+                self.status_message.clear();
+            }
+            Action::ApplyCopyFormat => {
+                match self.execute_copy_with_format() {
+                    Ok(msg) => self.status_message = msg,
                     Err(e) => self.status_message = format!("Clipboard error: {}", e),
                 }
+                self.copy_pending = None;
                 self.mode = AppMode::Normal;
             }
 
@@ -4201,32 +4235,154 @@ impl App {
 
     // ── Clipboard & delete ─────────────────────────────────────────────────────
 
-    fn copy_selected_rows(&mut self) {
+    fn copy_format_option_count(&self) -> usize {
+        use crate::types::CopyPending;
+        match self.copy_pending {
+            Some(CopyPending::SmartRows | CopyPending::WholeTable) => 4,
+            Some(CopyPending::SmartColumn | CopyPending::WholeColumn) => 3,
+            None => 0,
+        }
+    }
+
+    /// Returns the column indices to use for row-copy operations.
+    /// If any columns are marked via zs, returns only those; otherwise all columns.
+    fn effective_col_indices(df: &crate::data::dataframe::DataFrame) -> Vec<usize> {
+        let selected: Vec<usize> = df
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.selected)
+            .map(|(i, _)| i)
+            .collect();
+        if selected.is_empty() {
+            (0..df.col_count()).collect()
+        } else {
+            selected
+        }
+    }
+
+    fn execute_copy_with_format(&self) -> color_eyre::Result<String> {
+        use crate::types::CopyPending;
         let s = self.stack.active();
         let df = &s.dataframe;
-        if df.selected_rows.is_empty() {
-            self.status_message = "No rows selected (use 's' to select)".to_string();
-            return;
-        }
-        let headers: Vec<&str> = df.columns.iter().map(|c| c.name.as_str()).collect();
-        let mut rows: Vec<Vec<String>> = df
-            .selected_rows
-            .iter()
-            .map(|&phys| {
-                (0..df.col_count())
-                    .map(|col| df.get_physical(phys, col))
-                    .collect()
-            })
-            .collect();
-        rows.sort(); // stable output order
-
-        let count = rows.len();
-        match clipboard::copy_to_clipboard(&headers, &rows) {
-            Ok(()) => {
-                self.status_message = format!("Copied {} rows to clipboard (TSV)", count);
+        match self.copy_pending {
+            Some(CopyPending::SmartRows) => {
+                let col_indices = Self::effective_col_indices(df);
+                let headers: Vec<&str> = col_indices
+                    .iter()
+                    .map(|&i| df.columns[i].name.as_str())
+                    .collect();
+                if df.selected_rows.is_empty() {
+                    // current row
+                    let row = s.table_state.selected().unwrap_or(0);
+                    let phys = df.row_order.get(row).copied().unwrap_or(0);
+                    let row_data: Vec<String> = col_indices
+                        .iter()
+                        .map(|&c| df.format_display(phys, c))
+                        .collect();
+                    let rows = vec![row_data];
+                    self.copy_rows_with_format(&headers, &rows)
+                        .map(|fmt| format!("Copied row ({})", fmt))
+                } else {
+                    let mut sorted_phys: Vec<usize> = df.selected_rows.iter().copied().collect();
+                    sorted_phys.sort_unstable();
+                    let rows: Vec<Vec<String>> = sorted_phys
+                        .iter()
+                        .map(|&phys| {
+                            col_indices
+                                .iter()
+                                .map(|&c| df.format_display(phys, c))
+                                .collect()
+                        })
+                        .collect();
+                    let count = rows.len();
+                    self.copy_rows_with_format(&headers, &rows)
+                        .map(|fmt| format!("Copied {} rows ({})", count, fmt))
+                }
             }
-            Err(e) => {
-                self.status_message = format!("Clipboard error: {}", e);
+            Some(CopyPending::SmartColumn) => {
+                // Only reached when selected_rows is non-empty (else OpenCopyFormat does direct copy)
+                let col = s.cursor_col;
+                let mut sorted_phys: Vec<usize> = df.selected_rows.iter().copied().collect();
+                sorted_phys.sort_unstable();
+                let values: Vec<String> = sorted_phys
+                    .iter()
+                    .map(|&phys| df.format_display(phys, col))
+                    .collect();
+                let count = values.len();
+                self.copy_column_with_format(&values)
+                    .map(|fmt| format!("Copied {} values ({})", count, fmt))
+            }
+            Some(CopyPending::WholeColumn) => {
+                let col = s.cursor_col;
+                let values: Vec<String> = (0..df.visible_row_count())
+                    .map(|r| df.format_display(df.row_order[r], col))
+                    .collect();
+                let count = values.len();
+                self.copy_column_with_format(&values)
+                    .map(|fmt| format!("Copied {} values ({})", count, fmt))
+            }
+            Some(CopyPending::WholeTable) => {
+                let col_indices = Self::effective_col_indices(df);
+                let headers: Vec<&str> = col_indices
+                    .iter()
+                    .map(|&i| df.columns[i].name.as_str())
+                    .collect();
+                let rows: Vec<Vec<String>> = (0..df.visible_row_count())
+                    .map(|r| {
+                        let phys = df.row_order[r];
+                        col_indices
+                            .iter()
+                            .map(|&c| df.format_display(phys, c))
+                            .collect()
+                    })
+                    .collect();
+                let count = rows.len();
+                self.copy_rows_with_format(&headers, &rows)
+                    .map(|fmt| format!("Copied {} rows ({})", count, fmt))
+            }
+            None => Ok(String::new()),
+        }
+    }
+
+    fn copy_rows_with_format(
+        &self,
+        headers: &[&str],
+        rows: &[Vec<String>],
+    ) -> color_eyre::Result<&'static str> {
+        match self.copy_format_index {
+            0 => {
+                crate::clipboard::copy_tsv(headers, rows)?;
+                Ok("TSV")
+            }
+            1 => {
+                crate::clipboard::copy_csv(headers, rows)?;
+                Ok("CSV")
+            }
+            2 => {
+                crate::clipboard::copy_json(headers, rows)?;
+                Ok("JSON")
+            }
+            _ => {
+                crate::clipboard::copy_markdown(headers, rows)?;
+                Ok("Markdown")
+            }
+        }
+    }
+
+    fn copy_column_with_format(&self, values: &[String]) -> color_eyre::Result<&'static str> {
+        match self.copy_format_index {
+            0 => {
+                crate::clipboard::copy_column_newline(values)?;
+                Ok("newline-separated")
+            }
+            1 => {
+                crate::clipboard::copy_column_comma(values)?;
+                Ok("comma-separated")
+            }
+            _ => {
+                crate::clipboard::copy_column_comma_quoted(values)?;
+                Ok("comma-separated, quoted")
             }
         }
     }

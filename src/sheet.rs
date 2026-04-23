@@ -27,6 +27,8 @@ pub struct Sheet {
     pub dataframe: DataFrame,
     /// Stack of previous DataFrame states for Undo functionality
     pub undo_stack: Vec<DataFrame>,
+    /// Stack of DataFrame states for Redo (populated by pop_undo, cleared by push_undo)
+    pub redo_stack: Vec<DataFrame>,
     /// ratatui row selection state
     pub table_state: TableState,
     /// Currently highlighted column
@@ -97,6 +99,7 @@ impl Sheet {
             title,
             dataframe,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             table_state: TableState::default()
                 .with_selected(0)
                 .with_selected_column(0),
@@ -132,32 +135,55 @@ impl Sheet {
         }
     }
 
-    /// Push current DataFrame state to undo stack (max 50)
+    /// Push current DataFrame state to undo stack (max 50). Clears redo stack.
     pub fn push_undo(&mut self) {
         if self.undo_stack.len() >= 50 {
             self.undo_stack.remove(0);
         }
         self.undo_stack.push(self.dataframe.clone());
+        self.redo_stack.clear();
     }
 
-    /// Pop previous DataFrame state from undo stack
+    /// Restore previous state from undo stack. Saves current state to redo.
     pub fn pop_undo(&mut self) -> bool {
         if let Some(df) = self.undo_stack.pop() {
+            if self.redo_stack.len() >= 50 {
+                self.redo_stack.remove(0);
+            }
+            self.redo_stack.push(self.dataframe.clone());
             self.dataframe = df;
-            // Ensure cursor/selection bounds are valid for restored dataframe
-            let cols = self.dataframe.columns.len();
-            let rows = self.dataframe.visible_row_count();
-            if self.cursor_col >= cols && cols > 0 {
-                self.cursor_col = cols.saturating_sub(1);
-            }
-            if let Some(s) = self.table_state.selected() {
-                if s >= rows && rows > 0 {
-                    self.table_state.select(Some(rows.saturating_sub(1)));
-                }
-            }
+            self.clamp_cursor();
             true
         } else {
             false
+        }
+    }
+
+    /// Restore next state from redo stack. Saves current state back to undo.
+    pub fn pop_redo(&mut self) -> bool {
+        if let Some(df) = self.redo_stack.pop() {
+            if self.undo_stack.len() >= 50 {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push(self.dataframe.clone());
+            self.dataframe = df;
+            self.clamp_cursor();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clamp_cursor(&mut self) {
+        let cols = self.dataframe.columns.len();
+        let rows = self.dataframe.visible_row_count();
+        if self.cursor_col >= cols && cols > 0 {
+            self.cursor_col = cols.saturating_sub(1);
+        }
+        if let Some(s) = self.table_state.selected() {
+            if s >= rows && rows > 0 {
+                self.table_state.select(Some(rows.saturating_sub(1)));
+            }
         }
     }
 }

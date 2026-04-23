@@ -330,16 +330,7 @@ pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFram
 }
 
 fn save_csv_polars(df: &DataFrame, path: &Path, delimiter: u8) -> Result<()> {
-    let mut out_df = if df.row_order.len() != df.df.height() || df.row_order != df.original_order {
-        let indices = IdxCa::new(
-            "".into(),
-            df.row_order.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        );
-        df.df.take(&indices)?
-    } else {
-        df.df.clone()
-    };
-
+    let mut out_df = df.to_display_polars_df();
     let mut file = File::create(path)?;
     CsvWriter::new(&mut file)
         .include_header(true)
@@ -349,32 +340,14 @@ fn save_csv_polars(df: &DataFrame, path: &Path, delimiter: u8) -> Result<()> {
 }
 
 fn save_json_polars(df: &DataFrame, path: &Path) -> Result<()> {
-    let mut out_df = if df.row_order.len() != df.df.height() || df.row_order != df.original_order {
-        let indices = IdxCa::new(
-            "".into(),
-            df.row_order.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        );
-        df.df.take(&indices)?
-    } else {
-        df.df.clone()
-    };
-
+    let mut out_df = df.to_display_polars_df();
     let mut file = File::create(path)?;
     JsonWriter::new(&mut file).finish(&mut out_df)?;
     Ok(())
 }
 
 fn save_parquet_polars(df: &DataFrame, path: &Path) -> Result<()> {
-    let mut out_df = if df.row_order.len() != df.df.height() || df.row_order != df.original_order {
-        let indices = IdxCa::new(
-            "".into(),
-            df.row_order.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        );
-        df.df.take(&indices)?
-    } else {
-        df.df.clone()
-    };
-
+    let mut out_df = df.to_display_polars_df();
     let mut file = File::create(path)?;
     ParquetWriter::new(&mut file).finish(&mut out_df)?;
     Ok(())
@@ -385,16 +358,7 @@ fn save_sqlite(df: &DataFrame, path: &Path) -> Result<()> {
     use rusqlite::Connection;
     let conn = Connection::open(path)?;
 
-    // Determine column info from visible rows
-    let ordered_df = if df.row_order.len() != df.df.height() || df.row_order != df.original_order {
-        let indices = IdxCa::new(
-            "".into(),
-            df.row_order.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        );
-        df.df.take(&indices)?
-    } else {
-        df.df.clone()
-    };
+    let ordered_df = df.to_display_polars_df();
 
     let col_names: Vec<String> = ordered_df
         .get_column_names()
@@ -454,15 +418,7 @@ fn save_sqlite(df: &DataFrame, path: &Path) -> Result<()> {
 fn save_xlsx(df: &DataFrame, path: &Path) -> Result<()> {
     use rust_xlsxwriter::{Format, Workbook};
 
-    let ordered_df = if df.row_order.len() != df.df.height() || df.row_order != df.original_order {
-        let indices = IdxCa::new(
-            "".into(),
-            df.row_order.iter().map(|&i| i as u32).collect::<Vec<_>>(),
-        );
-        df.df.take(&indices)?
-    } else {
-        df.df.clone()
-    };
+    let ordered_df = df.to_display_polars_df();
 
     let col_names: Vec<String> = ordered_df
         .get_column_names()

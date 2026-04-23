@@ -36,8 +36,10 @@ pub enum AppMode {
     Calculating,
     /// Asking user for confirmation before quitting with unsaved changes
     ConfirmQuit,
-    /// Waiting for second key after 'y' to select copy format (yy=row, yc=cell, yl=column)
+    /// Waiting for second key after 'y' (yr=row, yc=cell, yz=column, yR=sel.rows, yZ=sel.col)
     YPrefix,
+    /// User is selecting a copy format from the popup (entered via yr/yz/yR/yZ)
+    CopyFormatSelect,
     /// User is selecting a currency for a Currency column
     CurrencySelect,
     /// User is typing a formula for a pivot table (Shift+W)
@@ -89,6 +91,7 @@ pub enum Action {
     /// Pop the top sheet from the stack (or quit if it's the root sheet)
     PopSheet,
     Undo,
+    Redo,
     MoveUp,
     MoveDown,
     MoveLeft,
@@ -279,14 +282,16 @@ pub enum Action {
     UnselectAllRows, // 'gu' — unselect all visible rows
 
     // ── Clipboard & row operations ────────────────────────────────────────────
-    CopySelectedRows,   // 'y' → enters YPrefix
-    PasteRows,          // 'p' — paste rows from clipboard
-    DeleteSelectedRows, // 'd' — delete selected rows
-    EnterYPrefix,       // 'y' — enter y-prefix mode for copy
-    CancelYPrefix,      // Esc in YPrefix mode
-    CopyCurrentRow,     // 'yy' — copy current row as TSV
-    CopyCurrentCell,    // 'yc' — copy current cell value
-    CopyCurrentColumn,  // 'yl' — copy current column as newline-separated list
+    PasteRows,                   // 'p' — paste rows from clipboard
+    DeleteSelectedRows,          // 'd' — delete selected rows
+    EnterYPrefix,                // 'y' — enter y-prefix mode for copy
+    CancelYPrefix,               // Esc in YPrefix mode
+    CopyCurrentCell,             // 'yc' — copy current cell value directly
+    OpenCopyFormat(CopyPending), // yr/yz/yR/yZ — open format-selection popup
+    CopyFormatSelectUp,
+    CopyFormatSelectDown,
+    ApplyCopyFormat,
+    CancelCopyFormat,
 
     // ── Derived sheets ────────────────────────────────────────────────────────
     CreateSheetFromSelection, // '"' — create new sheet from selected rows
@@ -375,6 +380,19 @@ impl JoinContextItem {
             Self::XlsxSheet { sheet_name, .. } => sheet_name.clone(),
         }
     }
+}
+
+/// Identifies which copy operation is pending when the format-select popup is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyPending {
+    /// yr — selected rows (column-selection aware) OR current row if nothing selected
+    SmartRows,
+    /// yz — current column values for selected rows (only when rows ARE selected)
+    SmartColumn,
+    /// yZ — entire current column (all visible rows)
+    WholeColumn,
+    /// yR — entire table (column-selection aware)
+    WholeTable,
 }
 
 /// Inferred (or user-assigned) column data type used to pick the right sort comparator.

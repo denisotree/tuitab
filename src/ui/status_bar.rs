@@ -44,6 +44,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         AppMode::InsertingColumn => " INSERT ",
         AppMode::ConfirmQuit => " CONFIRM",
         AppMode::YPrefix => " COPY    ",
+        AppMode::CopyFormatSelect => " COPY-FMT",
         AppMode::CurrencySelect => " CURRENCY",
         AppMode::PivotTableInput => " PIVOT   ",
         AppMode::PartitionSelect => " PART.   ",

@@ -117,6 +117,87 @@ impl DataFrame {
         Self::anyvalue_to_string(val)
     }
 
+    /// Format a cell value applying the column's type (Percentage, Currency, Float precision).
+    /// Returns the same string a user sees on screen.
+    pub fn format_display(&self, physical_row: usize, col: usize) -> String {
+        let raw = self.get_physical(physical_row, col);
+        if raw.is_empty() || col >= self.columns.len() {
+            return raw;
+        }
+        let meta = &self.columns[col];
+        let p = meta.precision as usize;
+        match meta.col_type {
+            ColumnType::Percentage => {
+                if let Ok(f) = raw.parse::<f64>() {
+                    return format!("{:.*}%", p, f * 100.0);
+                }
+            }
+            ColumnType::Currency => {
+                if let Ok(f) = raw.parse::<f64>() {
+                    let sym = meta.currency.map(|k| k.symbol()).unwrap_or("$");
+                    let prefix = meta.currency.map(|k| k.is_prefix()).unwrap_or(true);
+                    if f < 0.0 {
+                        let abs_f = f.abs();
+                        return if prefix {
+                            format!("({}{:.*})", sym, p, abs_f)
+                        } else {
+                            format!("({:.*}{})", p, abs_f, sym)
+                        };
+                    } else {
+                        return if prefix {
+                            format!("{}{:.*}", sym, p, f)
+                        } else {
+                            format!("{:.*}{}", p, f, sym)
+                        };
+                    }
+                }
+            }
+            ColumnType::Float => {
+                if let Ok(f) = raw.parse::<f64>() {
+                    return format!("{:.*}", p, f);
+                }
+            }
+            _ => {}
+        }
+        raw
+    }
+
+    /// Build a Polars DataFrame where Percentage / Currency / Float columns are
+    /// replaced by their display strings, respecting the current row_order.
+    /// Used by save functions so exported files match what the user sees on screen.
+    pub fn to_display_polars_df(&self) -> polars::prelude::DataFrame {
+        use polars::prelude::{Column, Series};
+        let nrows = self.row_order.len();
+        let cols: Vec<Column> = self
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(col_idx, meta)| {
+                let needs_fmt = matches!(
+                    meta.col_type,
+                    ColumnType::Percentage | ColumnType::Currency | ColumnType::Float
+                );
+                if needs_fmt {
+                    let values: Vec<String> = (0..nrows)
+                        .map(|r| self.format_display(self.row_order[r], col_idx))
+                        .collect();
+                    Series::new(meta.name.clone().into(), values).into()
+                } else {
+                    // Keep original series but reorder to match row_order
+                    let orig = &self.df.columns()[col_idx];
+                    if nrows == self.df.height() && self.row_order == self.original_order {
+                        orig.clone()
+                    } else {
+                        let idx: Vec<u32> = self.row_order.iter().map(|&i| i as u32).collect();
+                        let idx_ca = polars::prelude::IdxCa::new("".into(), idx);
+                        orig.take(&idx_ca).unwrap_or_else(|_| orig.clone())
+                    }
+                }
+            })
+            .collect();
+        polars::prelude::DataFrame::new_infer_height(cols).unwrap_or_else(|_| self.df.clone())
+    }
+
     /// Overwrite the cell at physical (`physical_row`, `col`) with `value`.
     ///
     /// Percentage and currency columns receive special pre-processing before the
@@ -195,6 +276,18 @@ impl DataFrame {
     }
 
     /// Cast column `col_idx` to `col_type`.
+    /// Returns true if the string series contains at least one value ending with `%`.
+    fn series_looks_like_percent(series: &polars::prelude::Column) -> bool {
+        if let Ok(str_ca) = series.str() {
+            str_ca
+                .into_iter()
+                .flatten()
+                .any(|s| s.trim().ends_with('%'))
+        } else {
+            false
+        }
+    }
+
     ///
     /// Updates both the Polars `Series` dtype and the corresponding [`crate::data::column::ColumnMeta`].
     /// Returns an error string if the Polars cast fails (e.g. non-numeric string → integer).
@@ -405,6 +498,49 @@ impl DataFrame {
                     .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
             };
             new_series
+        } else if matches!(
+            col_type,
+            ColumnType::Float | ColumnType::Percentage | ColumnType::Integer
+        ) && series.dtype() == &polars::prelude::DataType::String
+            && Self::series_looks_like_percent(series)
+        {
+            let str_ca = series.str().map_err(|e| e.to_string())?;
+            match col_type {
+                ColumnType::Percentage => {
+                    let vals: Vec<Option<f64>> = str_ca
+                        .into_iter()
+                        .map(|opt| {
+                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                                .map(|f| f / 100.0)
+                        })
+                        .collect();
+                    Column::from(Series::new(series.name().clone(), vals))
+                }
+                ColumnType::Float => {
+                    let vals: Vec<Option<f64>> = str_ca
+                        .into_iter()
+                        .map(|opt| {
+                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                        })
+                        .collect();
+                    Column::from(Series::new(series.name().clone(), vals))
+                }
+                ColumnType::Integer => {
+                    let vals: Vec<Option<i64>> = str_ca
+                        .into_iter()
+                        .map(|opt| {
+                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                                .map(|f| f.round() as i64)
+                        })
+                        .collect();
+                    Column::from(
+                        Series::new(series.name().clone(), vals)
+                            .strict_cast(&polars::prelude::DataType::Int64)
+                            .map_err(|e| e.to_string())?,
+                    )
+                }
+                _ => unreachable!(),
+            }
         } else {
             series
                 .strict_cast(&target_dtype)
@@ -414,6 +550,16 @@ impl DataFrame {
         self.df.with_column(new_series).map_err(|e| e.to_string())?;
 
         self.columns[col_idx].col_type = col_type;
+        // Reset precision to the type default when changing to a numeric type
+        // so that a column previously formatted as Percentage (precision=1) shows
+        // the expected 2 decimal places when switched to Float.
+        if matches!(
+            col_type,
+            ColumnType::Float | ColumnType::Percentage | ColumnType::Currency
+        ) && self.columns[col_idx].precision < 2
+        {
+            self.columns[col_idx].precision = 2;
+        }
         self.aggregates_cache = None;
         self.modified = true;
         Ok(())
@@ -631,34 +777,16 @@ impl DataFrame {
             }
         }
 
-        // Fallback for non-native and combine results
+        // Combine native results with string-fallback for missing entries
         for (col_idx, col_meta) in self.columns.iter().enumerate() {
             if col_meta.aggregators.is_empty() {
                 continue;
             }
 
-            // Prepare string values only if there's a fallback aggregator needed
-            let needs_fallback = col_meta
-                .aggregators
-                .iter()
-                .any(|agg| agg.to_expr(&col_meta.name).is_none());
-            let values = if needs_fallback {
-                self.row_order
-                    .iter()
-                    .map(|&row_idx| {
-                        let series = &self.df.columns()[col_idx];
-                        if let Ok(v) = series.get(row_idx) {
-                            Self::anyvalue_to_string(&v)
-                        } else {
-                            String::new()
-                        }
-                    })
-                    .collect::<Vec<String>>()
-            } else {
-                Vec::new()
-            };
-
             let mut col_aggs = Vec::new();
+            // Lazily collected string values — only when a native result is absent
+            let mut fallback_values: Option<Vec<String>> = None;
+
             for (agg_idx, agg) in col_meta.aggregators.iter().enumerate() {
                 if !agg.is_compatible(col_meta.col_type) {
                     continue;
@@ -678,8 +806,22 @@ impl DataFrame {
                         native_val.clone()
                     }
                 } else {
+                    // Native result absent (no expr or polars path failed): use string fallback
+                    let values = fallback_values.get_or_insert_with(|| {
+                        self.row_order
+                            .iter()
+                            .map(|&row_idx| {
+                                let series = &self.df.columns()[col_idx];
+                                if let Ok(v) = series.get(row_idx) {
+                                    Self::anyvalue_to_string(&v)
+                                } else {
+                                    String::new()
+                                }
+                            })
+                            .collect()
+                    });
                     agg.compute(
-                        &values,
+                        values,
                         col_meta.col_type,
                         col_meta.precision,
                         col_meta.currency,
@@ -707,7 +849,7 @@ impl DataFrame {
         if col_idx < self.columns.len() {
             let col = &mut self.columns[col_idx];
             if !agg.is_compatible(col.col_type) {
-                return Err("Aggregator not compatible with column type (press # or ~ to change)");
+                return Err("Aggregator not compatible with column type (use 't' to change type)");
             }
             if !col.aggregators.contains(&agg) {
                 col.aggregators.push(agg);
@@ -1169,7 +1311,7 @@ impl DataFrame {
             .unwrap_or(1) as usize;
 
         const BAR_WIDTH: usize = 20;
-        let mut pct_values: Vec<String> = Vec::with_capacity(grouped.height());
+        let mut pct_values: Vec<f64> = Vec::with_capacity(grouped.height());
         let mut bar_values: Vec<String> = Vec::with_capacity(grouped.height());
 
         for i in 0..grouped.height() {
@@ -1179,7 +1321,7 @@ impl DataFrame {
                 .ok()
                 .and_then(|v| v.try_extract::<u64>().ok())
                 .unwrap_or(0) as usize;
-            pct_values.push(format!("{:.1}%", (c as f64 / total.max(1.0)) * 100.0));
+            pct_values.push(c as f64 / total.max(1.0));
             bar_values.push(crate::app::build_bar(c, max_count, BAR_WIDTH));
         }
 
@@ -1210,7 +1352,10 @@ impl DataFrame {
             columns.push(meta);
         }
 
-        columns.push(crate::data::column::ColumnMeta::new("Pct".to_string()));
+        let mut pct_meta = crate::data::column::ColumnMeta::new("Pct".to_string());
+        pct_meta.col_type = ColumnType::Percentage;
+        pct_meta.precision = 1;
+        columns.push(pct_meta);
         columns.push(crate::data::column::ColumnMeta::new("Bar".to_string()));
 
         Ok((final_df, columns))
@@ -1291,7 +1436,7 @@ impl DataFrame {
             .unwrap_or(1) as usize;
 
         const BAR_WIDTH: usize = 20;
-        let mut pct_values: Vec<String> = Vec::with_capacity(grouped.height());
+        let mut pct_values: Vec<f64> = Vec::with_capacity(grouped.height());
         let mut bar_values: Vec<String> = Vec::with_capacity(grouped.height());
 
         for i in 0..grouped.height() {
@@ -1301,7 +1446,7 @@ impl DataFrame {
                 .ok()
                 .and_then(|v| v.try_extract::<u64>().ok())
                 .unwrap_or(0) as usize;
-            pct_values.push(format!("{:.1}%", (c as f64 / total.max(1.0)) * 100.0));
+            pct_values.push(c as f64 / total.max(1.0));
             bar_values.push(crate::app::build_bar(c, max_count, BAR_WIDTH));
         }
 
@@ -1331,7 +1476,10 @@ impl DataFrame {
             columns.push(meta);
         }
 
-        columns.push(crate::data::column::ColumnMeta::new("Pct".to_string()));
+        let mut pct_meta = crate::data::column::ColumnMeta::new("Pct".to_string());
+        pct_meta.col_type = ColumnType::Percentage;
+        pct_meta.precision = 1;
+        columns.push(pct_meta);
         columns.push(crate::data::column::ColumnMeta::new("Bar".to_string()));
 
         Ok((final_df, columns))

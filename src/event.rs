@@ -35,6 +35,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('[') => Action::SortAscending,
             KeyCode::Char(']') => Action::SortDescending,
             KeyCode::Enter => Action::OpenRow,
+            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Redo,
             KeyCode::Char('r') => Action::ResetSort,
             KeyCode::Char('R') => Action::ReloadFile,
             // Search (replaces old filter)
@@ -62,7 +63,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('T') => Action::TransposeTable,
             KeyCode::Char('e') => Action::StartEdit,
             KeyCode::Char('E') => Action::OpenExternalEditor,
-            // Undo
+            // Undo / Redo
             KeyCode::Char('U') => Action::Undo,
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => Action::Undo,
             // Save file (Ctrl+S)
@@ -354,12 +355,22 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
 
         // Y-prefix copy mode
         AppMode::YPrefix => match key.code {
-            KeyCode::Char('y') => Action::CopyCurrentRow,
             KeyCode::Char('c') => Action::CopyCurrentCell,
-            KeyCode::Char('l') => Action::CopyCurrentColumn,
-            KeyCode::Char('s') => Action::CopySelectedRows,
+            KeyCode::Char('r') => Action::OpenCopyFormat(crate::types::CopyPending::SmartRows),
+            KeyCode::Char('z') => Action::OpenCopyFormat(crate::types::CopyPending::SmartColumn),
+            KeyCode::Char('Z') => Action::OpenCopyFormat(crate::types::CopyPending::WholeColumn),
+            KeyCode::Char('R') => Action::OpenCopyFormat(crate::types::CopyPending::WholeTable),
             KeyCode::Esc => Action::CancelYPrefix,
             _ => Action::CancelYPrefix,
+        },
+
+        // Copy format selection popup
+        AppMode::CopyFormatSelect => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::CopyFormatSelectUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::CopyFormatSelectDown,
+            KeyCode::Enter => Action::ApplyCopyFormat,
+            KeyCode::Esc => Action::CancelCopyFormat,
+            _ => Action::None,
         },
 
         // Help overlay — any key closes it

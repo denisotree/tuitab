@@ -53,6 +53,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | AppMode::Calculating
         | AppMode::ConfirmQuit
         | AppMode::YPrefix
+        | AppMode::CopyFormatSelect
         | AppMode::CurrencySelect
         | AppMode::PivotTableInput
         | AppMode::PartitionSelect
@@ -191,6 +192,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     app.join_right_key_index,
                     frame.area(),
                 );
+            }
+            if app.mode == AppMode::CopyFormatSelect {
+                popup::render_copy_format_popup(frame, app, frame.area());
             }
         }
         AppMode::Loading => {
