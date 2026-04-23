@@ -1,6 +1,6 @@
 [package]
 name = "tuitab"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 authors = ["denisotree"]
 description = "Terminal tabular data explorer — CSV/JSON/Parquet/Excel/SQLite viewer with filtering, sorting, pivot tables, and charts"
@@ -52,6 +52,7 @@ calamine = "0.22"
 rusqlite = { version = "0.31", features = [] }
 duckdb = { version = "1", features = ["bundled"] }
 rust_xlsxwriter = "0.80"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [package.metadata.docs.rs]
 # Build only for Linux x86_64 (docs.rs default); enables bundled SQLite so

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-23
+
+### Added
+- Copy/yank system: `yr` (rows), `yz` (column values), `yZ` (whole column), `yR` (whole table), `yc` (cell) — each opens a format popup (TSV, CSV, JSON, Markdown)
+- Redo: `Ctrl+R` complements existing undo (`U` / `Shift+U`)
+- JSON export/copy now preserves column order (previously keys were sorted alphabetically)
+- Copy and save operations output display-formatted values — percentage columns export as `"30%"`, not `"0.3"`
+- `Pct` column in frequency tables (`Shift+F`, `gF`) is now typed as Percentage and displays as `"42.3%"`
+- String columns containing `"30%"` values can be converted to Float, Percentage, or Integer via `t` (percent suffix stripped and scaled appropriately)
+
+### Fixed
+- Aggregation footer now shows results for Percentage columns on first use (previously showed empty until type was reassigned via `t`)
+- Precision resets to 2 decimal places when switching a column to Float/Percentage/Currency type
+- Error message when adding an incompatible aggregator now references `t` instead of removed keybindings
+
 ## [0.3.1] - 2026-04-22
 
 ### Fixed
@@ -101,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/denisotree/tuitab/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/denisotree/tuitab/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/denisotree/tuitab/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/denisotree/tuitab/compare/v0.1.5...v0.2.0
