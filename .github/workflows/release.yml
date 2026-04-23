@@ -52,6 +52,7 @@ jobs:
       - name: Build
         env:
           CARGO_BUILD_JOBS: ${{ matrix.cargo_build_jobs || '2' }}
+          RUSTUP_TOOLCHAIN: stable
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)
