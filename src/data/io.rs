@@ -120,7 +120,26 @@ fn load_excel(path: &Path) -> Result<DataFrame> {
         .next()
         .ok_or_else(|| eyre!("Excel sheet has no headers"))?;
 
-    let headers: Vec<String> = header_row.iter().map(|c| c.to_string()).collect();
+    let raw_headers: Vec<String> = header_row.iter().map(|c| c.to_string()).collect();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let headers: Vec<String> = raw_headers
+        .into_iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let base = if h.is_empty() {
+                format!("column_{}", i + 1)
+            } else {
+                h
+            };
+            let count = seen.entry(base.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                base
+            } else {
+                format!("{}_{}", base, count)
+            }
+        })
+        .collect();
     let col_count = headers.len();
 
     // We will collect strings for each column to build Polars series
@@ -641,7 +660,26 @@ pub fn load_excel_sheet_by_name(path: &Path, sheet_name: &str) -> Result<DataFra
         .next()
         .ok_or_else(|| eyre!("Sheet '{}' has no headers", sheet_name))?;
 
-    let headers: Vec<String> = header_row.iter().map(|c| c.to_string()).collect();
+    let raw_headers: Vec<String> = header_row.iter().map(|c| c.to_string()).collect();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let headers: Vec<String> = raw_headers
+        .into_iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let base = if h.is_empty() {
+                format!("column_{}", i + 1)
+            } else {
+                h
+            };
+            let count = seen.entry(base.clone()).or_insert(0);
+            *count += 1;
+            if *count == 1 {
+                base
+            } else {
+                format!("{}_{}", base, count)
+            }
+        })
+        .collect();
     let col_count = headers.len();
     let mut cols_data: Vec<Vec<String>> = vec![Vec::new(); col_count];
 
