@@ -1499,27 +1499,26 @@ impl DataFrame {
         // 3. Build ColumnMeta
         // Infer the display type for value columns from the formula.
         // Simple aggregations inherit the source column's type; compound expressions → Float.
-        let (value_col_type, value_precision, value_currency) =
-            match formula {
-                crate::data::expression::Expr::FunctionCall { name, args } => {
-                    let src = args.first().and_then(|a| {
-                        if let crate::data::expression::Expr::ColumnRef(n) = a {
-                            self.columns.iter().find(|c| &c.name == n)
-                        } else {
-                            None
-                        }
-                    });
-                    match name.as_str() {
-                        "count" => (ColumnType::Integer, 0u8, None),
-                        "sum" | "min" | "max" | "mean" | "median" => match src {
-                            Some(m) => (m.col_type, m.precision, m.currency),
-                            None => (ColumnType::Float, 2, None),
-                        },
-                        _ => (ColumnType::Float, 2, None),
+        let (value_col_type, value_precision, value_currency) = match formula {
+            crate::data::expression::Expr::FunctionCall { name, args } => {
+                let src = args.first().and_then(|a| {
+                    if let crate::data::expression::Expr::ColumnRef(n) = a {
+                        self.columns.iter().find(|c| &c.name == n)
+                    } else {
+                        None
                     }
+                });
+                match name.as_str() {
+                    "count" => (ColumnType::Integer, 0u8, None),
+                    "sum" | "min" | "max" | "mean" | "median" => match src {
+                        Some(m) => (m.col_type, m.precision, m.currency),
+                        None => (ColumnType::Float, 2, None),
+                    },
+                    _ => (ColumnType::Float, 2, None),
                 }
-                _ => (ColumnType::Float, 2, None),
-            };
+            }
+            _ => (ColumnType::Float, 2, None),
+        };
 
         let mut columns = Vec::new();
         for i in 0..pivoted.width() {
