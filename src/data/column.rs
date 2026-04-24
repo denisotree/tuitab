@@ -48,7 +48,7 @@ impl ColumnMeta {
             precision: 2,
             pinned: false,
             currency: None,
-            width_expanded: true,
+            width_expanded: false,
             selected: false,
             backup_datetime_str: None,
         }

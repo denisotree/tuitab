@@ -68,6 +68,26 @@ impl AggregatorKind {
         ]
     }
 
+    /// Whether this aggregator's result inherits the source column's display type
+    /// (col_type, currency, precision).  Count/Distinct always produce Integer;
+    /// Stdev/List/Set produce dimensionless results.
+    pub fn preserves_col_type(self) -> bool {
+        matches!(
+            self,
+            Self::Sum
+                | Self::Avg
+                | Self::Min
+                | Self::Max
+                | Self::Median
+                | Self::Random
+                | Self::P5
+                | Self::P25
+                | Self::P50
+                | Self::P75
+                | Self::P95
+        )
+    }
+
     /// Whether this aggregator is compatible with the given column type.
     /// Count, Distinct, Min, Max work with all types.
     /// Numeric aggregators (Sum, Avg, Median, Stdev, percentiles) require Integer or Float.

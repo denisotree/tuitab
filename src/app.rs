@@ -2478,14 +2478,20 @@ impl App {
             };
 
             let word_lower = word.to_lowercase();
-            // Collect candidates
-            let mut matches = Vec::new();
+            let mut prefix_matches = Vec::new();
+            let mut contains_matches = Vec::new();
             for col in &s.dataframe.columns {
                 let lower = col.name.to_lowercase();
-                if lower.starts_with(&word_lower) || lower.contains(&word_lower) {
-                    matches.push(col.name.clone());
+                if lower.starts_with(&word_lower) {
+                    prefix_matches.push(col.name.clone());
+                } else if lower.contains(&word_lower) {
+                    contains_matches.push(col.name.clone());
                 }
             }
+            prefix_matches.sort();
+            contains_matches.sort();
+            prefix_matches.extend(contains_matches);
+            let matches = prefix_matches;
 
             if matches.is_empty() {
                 return;
@@ -2521,13 +2527,20 @@ impl App {
             };
 
             let word_lower = word.to_lowercase();
-            let mut matches = Vec::new();
+            let mut prefix_matches = Vec::new();
+            let mut contains_matches = Vec::new();
             for col in &s.dataframe.columns {
                 let lower = col.name.to_lowercase();
-                if lower.starts_with(&word_lower) || lower.contains(&word_lower) {
-                    matches.push(col.name.clone());
+                if lower.starts_with(&word_lower) {
+                    prefix_matches.push(col.name.clone());
+                } else if lower.contains(&word_lower) {
+                    contains_matches.push(col.name.clone());
                 }
             }
+            prefix_matches.sort();
+            contains_matches.sort();
+            prefix_matches.extend(contains_matches);
+            let matches = prefix_matches;
 
             if matches.is_empty() {
                 return;
@@ -2562,21 +2575,28 @@ impl App {
             };
 
             let word_lower = word.to_lowercase();
-            let mut matches = Vec::new();
-            // Column names first
+            let mut prefix_matches = Vec::new();
+            let mut contains_matches = Vec::new();
             for col in &s.dataframe.columns {
                 let lower = col.name.to_lowercase();
-                if lower.starts_with(&word_lower) || lower.contains(&word_lower) {
-                    matches.push(col.name.clone());
+                if lower.starts_with(&word_lower) {
+                    prefix_matches.push(col.name.clone());
+                } else if lower.contains(&word_lower) {
+                    contains_matches.push(col.name.clone());
                 }
             }
-            // Then aggregation function names
             for func in AGG_FUNCS {
                 let lower = func.to_lowercase();
-                if lower.starts_with(&word_lower) && !matches.iter().any(|m| m == func) {
-                    matches.push(func.to_string());
+                if lower.starts_with(&word_lower)
+                    && !prefix_matches.iter().any(|m| m.as_str() == *func)
+                {
+                    prefix_matches.push(func.to_string());
                 }
             }
+            prefix_matches.sort();
+            contains_matches.sort();
+            prefix_matches.extend(contains_matches);
+            let matches = prefix_matches;
 
             if matches.is_empty() {
                 return;

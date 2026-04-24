@@ -1025,105 +1025,27 @@ impl DataFrame {
     /// over the raw `&str` slices in the ChunkedArray — no `series.get()` per
     /// row, no `String` allocation per cell.
     pub fn calc_widths(&mut self, max_width: u16, sample_size: usize) {
-        use polars::prelude::DataType;
-        let total_rows = self.df.height();
-        let sample_end = sample_size.min(total_rows);
-
-        for (col_idx, col_meta) in self.columns.iter_mut().enumerate() {
-            if col_idx >= self.df.width() {
-                continue;
-            }
-            let series = self.df.columns()[col_idx].as_materialized_series();
-
-            // Fixed-width estimate for types whose max display width is bounded
-            let fixed_width: Option<u16> = match series.dtype() {
-                DataType::Boolean => Some(5), // "false"
-                DataType::Int8 | DataType::UInt8 => Some(4),
-                DataType::Int16 | DataType::UInt16 => Some(6),
-                DataType::Int32 | DataType::UInt32 => Some(11),
-                DataType::Int64 | DataType::UInt64 => Some(20),
-                DataType::Float32 => Some(14),
-                DataType::Float64 => Some(18),
-                DataType::Date => Some(10),
-                _ => None,
-            };
-
-            let max_val_width: u16 = if let Some(w) = fixed_width {
-                w
-            } else {
-                // String / Categorical / Null — walk raw &str slices
-                let str_series = series
-                    .cast(&DataType::String)
-                    .unwrap_or_else(|_| series.clone());
-                if let Ok(ca) = str_series.str() {
-                    ca.into_iter()
-                        .take(sample_end)
-                        .flatten()
-                        .map(|s| UnicodeWidthStr::width(s) as u16)
-                        .max()
-                        .unwrap_or(0)
-                } else {
-                    // Last-resort fallback
-                    (0..sample_end)
-                        .filter_map(|i| series.get(i).ok())
-                        .map(|v| {
-                            UnicodeWidthStr::width(Self::anyvalue_to_string(&v).as_str()) as u16
-                        })
-                        .max()
-                        .unwrap_or(0)
-                }
-            };
-
-            let header_w = UnicodeWidthStr::width(col_meta.name.as_str()) as u16 + 2;
-            let actual_min = col_meta.min_width.max(header_w);
-            col_meta.width = actual_min.max(max_val_width).min(max_width);
+        for col_idx in 0..self.columns.len() {
+            self.calc_column_width(col_idx, max_width, sample_size);
         }
     }
 
-    /// Calculate the display width for a single column (same strategy as `calc_widths`).
+    /// Calculate the display width for a single column based on actual formatted values.
     pub fn calc_column_width(&mut self, col_idx: usize, max_width: u16, sample_size: usize) {
-        use polars::prelude::DataType;
         if col_idx >= self.df.width() || col_idx >= self.columns.len() {
             return;
         }
 
         let total_rows = self.df.height();
         let sample_end = sample_size.min(total_rows);
-        let series = self.df.columns()[col_idx].as_materialized_series();
 
-        let fixed_width: Option<u16> = match series.dtype() {
-            DataType::Boolean => Some(5),
-            DataType::Int8 | DataType::UInt8 => Some(4),
-            DataType::Int16 | DataType::UInt16 => Some(6),
-            DataType::Int32 | DataType::UInt32 => Some(11),
-            DataType::Int64 | DataType::UInt64 => Some(20),
-            DataType::Float32 => Some(14),
-            DataType::Float64 => Some(18),
-            DataType::Date => Some(10),
-            _ => None,
-        };
-
-        let max_val_width: u16 = if let Some(w) = fixed_width {
-            w
-        } else {
-            let str_series = series
-                .cast(&DataType::String)
-                .unwrap_or_else(|_| series.clone());
-            if let Ok(ca) = str_series.str() {
-                ca.into_iter()
-                    .take(sample_end)
-                    .flatten()
-                    .map(|s| UnicodeWidthStr::width(s) as u16)
-                    .max()
-                    .unwrap_or(0)
-            } else {
-                (0..sample_end)
-                    .filter_map(|i| series.get(i).ok())
-                    .map(|v| UnicodeWidthStr::width(Self::anyvalue_to_string(&v).as_str()) as u16)
-                    .max()
-                    .unwrap_or(0)
-            }
-        };
+        let max_val_width: u16 = (0..sample_end)
+            .map(|physical_row| {
+                let text = self.format_display(physical_row, col_idx);
+                UnicodeWidthStr::width(text.as_str()) as u16
+            })
+            .max()
+            .unwrap_or(0);
 
         let col_meta = &mut self.columns[col_idx];
         let header_w = UnicodeWidthStr::width(col_meta.name.as_str()) as u16 + 2;
@@ -1276,12 +1198,19 @@ impl DataFrame {
                 continue; // skip the grouping column itself
             }
             let agg_col_name = self.columns[agg_col_idx].name.clone();
+            let src_meta = &self.columns[agg_col_idx];
             for agg_kind in aggregators {
                 if let Some(expr) = agg_kind.to_expr(&agg_col_name) {
                     let alias_name = format!("{}:{}", agg_col_name, agg_kind.name());
                     agg_exprs.push(expr.alias(&alias_name));
                     let mut meta = crate::data::column::ColumnMeta::new(alias_name);
-                    meta.col_type = crate::types::ColumnType::Float;
+                    if agg_kind.preserves_col_type() {
+                        meta.col_type = src_meta.col_type;
+                        meta.currency = src_meta.currency;
+                        meta.precision = src_meta.precision;
+                    } else {
+                        meta.col_type = crate::types::ColumnType::Integer;
+                    }
                     extra_metas.push(meta);
                 }
             }
@@ -1340,8 +1269,8 @@ impl DataFrame {
         // We append:                     Pct, Bar
         let mut columns: Vec<crate::data::column::ColumnMeta> = Vec::new();
 
-        let mut val_meta = crate::data::column::ColumnMeta::new(self.columns[col_idx].name.clone());
-        val_meta.col_type = self.columns[col_idx].col_type;
+        let mut val_meta = self.columns[col_idx].clone();
+        val_meta.aggregators.clear();
         columns.push(val_meta);
 
         let mut count_meta = crate::data::column::ColumnMeta::new("Count".to_string());
@@ -1400,12 +1329,19 @@ impl DataFrame {
                 continue; // skip columns that are part of the grouping
             }
             let agg_col_name = self.columns[agg_col_idx].name.clone();
+            let src_meta = &self.columns[agg_col_idx];
             for agg_kind in aggregators {
                 if let Some(expr) = agg_kind.to_expr(&agg_col_name) {
                     let alias_name = format!("{}:{}", agg_col_name, agg_kind.name());
                     agg_exprs.push(expr.alias(&alias_name));
                     let mut meta = crate::data::column::ColumnMeta::new(alias_name);
-                    meta.col_type = crate::types::ColumnType::Float;
+                    if agg_kind.preserves_col_type() {
+                        meta.col_type = src_meta.col_type;
+                        meta.currency = src_meta.currency;
+                        meta.precision = src_meta.precision;
+                    } else {
+                        meta.col_type = crate::types::ColumnType::Integer;
+                    }
                     extra_metas.push(meta);
                 }
             }
@@ -1553,7 +1489,7 @@ impl DataFrame {
                     names: Arc::from([PlSmallStr::from_static("pivot_value")]),
                     strict: true,
                 },
-                col("pivot_value").first(),
+                element().first(),
                 true,
                 "_".into(),
             )
@@ -1561,33 +1497,54 @@ impl DataFrame {
             .map_err(|e| format!("Pivot error: {}", e))?;
 
         // 3. Build ColumnMeta
+        // Infer the display type for value columns from the formula.
+        // Simple aggregations inherit the source column's type; compound expressions → Float.
+        let (value_col_type, value_precision, value_currency) =
+            match formula {
+                crate::data::expression::Expr::FunctionCall { name, args } => {
+                    let src = args.first().and_then(|a| {
+                        if let crate::data::expression::Expr::ColumnRef(n) = a {
+                            self.columns.iter().find(|c| &c.name == n)
+                        } else {
+                            None
+                        }
+                    });
+                    match name.as_str() {
+                        "count" => (ColumnType::Integer, 0u8, None),
+                        "sum" | "min" | "max" | "mean" | "median" => match src {
+                            Some(m) => (m.col_type, m.precision, m.currency),
+                            None => (ColumnType::Float, 2, None),
+                        },
+                        _ => (ColumnType::Float, 2, None),
+                    }
+                }
+                _ => (ColumnType::Float, 2, None),
+            };
+
         let mut columns = Vec::new();
         for i in 0..pivoted.width() {
             let series = &pivoted.columns()[i];
             let name = series.name().to_string();
-            let mut meta = crate::data::column::ColumnMeta::new(name);
 
-            // Map dtype to ColumnType
-            meta.col_type = match series.dtype() {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64 => ColumnType::Integer,
-                DataType::Float32 | DataType::Float64 => ColumnType::Float,
-                DataType::Date => ColumnType::Date,
-                DataType::Datetime(_, _) => ColumnType::Datetime,
-                _ => ColumnType::String,
-            };
-
-            // If it's one of the index columns, mark it as pinned
-            if row_index_cols.contains(&meta.name) {
+            // Index columns: clone source meta to preserve col_type, currency, precision
+            if row_index_cols.contains(&name) {
+                let mut meta = self
+                    .columns
+                    .iter()
+                    .find(|c| c.name == name)
+                    .cloned()
+                    .unwrap_or_else(|| crate::data::column::ColumnMeta::new(name));
+                meta.aggregators.clear();
                 meta.pinned = true;
+                columns.push(meta);
+                continue;
             }
 
+            // Value columns: use inferred formula result type
+            let mut meta = crate::data::column::ColumnMeta::new(name);
+            meta.col_type = value_col_type;
+            meta.precision = value_precision;
+            meta.currency = value_currency;
             columns.push(meta);
         }
 

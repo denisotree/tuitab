@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-04-24
+
+### Fixed
+- Pivot table (`Shift+W`) no longer fails with "explicit column references are not allowed in the `aggregate_function` of `pivot`" when using compound formulas like `sum(col) / count(col)` — replaced `col("pivot_value").first()` with the correct `element().first()` placeholder
+- Autocomplete now consistently prioritises prefix matches over substring matches and sorts each group alphabetically
+- Column auto-width (`_`) now always expands on first press instead of randomly collapsing — `width_expanded` was incorrectly initialised to `true`, so the first press collapsed the column to header width
+- Column auto-width now measures actual displayed values (respecting float precision, currency symbols, percentage formatting) instead of hardcoded per-type estimates
+- Groupby (`Shift+F`) and pivot (`Shift+W`) now preserve the source column's display type (`Currency`, `Percentage`, etc.) on the resulting columns — previously all aggregated value columns were downgraded to `Float`
+
 ## [0.3.6] - 2026-04-24
 
 ### Fixed
@@ -136,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/denisotree/tuitab/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/denisotree/tuitab/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/denisotree/tuitab/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/denisotree/tuitab/compare/v0.3.3...v0.3.4
