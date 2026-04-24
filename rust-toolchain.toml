@@ -1,5 +1,0 @@
-[toolchain]
-# Pin to a nightly before polars-ops 0.53 private unicode API breakage
-# (core::unicode::{Cased, Case_Ignorable} became private in nightly ≥ 2026-03-25).
-# Remove once polars 0.54+ ships with the fix.
-channel = "nightly-2026-03-15"
