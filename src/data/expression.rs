@@ -344,66 +344,10 @@ impl Expr {
                     Op::NotEq => {
                         return Value::Boolean(l != r);
                     }
-                    Op::Lt => {
-                        if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
-                            return Value::Boolean(n1 < n2);
-                        }
-                        if let (Value::String(s1), Value::String(s2)) = (&l, &r) {
-                            return Value::Boolean(s1 < s2);
-                        }
-                        if let (Value::Date(d1), Value::Date(d2)) = (&l, &r) {
-                            return Value::Boolean(d1 < d2);
-                        }
-                        if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (&l, &r) {
-                            return Value::Boolean(dt1 < dt2);
-                        }
-                        return Value::Null;
-                    }
-                    Op::Gt => {
-                        if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
-                            return Value::Boolean(n1 > n2);
-                        }
-                        if let (Value::String(s1), Value::String(s2)) = (&l, &r) {
-                            return Value::Boolean(s1 > s2);
-                        }
-                        if let (Value::Date(d1), Value::Date(d2)) = (&l, &r) {
-                            return Value::Boolean(d1 > d2);
-                        }
-                        if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (&l, &r) {
-                            return Value::Boolean(dt1 > dt2);
-                        }
-                        return Value::Null;
-                    }
-                    Op::Leq => {
-                        if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
-                            return Value::Boolean(n1 <= n2);
-                        }
-                        if let (Value::String(s1), Value::String(s2)) = (&l, &r) {
-                            return Value::Boolean(s1 <= s2);
-                        }
-                        if let (Value::Date(d1), Value::Date(d2)) = (&l, &r) {
-                            return Value::Boolean(d1 <= d2);
-                        }
-                        if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (&l, &r) {
-                            return Value::Boolean(dt1 <= dt2);
-                        }
-                        return Value::Null;
-                    }
-                    Op::Geq => {
-                        if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
-                            return Value::Boolean(n1 >= n2);
-                        }
-                        if let (Value::String(s1), Value::String(s2)) = (&l, &r) {
-                            return Value::Boolean(s1 >= s2);
-                        }
-                        if let (Value::Date(d1), Value::Date(d2)) = (&l, &r) {
-                            return Value::Boolean(d1 >= d2);
-                        }
-                        if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (&l, &r) {
-                            return Value::Boolean(dt1 >= dt2);
-                        }
-                        return Value::Null;
-                    }
+                    Op::Lt => return compare_ordered(&l, &r, std::cmp::Ordering::Less, false),
+                    Op::Gt => return compare_ordered(&l, &r, std::cmp::Ordering::Greater, false),
+                    Op::Leq => return compare_ordered(&l, &r, std::cmp::Ordering::Less, true),
+                    Op::Geq => return compare_ordered(&l, &r, std::cmp::Ordering::Greater, true),
                     _ => {}
                 }
 
@@ -593,12 +537,7 @@ impl Expr {
                                         return Value::Date(d);
                                     }
                                     // Try parsing as Datetime, extract date
-                                    for fmt in [
-                                        "%Y-%m-%d %H:%M:%S",
-                                        "%Y-%m-%d %H:%M:%S%.f",
-                                        "%Y-%m-%dT%H:%M:%S",
-                                        "%Y-%m-%dT%H:%M:%S%.f",
-                                    ] {
+                                    for fmt in crate::data::DATETIME_FORMATS {
                                         if let Ok(dt) =
                                             chrono::NaiveDateTime::parse_from_str(s, fmt)
                                         {
@@ -981,6 +920,26 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     }
 
     Ok(tokens)
+}
+
+/// Returns `Value::Boolean(l op r)` for ordered comparison types.
+/// `target` is `Ordering::Less` for `<`/`<=` and `Ordering::Greater` for `>`/`>=`.
+/// `allow_equal` adds equality to the comparison (i.e. `<=` vs `<`).
+fn compare_ordered(l: &Value, r: &Value, target: std::cmp::Ordering, allow_equal: bool) -> Value {
+    let matches = |ord: std::cmp::Ordering| ord == target || (allow_equal && ord == std::cmp::Ordering::Equal);
+    if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
+        return Value::Boolean(matches(n1.partial_cmp(&n2).unwrap_or(std::cmp::Ordering::Equal)));
+    }
+    if let (Value::String(s1), Value::String(s2)) = (l, r) {
+        return Value::Boolean(matches(s1.cmp(s2)));
+    }
+    if let (Value::Date(d1), Value::Date(d2)) = (l, r) {
+        return Value::Boolean(matches(d1.cmp(d2)));
+    }
+    if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (l, r) {
+        return Value::Boolean(matches(dt1.cmp(dt2)));
+    }
+    Value::Null
 }
 
 #[cfg(test)]

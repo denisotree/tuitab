@@ -295,12 +295,9 @@ impl DataFrame {
         if col_idx >= self.columns.len() {
             return Err("Column out of bounds".into());
         }
-        let old_type = self.columns[col_idx].col_type;
-        if old_type == col_type {
+        if self.columns[col_idx].col_type == col_type {
             return Ok(());
         }
-
-        let series = &self.df.columns()[col_idx];
 
         let target_dtype = match col_type {
             ColumnType::Integer => polars::prelude::DataType::Int64,
@@ -315,244 +312,59 @@ impl DataFrame {
             _ => polars::prelude::DataType::String,
         };
 
-        let new_series = if target_dtype == polars::prelude::DataType::Boolean
-            && series.dtype() == &polars::prelude::DataType::String
+        let series = &self.df.columns()[col_idx];
+        let src_dtype = series.dtype().clone();
+
+        let new_col = if target_dtype == polars::prelude::DataType::Boolean
+            && src_dtype == polars::prelude::DataType::String
         {
-            // Custom boolean parsing
-            let str_ca = series.str().map_err(|e| e.to_string())?;
-            let mut builder =
-                polars::prelude::BooleanChunkedBuilder::new(series.name().clone(), str_ca.len());
-            for opt_s in str_ca.into_iter() {
-                if let Some(s) = opt_s {
-                    let lower = s.trim().to_lowercase();
-                    if lower == "true" || lower == "1" || lower == "yes" {
-                        builder.append_value(true);
-                    } else if lower.is_empty() {
-                        builder.append_null();
-                    } else {
-                        builder.append_value(false);
-                    }
-                } else {
-                    builder.append_null();
-                }
-            }
-            polars::prelude::Column::from(builder.finish().into_series())
-        } else if col_type == ColumnType::Currency
-            && series.dtype() == &polars::prelude::DataType::String
+            Self::col_bool_from_str(series)?
+        } else if col_type == ColumnType::Currency && src_dtype == polars::prelude::DataType::String
         {
-            // Dirty float parsing for Currency
-            let str_ca = series.str().map_err(|e| e.to_string())?;
-            let parsed_vals: Vec<Option<f64>> = str_ca
-                .into_iter()
-                .map(|opt_s| {
-                    if let Some(s) = opt_s {
-                        let cleaned: String = s
-                            .chars()
-                            .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-                            .collect();
-                        cleaned.parse::<f64>().ok()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let new_series = Series::new(series.name().clone(), parsed_vals);
-            polars::prelude::Column::from(new_series)
+            Self::col_currency_from_str(series)?
+        } else if col_type == ColumnType::Date && src_dtype == polars::prelude::DataType::String {
+            Self::col_date_from_str(series)?
+        } else if col_type == ColumnType::Datetime && src_dtype == polars::prelude::DataType::String
+        {
+            Self::col_datetime_from_str(series)?
         } else if col_type == ColumnType::Date
-            && series.dtype() == &polars::prelude::DataType::String
+            && src_dtype == polars::prelude::DataType::Datetime(TimeUnit::Microseconds, None)
         {
-            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-            let str_ca = series.str().map_err(|e| e.to_string())?;
-            let days: Vec<Option<i32>> = str_ca
-                .into_iter()
-                .map(|opt_s| {
-                    let s = opt_s?.trim();
-                    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                        return Some((d - epoch).num_days() as i32);
-                    }
-                    for fmt in [
-                        "%Y-%m-%d %H:%M:%S",
-                        "%Y-%m-%d %H:%M:%S%.f",
-                        "%Y-%m-%dT%H:%M:%S",
-                        "%Y-%m-%dT%H:%M:%S%.f",
-                    ] {
-                        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
-                            return Some((dt.date() - epoch).num_days() as i32);
-                        }
-                    }
-                    None
-                })
-                .collect();
-            Column::from(
-                Series::new(series.name().clone(), days)
-                    .strict_cast(&polars::prelude::DataType::Date)
-                    .map_err(|e| format!("Cannot cast to Date. Error: {}", e))?,
-            )
-        } else if col_type == ColumnType::Datetime
-            && series.dtype() == &polars::prelude::DataType::String
-        {
-            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap();
-            let str_ca = series.str().map_err(|e| e.to_string())?;
-            let micros: Vec<Option<i64>> = str_ca
-                .into_iter()
-                .map(|opt_s| {
-                    let s = opt_s?.trim();
-                    for fmt in [
-                        "%Y-%m-%d %H:%M:%S%.f",
-                        "%Y-%m-%d %H:%M:%S",
-                        "%Y-%m-%dT%H:%M:%S%.f",
-                        "%Y-%m-%dT%H:%M:%S",
-                    ] {
-                        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
-                            let diff = dt - epoch;
-                            return diff
-                                .num_microseconds()
-                                .or_else(|| diff.num_seconds().checked_mul(1_000_000));
-                        }
-                    }
-                    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                        let dt = d.and_hms_opt(0, 0, 0).unwrap();
-                        let diff = dt - epoch;
-                        return diff
-                            .num_microseconds()
-                            .or_else(|| diff.num_seconds().checked_mul(1_000_000));
-                    }
-                    None
-                })
-                .collect();
-            Column::from(
-                Series::new(series.name().clone(), micros)
-                    .strict_cast(&polars::prelude::DataType::Datetime(
-                        TimeUnit::Microseconds,
-                        None,
-                    ))
-                    .map_err(|e| format!("Cannot cast to Datetime. Error: {}", e))?,
-            )
-        } else if col_type == ColumnType::Date
-            && series.dtype() == &polars::prelude::DataType::Datetime(TimeUnit::Microseconds, None)
-        {
-            // Datetime -> Date: save backup for recovery by converting to formatted strings
+            // Save backup strings so Datetime can be restored later
             if let Ok(str_series) = series.cast(&polars::prelude::DataType::String) {
                 if let Ok(str_ca) = str_series.str() {
-                    let backup_strs: Vec<Option<String>> = str_ca
-                        .into_iter()
-                        .map(|s| s.map(|x| x.to_string()))
-                        .collect();
-                    self.columns[col_idx].backup_datetime_str = Some(backup_strs);
+                    let backup: Vec<Option<String>> =
+                        str_ca.into_iter().map(|s| s.map(|x| x.to_string())).collect();
+                    self.columns[col_idx].backup_datetime_str = Some(backup);
                 }
             }
-
-            series
+            self.df.columns()[col_idx]
                 .strict_cast(&target_dtype)
                 .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
-        } else if col_type == ColumnType::Datetime
-            && series.dtype() == &polars::prelude::DataType::Date
-        {
-            // Date -> Datetime: restore from backup if available
-            let new_series = if let Some(backup) = &self.columns[col_idx].backup_datetime_str {
-                // Restore from backup by parsing the datetime strings
-                let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .unwrap()
-                    .and_hms_opt(0, 0, 0)
-                    .unwrap();
-                let micros: Vec<Option<i64>> = backup
-                    .iter()
-                    .map(|opt_s| {
-                        opt_s.as_ref().and_then(|s| {
-                            // Try parsing with microseconds
-                            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
-                            {
-                                let diff = dt - epoch;
-                                return diff
-                                    .num_microseconds()
-                                    .or_else(|| diff.num_seconds().checked_mul(1_000_000));
-                            }
-                            // Try without microseconds
-                            if let Ok(dt) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-                                let diff = dt - epoch;
-                                return diff
-                                    .num_microseconds()
-                                    .or_else(|| diff.num_seconds().checked_mul(1_000_000));
-                            }
-                            None
-                        })
-                    })
-                    .collect();
-                Column::from(
-                    Series::new(series.name().clone(), micros)
-                        .strict_cast(&polars::prelude::DataType::Datetime(
-                            TimeUnit::Microseconds,
-                            None,
-                        ))
-                        .map_err(|e| {
-                            format!("Cannot restore Datetime from backup. Error: {}", e)
-                        })?,
-                )
+        } else if col_type == ColumnType::Datetime && src_dtype == polars::prelude::DataType::Date {
+            // Restore from backup strings if available, otherwise plain cast
+            if let Some(backup) = &self.columns[col_idx].backup_datetime_str {
+                Self::col_datetime_from_backup(self.df.columns()[col_idx].name().clone(), backup)?
             } else {
-                // No backup: convert Date to Datetime with time 00:00:00
-                series
+                self.df.columns()[col_idx]
                     .strict_cast(&target_dtype)
                     .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
-            };
-            new_series
+            }
         } else if matches!(
             col_type,
             ColumnType::Float | ColumnType::Percentage | ColumnType::Integer
-        ) && series.dtype() == &polars::prelude::DataType::String
+        ) && src_dtype == polars::prelude::DataType::String
             && Self::series_looks_like_percent(series)
         {
-            let str_ca = series.str().map_err(|e| e.to_string())?;
-            match col_type {
-                ColumnType::Percentage => {
-                    let vals: Vec<Option<f64>> = str_ca
-                        .into_iter()
-                        .map(|opt| {
-                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
-                                .map(|f| f / 100.0)
-                        })
-                        .collect();
-                    Column::from(Series::new(series.name().clone(), vals))
-                }
-                ColumnType::Float => {
-                    let vals: Vec<Option<f64>> = str_ca
-                        .into_iter()
-                        .map(|opt| {
-                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
-                        })
-                        .collect();
-                    Column::from(Series::new(series.name().clone(), vals))
-                }
-                ColumnType::Integer => {
-                    let vals: Vec<Option<i64>> = str_ca
-                        .into_iter()
-                        .map(|opt| {
-                            opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
-                                .map(|f| f.round() as i64)
-                        })
-                        .collect();
-                    Column::from(
-                        Series::new(series.name().clone(), vals)
-                            .strict_cast(&polars::prelude::DataType::Int64)
-                            .map_err(|e| e.to_string())?,
-                    )
-                }
-                _ => unreachable!(),
-            }
+            Self::col_from_percent_str(series, col_type)?
         } else {
             series
                 .strict_cast(&target_dtype)
                 .map_err(|e| format!("Cannot cast to {:?}. Error: {}", target_dtype, e))?
         };
 
-        self.df.with_column(new_series).map_err(|e| e.to_string())?;
-
+        self.df.with_column(new_col).map_err(|e| e.to_string())?;
         self.columns[col_idx].col_type = col_type;
-        // Reset precision to the type default when changing to a numeric type
-        // so that a column previously formatted as Percentage (precision=1) shows
-        // the expected 2 decimal places when switched to Float.
         if matches!(
             col_type,
             ColumnType::Float | ColumnType::Percentage | ColumnType::Currency
@@ -563,6 +375,187 @@ impl DataFrame {
         self.aggregates_cache = None;
         self.modified = true;
         Ok(())
+    }
+
+    fn col_bool_from_str(series: &polars::prelude::Column) -> Result<polars::prelude::Column, String> {
+        let str_ca = series.str().map_err(|e| e.to_string())?;
+        let mut builder =
+            polars::prelude::BooleanChunkedBuilder::new(series.name().clone(), str_ca.len());
+        for opt_s in str_ca.into_iter() {
+            if let Some(s) = opt_s {
+                let lower = s.trim().to_lowercase();
+                if lower == "true" || lower == "1" || lower == "yes" {
+                    builder.append_value(true);
+                } else if lower.is_empty() {
+                    builder.append_null();
+                } else {
+                    builder.append_value(false);
+                }
+            } else {
+                builder.append_null();
+            }
+        }
+        Ok(polars::prelude::Column::from(builder.finish().into_series()))
+    }
+
+    fn col_currency_from_str(
+        series: &polars::prelude::Column,
+    ) -> Result<polars::prelude::Column, String> {
+        let str_ca = series.str().map_err(|e| e.to_string())?;
+        let vals: Vec<Option<f64>> = str_ca
+            .into_iter()
+            .map(|opt_s| {
+                opt_s.and_then(|s| {
+                    let cleaned: String = s
+                        .chars()
+                        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                        .collect();
+                    cleaned.parse::<f64>().ok()
+                })
+            })
+            .collect();
+        Ok(polars::prelude::Column::from(Series::new(series.name().clone(), vals)))
+    }
+
+    fn col_date_from_str(series: &polars::prelude::Column) -> Result<polars::prelude::Column, String> {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let str_ca = series.str().map_err(|e| e.to_string())?;
+        let days: Vec<Option<i32>> = str_ca
+            .into_iter()
+            .map(|opt_s| {
+                let s = opt_s?.trim();
+                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    return Some((d - epoch).num_days() as i32);
+                }
+                for fmt in crate::data::DATETIME_FORMATS {
+                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+                        return Some((dt.date() - epoch).num_days() as i32);
+                    }
+                }
+                None
+            })
+            .collect();
+        Ok(Column::from(
+            Series::new(series.name().clone(), days)
+                .strict_cast(&polars::prelude::DataType::Date)
+                .map_err(|e| format!("Cannot cast to Date. Error: {}", e))?,
+        ))
+    }
+
+    fn col_datetime_from_str(
+        series: &polars::prelude::Column,
+    ) -> Result<polars::prelude::Column, String> {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let str_ca = series.str().map_err(|e| e.to_string())?;
+        let micros: Vec<Option<i64>> = str_ca
+            .into_iter()
+            .map(|opt_s| {
+                let s = opt_s?.trim();
+                for fmt in crate::data::DATETIME_FORMATS {
+                    if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+                        let diff = dt - epoch;
+                        return diff
+                            .num_microseconds()
+                            .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                    }
+                }
+                if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                    let diff = d.and_hms_opt(0, 0, 0).unwrap() - epoch;
+                    return diff
+                        .num_microseconds()
+                        .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                }
+                None
+            })
+            .collect();
+        Ok(Column::from(
+            Series::new(series.name().clone(), micros)
+                .strict_cast(&polars::prelude::DataType::Datetime(
+                    TimeUnit::Microseconds,
+                    None,
+                ))
+                .map_err(|e| format!("Cannot cast to Datetime. Error: {}", e))?,
+        ))
+    }
+
+    fn col_datetime_from_backup(
+        name: polars::prelude::PlSmallStr,
+        backup: &[Option<String>],
+    ) -> Result<polars::prelude::Column, String> {
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let micros: Vec<Option<i64>> = backup
+            .iter()
+            .map(|opt_s| {
+                opt_s.as_ref().and_then(|s| {
+                    for fmt in crate::data::DATETIME_FORMATS {
+                        if let Ok(dt) = NaiveDateTime::parse_from_str(s, fmt) {
+                            let diff = dt - epoch;
+                            return diff
+                                .num_microseconds()
+                                .or_else(|| diff.num_seconds().checked_mul(1_000_000));
+                        }
+                    }
+                    None
+                })
+            })
+            .collect();
+        Ok(Column::from(
+            Series::new(name, micros)
+                .strict_cast(&polars::prelude::DataType::Datetime(
+                    TimeUnit::Microseconds,
+                    None,
+                ))
+                .map_err(|e| format!("Cannot restore Datetime from backup. Error: {}", e))?,
+        ))
+    }
+
+    fn col_from_percent_str(
+        series: &polars::prelude::Column,
+        col_type: ColumnType,
+    ) -> Result<polars::prelude::Column, String> {
+        let str_ca = series.str().map_err(|e| e.to_string())?;
+        match col_type {
+            ColumnType::Percentage => {
+                let vals: Vec<Option<f64>> = str_ca
+                    .into_iter()
+                    .map(|opt| {
+                        opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                            .map(|f| f / 100.0)
+                    })
+                    .collect();
+                Ok(Column::from(Series::new(series.name().clone(), vals)))
+            }
+            ColumnType::Float => {
+                let vals: Vec<Option<f64>> = str_ca
+                    .into_iter()
+                    .map(|opt| {
+                        opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                    })
+                    .collect();
+                Ok(Column::from(Series::new(series.name().clone(), vals)))
+            }
+            ColumnType::Integer => {
+                let vals: Vec<Option<i64>> = str_ca
+                    .into_iter()
+                    .map(|opt| {
+                        opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                            .map(|f| f.round() as i64)
+                    })
+                    .collect();
+                Ok(Column::from(
+                    Series::new(series.name().clone(), vals)
+                        .strict_cast(&polars::prelude::DataType::Int64)
+                        .map_err(|e| e.to_string())?,
+                ))
+            }
+            _ => unreachable!(),
+        }
     }
 
     // ── Column Operations (Phase 21) ──────────────────────────────────────────

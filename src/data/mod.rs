@@ -24,3 +24,13 @@ pub mod join;
 pub mod loader;
 pub mod sort;
 pub mod swap;
+
+/// Naive datetime format strings tried when parsing a string to `NaiveDateTime`.
+/// Fractional-seconds variants come first so strings with microseconds don't
+/// fail the plain `%H:%M:%S` format before reaching the `%.f` one.
+pub const DATETIME_FORMATS: &[&str] = &[
+    "%Y-%m-%d %H:%M:%S%.f",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S%.f",
+    "%Y-%m-%dT%H:%M:%S",
+];
