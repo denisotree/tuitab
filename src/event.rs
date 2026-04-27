@@ -272,7 +272,14 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
 
         // Chart view
         AppMode::Chart => match key.code {
-            KeyCode::Char('V') | KeyCode::Char('q') | KeyCode::Esc => Action::OpenChart, // Toggle off
+            KeyCode::Char('V') | KeyCode::Char('q') | KeyCode::Esc => Action::OpenChart,
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
+                Action::ChartCursorPrev
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Down | KeyCode::Char('j') => {
+                Action::ChartCursorNext
+            }
+            KeyCode::Enter => Action::ChartDrillDown,
             _ => Action::None,
         },
 

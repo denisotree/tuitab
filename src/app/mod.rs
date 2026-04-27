@@ -634,16 +634,29 @@ impl App {
             }
             Action::ApplyChartAgg => {
                 self.chart.agg = crate::types::ChartAgg::all()[self.chart.agg_index];
+                self.chart.cursor_bin = 0;
+                self.chart.drill_keys.clear();
                 self.mode = AppMode::Chart;
                 let s = self.stack.active();
                 let col_name = s.dataframe.columns[s.cursor_col].name.clone();
                 self.status_message =
-                    format!("Chart: {} — Press 'v', 'q' or Esc to exit", col_name);
+                    format!("Chart: {} — ← → navigate | Enter: drill down | v/q/Esc: exit", col_name);
             }
             Action::CancelChartAgg => {
                 self.mode = AppMode::Normal;
                 self.chart.ref_col = None;
                 self.status_message.clear();
+            }
+            Action::ChartCursorPrev => {
+                if self.chart.cursor_bin > 0 {
+                    self.chart.cursor_bin -= 1;
+                }
+            }
+            Action::ChartCursorNext => {
+                self.chart.cursor_bin += 1;
+            }
+            Action::ChartDrillDown => {
+                self.chart_drill_down();
             }
 
             // ── Type selection popup (t) ──────────────────────────────────────
@@ -1328,12 +1341,23 @@ impl App {
     fn pop_sheet(&mut self) {
         if self.stack.can_pop() {
             self.stack.pop();
-            self.mode = AppMode::Normal;
-            self.status_message = format!(
-                "Returned to '{}' (depth {})",
-                self.stack.active().title,
-                self.stack.depth()
-            );
+            if self.chart.drill_return {
+                self.chart.drill_return = false;
+                self.mode = AppMode::Chart;
+                let s = self.stack.active();
+                let col_name = s.dataframe.columns[s.cursor_col].name.clone();
+                self.status_message = format!(
+                    "Chart: {} — ← → navigate | Enter: drill down | v/q/Esc: exit",
+                    col_name
+                );
+            } else {
+                self.mode = AppMode::Normal;
+                self.status_message = format!(
+                    "Returned to '{}' (depth {})",
+                    self.stack.active().title,
+                    self.stack.depth()
+                );
+            }
         } else {
             self.mode = AppMode::ConfirmQuit;
             self.status_message = "Quit? Press 'y' to confirm, 'n' to cancel".to_string();
@@ -1830,9 +1854,11 @@ impl App {
                 // Date × Categorical → auto count → line chart
                 self.chart.ref_col = Some(ref_idx);
                 self.chart.agg = ChartAgg::Count;
+                self.chart.cursor_bin = 0;
+                self.chart.drill_keys.clear();
                 self.mode = AppMode::Chart;
                 self.status_message =
-                    format!("Line chart: count('{}') by date — Esc to exit", col_name);
+                    format!("Line chart: count('{}') by date — ← → navigate | Enter: drill | Esc: exit", col_name);
                 return;
             }
             if is_categorical(rtype) && is_numeric(cur_type) {
@@ -1848,8 +1874,10 @@ impl App {
 
         // Fallback: normal single-column chart
         self.chart.ref_col = None;
+        self.chart.cursor_bin = 0;
+        self.chart.drill_keys.clear();
         self.mode = AppMode::Chart;
-        self.status_message = format!("Chart: {} — Press 'v', 'q' or Esc to exit", col_name);
+        self.status_message = format!("Chart: {} — ← → navigate | Enter: drill down | v/q/Esc: exit", col_name);
     }
 
     fn expr_history_prev(&mut self) {
@@ -2555,6 +2583,56 @@ impl App {
                 self.status_message = format!("Failed to open sheet '{}': {}", sheet_name, e);
             }
         }
+    }
+
+    fn chart_drill_down(&mut self) {
+        use crate::app_state::ChartDrillKey;
+        let cursor = self.chart.cursor_bin;
+        let key = match self.chart.drill_keys.get(cursor) {
+            Some(k) => k,
+            None => return,
+        };
+
+        let s = self.stack.active();
+        let filter_col = self.chart.ref_col.unwrap_or(s.cursor_col);
+        let df = s.dataframe.clone();
+
+        let display_indices: Vec<usize> = match key {
+            ChartDrillKey::Exact(ref target) => df.find_rows_by_value(filter_col, target),
+            ChartDrillKey::Range(lo, hi) => df.find_rows_in_range(filter_col, *lo, *hi),
+        };
+
+        if display_indices.is_empty() {
+            self.status_message = "No matching rows found".to_string();
+            return;
+        }
+
+        // Convert display indices to physical row_order indices
+        let matching: Vec<usize> = display_indices
+            .iter()
+            .map(|&di| df.row_order[di])
+            .collect();
+
+        let label = match self.chart.drill_keys.get(cursor) {
+            Some(ChartDrillKey::Exact(s)) => s.clone(),
+            Some(ChartDrillKey::Range(lo, hi)) => format!("{:.1}-{:.1}", lo, hi),
+            None => return,
+        };
+
+        let mut new_df = df.clone();
+        new_df.row_order = matching.clone().into();
+        new_df.original_order = matching.into();
+        new_df.aggregates_cache = None;
+
+        let col_name = new_df.columns[filter_col].name.clone();
+        let sheet = crate::sheet::Sheet::new(
+            format!("Filter: {} = {}", col_name, label),
+            new_df,
+        );
+        self.chart.drill_return = true;
+        self.stack.push(sheet);
+        self.mode = AppMode::Normal;
+        self.status_message = format!("Drilled into {} = {} — q/Esc: back to chart", col_name, label);
     }
 
     fn drill_down_freq_value(&mut self) {

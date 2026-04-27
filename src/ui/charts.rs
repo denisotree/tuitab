@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::app_state::ChartDrillKey;
 use crate::theme::EverforestTheme as T;
 use crate::types::{ChartAgg, ColumnType};
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -75,20 +76,33 @@ fn render_single_chart(frame: &mut Frame, app: &mut App, col: usize, area: ratat
     let col_type = col_meta.col_type;
 
     let is_numeric = matches!(col_type, ColumnType::Integer | ColumnType::Float);
-    // Minimum readable bar: width 3 + gap 1 = 4 chars
     let max_bars: usize = ((area.width.saturating_sub(2)) / 4).max(2) as usize;
 
-    let bars_data: Vec<(String, f64)> = if is_numeric {
-        histogram_bins(s, col, col_type, max_bars)
-            .into_iter()
-            .map(|(l, v)| (l, v as f64))
-            .collect()
+    let (bars_data, drill_keys): (Vec<(String, f64)>, Vec<ChartDrillKey>) = if is_numeric {
+        let h = compute_histogram_bins(s, col, col_type, max_bars);
+        let keys = h
+            .ranges
+            .iter()
+            .map(|&(lo, hi)| ChartDrillKey::Range(lo, hi))
+            .collect();
+        let data = h.labels.into_iter().zip(h.counts).map(|(l, v)| (l, v as f64)).collect();
+        (data, keys)
     } else {
-        frequency_bars(s, col, max_bars)
-            .into_iter()
-            .map(|(l, v)| (l, v as f64))
-            .collect()
+        let freq = frequency_bars(s, col, max_bars);
+        let keys = freq
+            .iter()
+            .map(|(label, _)| ChartDrillKey::Exact(label.clone()))
+            .collect();
+        let data = freq.into_iter().map(|(l, v)| (l, v as f64)).collect();
+        (data, keys)
     };
+
+    app.chart.drill_keys = drill_keys;
+    let n = bars_data.len();
+    if n > 0 && app.chart.cursor_bin >= n {
+        app.chart.cursor_bin = n - 1;
+    }
+    let cursor = app.chart.cursor_bin;
 
     let chart_title = if is_numeric {
         format!(" Histogram: '{}' ", col_name)
@@ -96,17 +110,23 @@ fn render_single_chart(frame: &mut Frame, app: &mut App, col: usize, area: ratat
         format!(" Frequency: '{}' (top {}) ", col_name, bars_data.len())
     };
 
-    render_f64_bar_chart(frame, bars_data, &chart_title, area);
+    render_f64_bar_chart(frame, bars_data, &chart_title, area, Some(cursor));
 }
 
 // ── Smart histogram with Freedman-Diaconis binning ─────────────────────────
 
-fn histogram_bins(
+struct HistogramBins {
+    labels: Vec<String>,
+    counts: Vec<u64>,
+    ranges: Vec<(f64, f64)>,
+}
+
+fn compute_histogram_bins(
     s: &crate::sheet::Sheet,
     col: usize,
     col_type: ColumnType,
     max_bars: usize,
-) -> Vec<(String, u64)> {
+) -> HistogramBins {
     let mut nums: Vec<f64> = Vec::new();
     for i in 0..s.dataframe.visible_row_count() {
         let val_str =
@@ -119,17 +139,21 @@ fn histogram_bins(
     }
 
     if nums.is_empty() {
-        return vec![];
+        return HistogramBins { labels: vec![], counts: vec![], ranges: vec![] };
     }
 
     nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = nums.len();
 
     if nums[0] >= nums[n - 1] {
-        return vec![(format_val(nums[0], col_type), n as u64)];
+        let v = nums[0];
+        return HistogramBins {
+            labels: vec![format_val(v, col_type)],
+            counts: vec![n as u64],
+            ranges: vec![(v, v + f64::EPSILON)],
+        };
     }
 
-    // Freedman-Diaconis bin width: h = 2 * IQR * n^(-1/3)
     let q1 = nums[(n as f64 * 0.25) as usize];
     let q3 = nums[((n as f64 * 0.75) as usize).min(n - 1)];
     let iqr = q3 - q1;
@@ -137,12 +161,10 @@ fn histogram_bins(
     let fd_width = if iqr > 1e-10 {
         2.0 * iqr * (n as f64).powf(-1.0 / 3.0)
     } else {
-        // Sturges fallback when IQR ≈ 0
         let k = ((n as f64).log2().ceil() as usize + 1).max(2);
         (nums[n - 1] - nums[0]) / k as f64
     };
 
-    // Use a robust range [p2, p98] to suppress extreme outliers
     let lo = nums[((n as f64 * 0.02) as usize).min(n - 1)];
     let hi = nums[((n as f64 * 0.98) as usize).min(n - 1)];
     let range = (hi - lo).max(fd_width);
@@ -162,18 +184,20 @@ fn histogram_bins(
         buckets[b.min(num_bins - 1)] += 1;
     }
 
-    (0..num_bins)
-        .map(|i| {
-            let b_start = lo + i as f64 * step;
-            let b_end = lo + (i + 1) as f64 * step;
-            let label = format!(
-                "{}-{}",
-                format_val(b_start, col_type),
-                format_val(b_end, col_type)
-            );
-            (label, buckets[i])
-        })
-        .collect()
+    let mut labels = Vec::with_capacity(num_bins);
+    let mut ranges = Vec::with_capacity(num_bins);
+    for i in 0..num_bins {
+        let b_start = lo + i as f64 * step;
+        let b_end = lo + (i + 1) as f64 * step;
+        labels.push(format!(
+            "{}-{}",
+            format_val(b_start, col_type),
+            format_val(b_end, col_type)
+        ));
+        ranges.push((b_start, b_end));
+    }
+
+    HistogramBins { labels, counts: buckets, ranges }
 }
 
 fn format_val(v: f64, col_type: ColumnType) -> String {
@@ -223,11 +247,25 @@ fn render_grouped_bar_chart(
             (k.clone(), agg.apply_group(cnt, v))
         })
         .collect();
-    groups.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    groups.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     groups.truncate(max_bars);
 
+    app.chart.drill_keys = groups
+        .iter()
+        .map(|(label, _)| ChartDrillKey::Exact(label.clone()))
+        .collect();
+    let n = groups.len();
+    if n > 0 && app.chart.cursor_bin >= n {
+        app.chart.cursor_bin = n - 1;
+    }
+    let cursor = app.chart.cursor_bin;
+
     let title = format!(" {}({}) by '{}' ", agg.label(), cur_name, ref_name);
-    render_f64_bar_chart(frame, groups, &title, area);
+    render_f64_bar_chart(frame, groups, &title, area, Some(cursor));
 }
 
 // ── Line chart: date × numeric (or count) ─────────────────────────────────
@@ -303,20 +341,51 @@ fn render_line_chart(
         Line::from(Span::raw(format!("{:.1}", y_max))),
     ];
 
-    let dataset = Dataset::default()
+    // Populate drill_keys and clamp cursor
+    app.chart.drill_keys = sorted_keys
+        .iter()
+        .map(|k| ChartDrillKey::Exact(k.clone()))
+        .collect();
+    if x_len > 0 && app.chart.cursor_bin >= x_len {
+        app.chart.cursor_bin = x_len - 1;
+    }
+    let cursor = app.chart.cursor_bin;
+
+    let cursor_point = [data_points[cursor]];
+    let cursor_label = sorted_keys[cursor].chars().take(10).collect::<String>();
+    let cursor_y = data_points[cursor].1;
+
+    let main_dataset = Dataset::default()
         .name(cur_name.as_str())
-        .marker(symbols::Marker::Braille)
+        .marker(symbols::Marker::HalfBlock)
         .graph_type(GraphType::Line)
         .style(Style::default().fg(T::GREEN))
         .data(&data_points);
 
+    let cursor_dataset = Dataset::default()
+        .name("")
+        .marker(symbols::Marker::Block)
+        .graph_type(GraphType::Scatter)
+        .style(Style::default().fg(T::YELLOW))
+        .data(&cursor_point);
+
     let title = if cur_is_numeric {
-        format!(" {}({}) over '{}' ", agg.label(), cur_name, ref_name)
+        format!(
+            " {}({}) over '{}' │ {} = {:.1} ",
+            agg.label(),
+            cur_name,
+            ref_name,
+            cursor_label,
+            cursor_y
+        )
     } else {
-        format!(" count('{}') over '{}' ", cur_name, ref_name)
+        format!(
+            " count('{}') over '{}' │ {} = {:.0} ",
+            cur_name, ref_name, cursor_label, cursor_y
+        )
     };
 
-    let chart = Chart::new(vec![dataset])
+    let chart = Chart::new(vec![main_dataset, cursor_dataset])
         .block(
             Block::default()
                 .title(title)
@@ -372,6 +441,7 @@ fn render_f64_bar_chart(
     bars_data: Vec<(String, f64)>,
     title: &str,
     area: ratatui::layout::Rect,
+    cursor: Option<usize>,
 ) {
     if bars_data.is_empty() {
         let block = Block::default()
@@ -388,7 +458,6 @@ fn render_f64_bar_chart(
     let n = bars_data.len();
     let available = area.width.saturating_sub(2) as usize;
 
-    // Compute formatted text values from actual f64 data
     let max_val = bars_data
         .iter()
         .map(|(_, v)| *v)
@@ -405,7 +474,6 @@ fn render_f64_bar_chart(
         })
         .collect();
 
-    // Decide layout: horizontal when labels won't fit under vertical bars
     let max_label_len = bars_data
         .iter()
         .map(|(l, _)| l.chars().count())
@@ -414,17 +482,15 @@ fn render_f64_bar_chart(
     let use_horizontal = n * (max_label_len.max(3) + 1) > available;
 
     if use_horizontal {
-        render_horizontal_bars(frame, bars_data, text_vals, title, area);
+        render_horizontal_bars(frame, bars_data, text_vals, title, area, cursor);
         return;
     }
 
-    // Vertical bar chart: scale to u64, fill available width
     let scaled: Vec<u64> = bars_data
         .iter()
         .map(|(_, v)| ((v / max_val) * 10_000.0) as u64)
         .collect();
 
-    // bar_width fills all available space without a hard cap
     let bar_width = (available.saturating_sub(n.saturating_sub(1)))
         .checked_div(n)
         .unwrap_or(3)
@@ -434,13 +500,24 @@ fn render_f64_bar_chart(
         .iter()
         .enumerate()
         .map(|(i, (label, _))| {
+            let is_cursor = cursor == Some(i);
             let color = CHART_COLORS[i % CHART_COLORS.len()];
+            let text = if is_cursor {
+                format!("▶{}", text_vals[i])
+            } else {
+                text_vals[i].clone()
+            };
+            let val_style = if is_cursor {
+                Style::default().fg(T::BG0).bg(T::YELLOW)
+            } else {
+                Style::default().fg(T::BG0).bg(color)
+            };
             Bar::default()
                 .value(scaled[i])
                 .label(label.as_str())
-                .text_value(text_vals[i].clone())
+                .text_value(text)
                 .style(Style::default().fg(color))
-                .value_style(Style::default().fg(T::BG0).bg(color))
+                .value_style(val_style)
         })
         .collect();
 
@@ -469,6 +546,7 @@ fn render_horizontal_bars(
     text_vals: Vec<String>,
     title: &str,
     area: ratatui::layout::Rect,
+    cursor: Option<usize>,
 ) {
     use ratatui::text::Text;
     use ratatui::widgets::Paragraph;
@@ -511,32 +589,81 @@ fn render_horizontal_bars(
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (i, (label, val)) in bars_data.iter().enumerate() {
+        let is_cursor = cursor == Some(i);
         let color = CHART_COLORS[i % CHART_COLORS.len()];
         let bar_len = ((val / max_val) * bar_zone as f64).round() as usize;
         let bar_str: String = "█".repeat(bar_len);
         let empty_len = bar_zone.saturating_sub(bar_len);
         let empty_str: String = " ".repeat(empty_len);
 
-        // Truncate/pad label
+        // Truncate/pad label; prepend cursor indicator
         let label_truncated: String = label.chars().take(label_width).collect();
-        let label_padded = format!("{:>width$}", label_truncated, width = label_width);
+        let label_padded = if is_cursor {
+            // prefix "▶" and pad to label_width
+            let inner: String = label.chars().take(label_width.saturating_sub(1)).collect();
+            format!("{:>width$}", format!("▶{}", inner), width = label_width)
+        } else {
+            format!("{:>width$}", label_truncated, width = label_width)
+        };
+        let label_style = if is_cursor {
+            Style::default().fg(T::YELLOW)
+        } else {
+            Style::default().fg(T::GREY1)
+        };
 
         let val_text = format!(" {}", text_vals[i]);
+        let val_style = if is_cursor {
+            Style::default().fg(T::YELLOW)
+        } else {
+            Style::default().fg(T::FG)
+        };
 
         lines.push(Line::from(vec![
-            Span::styled(label_padded, Style::default().fg(T::GREY1)),
+            Span::styled(label_padded, label_style),
             Span::raw(" │"),
             Span::styled(bar_str, Style::default().fg(color)),
             Span::raw(empty_str),
-            Span::styled(val_text, Style::default().fg(T::FG)),
+            Span::styled(val_text, val_style),
         ]));
     }
 
+    let n = lines.len();
+    // Visible rows inside the block (minus 2 border lines)
+    let visible = area.height.saturating_sub(2) as usize;
+
+    // Scroll so the cursor row is always in view (cursor at bottom of window when scrolled down)
+    let scroll: usize = if let Some(c) = cursor {
+        if visible == 0 || c < visible {
+            0
+        } else {
+            c + 1 - visible
+        }
+    } else {
+        0
+    };
+
+    // Build title with scroll position indicators
+    let above = scroll;
+    let below = n.saturating_sub(scroll + visible);
+    let scroll_hint = match (above > 0, below > 0) {
+        (true, true) => format!(" ↑{} ↓{} ", above, below),
+        (true, false) => format!(" ↑{} ", above),
+        (false, true) => format!(" ↓{} ", below),
+        (false, false) => String::new(),
+    };
+    let full_title = if scroll_hint.is_empty() {
+        title.to_string()
+    } else {
+        format!("{}{}", title.trim_end_matches(' '), scroll_hint)
+    };
+
     let text = Text::from(lines);
     let block = Block::default()
-        .title(title)
+        .title(full_title)
         .borders(Borders::ALL)
         .style(Style::default().fg(T::FG).bg(T::BG0));
-    let para = Paragraph::new(text).block(block);
+    let para = Paragraph::new(text)
+        .block(block)
+        .scroll((scroll as u16, 0));
     frame.render_widget(para, area);
 }

@@ -22,6 +22,8 @@ pub struct ColumnMeta {
     pub precision: u8,
     /// Whether this column is pinned to the left
     pub pinned: bool,
+    /// Position among unpinned columns at the time this column was pinned (for restore on unpin)
+    pub pin_restore_pos: Option<usize>,
     /// Currency kind, used when col_type == Currency
     pub currency: Option<CurrencyKind>,
     /// Whether the column width is currently expanded to content width (toggle state for _ / g_)
@@ -47,6 +49,7 @@ impl ColumnMeta {
             expression: None,
             precision: 2,
             pinned: false,
+            pin_restore_pos: None,
             currency: None,
             width_expanded: false,
             selected: false,

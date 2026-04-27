@@ -43,10 +43,19 @@ pub struct PivotState {
     pub history_idx: Option<usize>,
 }
 
+pub enum ChartDrillKey {
+    Exact(String),
+    Range(f64, f64),
+}
+
 pub struct ChartState {
     pub ref_col: Option<usize>,
     pub agg: ChartAgg,
     pub agg_index: usize,
+    pub cursor_bin: usize,
+    pub drill_keys: Vec<ChartDrillKey>,
+    /// Set when entering a drill-down table from the chart so pop_sheet can return to chart mode.
+    pub drill_return: bool,
 }
 
 impl Default for ChartState {
@@ -55,6 +64,9 @@ impl Default for ChartState {
             ref_col: None,
             agg: ChartAgg::Count,
             agg_index: 0,
+            cursor_bin: 0,
+            drill_keys: vec![],
+            drill_return: false,
         }
     }
 }

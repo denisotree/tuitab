@@ -179,6 +179,9 @@ pub enum Action {
     ChartAggSelectDown,
     ApplyChartAgg,
     CancelChartAgg,
+    ChartCursorPrev,
+    ChartCursorNext,
+    ChartDrillDown,
 
     // ── Column type assignment ────────────────────────────────────────────────
     OpenTypeSelect,

@@ -581,7 +581,12 @@ impl DataFrame {
         self.columns[col_idx].pinned = !is_pinned;
 
         let target_idx = if !is_pinned {
-            // If pinning, move to the beginning (after already pinned ones)
+            // Pinning: remember position among unpinned columns, then move after pinned block
+            let restore_pos = (0..col_idx)
+                .filter(|&i| !self.columns[i].pinned)
+                .count();
+            self.columns[col_idx].pin_restore_pos = Some(restore_pos);
+
             let mut insert_pos = 0;
             for i in 0..self.columns.len() {
                 if i == col_idx {
@@ -595,17 +600,19 @@ impl DataFrame {
             }
             insert_pos
         } else {
-            // If unpinning, move to the end of the pinned section
-            let mut insert_pos = 0;
-            for i in 0..self.columns.len() {
-                if i == col_idx {
-                    continue;
-                }
-                if self.columns[i].pinned {
-                    insert_pos += 1;
-                }
-            }
-            insert_pos
+            // Unpinning: restore to saved position among unpinned columns
+            let num_pinned: usize = (0..self.columns.len())
+                .filter(|&i| i != col_idx && self.columns[i].pinned)
+                .count();
+            let num_unpinned: usize = (0..self.columns.len())
+                .filter(|&i| i != col_idx && !self.columns[i].pinned)
+                .count();
+            let restore_pos = self.columns[col_idx]
+                .pin_restore_pos
+                .unwrap_or(num_unpinned)
+                .min(num_unpinned);
+            self.columns[col_idx].pin_restore_pos = None;
+            num_pinned + restore_pos
         };
 
         // Physically move the column to target_idx using swap_columns
@@ -1164,6 +1171,23 @@ impl DataFrame {
                     }
                 },
             )
+            .collect()
+    }
+
+    /// Returns display indices of rows where the numeric value in `col_idx` is in `[lo, hi)`.
+    pub fn find_rows_in_range(&self, col_idx: usize, lo: f64, hi: f64) -> Vec<usize> {
+        if col_idx >= self.df.width() {
+            return Vec::new();
+        }
+        (0..self.visible_row_count())
+            .filter(|&display_idx| {
+                let val_str = Self::anyvalue_to_string_fmt(&self.get_val(display_idx, col_idx));
+                if let Ok(v) = val_str.parse::<f64>() {
+                    v >= lo && v < hi
+                } else {
+                    false
+                }
+            })
             .collect()
     }
 
