@@ -14,7 +14,7 @@ pub fn render_join_path_bar(frame: &mut Frame, app: &App) {
         height: 3,
     };
 
-    let input = Paragraph::new(app.join_path_input.as_str().to_string())
+    let input = Paragraph::new(app.join.path_input.as_str().to_string())
         .style(T::filter_input_style())
         .block(
             Block::bordered()
@@ -26,7 +26,7 @@ pub fn render_join_path_bar(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, popup_area);
     frame.render_widget(input, popup_area);
 
-    let text_len = app.join_path_input.cursor_pos();
+    let text_len = app.join.path_input.cursor_pos();
     frame.set_cursor_position((popup_area.x + 1 + text_len, popup_area.y + 1));
 }
 

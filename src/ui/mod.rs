@@ -92,8 +92,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 popup::render_input_popup(
                     frame,
                     "Save & Export (Enter to confirm, Esc to cancel)",
-                    &app.saving_input,
-                    app.saving_error.as_deref(),
+                    &app.save.input,
+                    app.save.error.as_deref(),
                     frame.area(),
                 );
             }
@@ -173,13 +173,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     "LEFT key columns",
                     &cols,
-                    &app.join_left_keys,
-                    app.join_left_key_index,
+                    &app.join.left_keys,
+                    app.join.left_key_index,
                     frame.area(),
                 );
             }
             if app.mode == AppMode::JoinSelectRightKeys {
-                let cols: Vec<String> = if let Some(ref df) = app.join_other_df {
+                let cols: Vec<String> = if let Some(ref df) = app.join.other_df {
                     df.columns.iter().map(|c| c.name.clone()).collect()
                 } else {
                     Vec::new()
@@ -188,8 +188,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     "RIGHT key columns",
                     &cols,
-                    &app.join_right_keys,
-                    app.join_right_key_index,
+                    &app.join.right_keys,
+                    app.join.right_key_index,
                     frame.area(),
                 );
             }

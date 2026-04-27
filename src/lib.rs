@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 // Library root: re-exports for integration tests and external access.
 pub mod app;
+pub(crate) mod app_state;
 pub mod clipboard;
 pub mod data;
 pub mod event;

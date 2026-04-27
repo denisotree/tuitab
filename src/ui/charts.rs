@@ -30,7 +30,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
 
     // Two-column contextual chart when a reference (pinned) column is set
-    if let Some(ref_col) = app.chart_ref_col {
+    if let Some(ref_col) = app.chart.ref_col {
         let ref_type = s.dataframe.columns[ref_col].col_type;
         let cur_type = s.dataframe.columns[cur_col].col_type;
         let is_date = |ct: ColumnType| matches!(ct, ColumnType::Date | ColumnType::Datetime);
@@ -211,7 +211,7 @@ fn render_grouped_bar_chart(
     let s = app.stack.active();
     let ref_name = s.dataframe.columns[ref_col].name.clone();
     let cur_name = s.dataframe.columns[cur_col].name.clone();
-    let agg = app.chart_agg;
+    let agg = app.chart.agg;
 
     let (counts, vals) = collect_groups(s, ref_col, cur_col);
     let max_bars: usize = ((area.width.saturating_sub(2)) / 4).max(2) as usize;
@@ -244,7 +244,7 @@ fn render_line_chart(
     let ref_name = s.dataframe.columns[ref_col].name.clone();
     let cur_name = s.dataframe.columns[cur_col].name.clone();
     let agg = if cur_is_numeric {
-        app.chart_agg
+        app.chart.agg
     } else {
         ChartAgg::Count
     };

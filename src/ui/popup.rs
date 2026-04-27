@@ -72,8 +72,8 @@ pub fn render_aggregator_popup(frame: &mut Frame, app: &crate::app::App, area: R
         .iter()
         .enumerate()
         .map(|(i, agg)| {
-            let is_selected = app.agg_selected.contains(agg);
-            let is_active = i == app.agg_select_index;
+            let is_selected = app.aggregator.selected.contains(agg);
+            let is_active = i == app.aggregator.select_index;
 
             let checkbox = if is_selected { "[x]" } else { "[ ]" };
             let prefix = if is_active { "> " } else { "  " };
@@ -113,8 +113,8 @@ pub fn render_partition_select_popup(frame: &mut Frame, app: &crate::app::App, a
         .iter()
         .enumerate()
         .map(|(i, col)| {
-            let is_selected = app.partition_selected.contains(&col.name);
-            let is_active = i == app.partition_select_index;
+            let is_selected = app.partition.selected.contains(&col.name);
+            let is_active = i == app.partition.select_index;
 
             let checkbox = if is_selected { "[x]" } else { "[ ]" };
             let prefix = if is_active { "> " } else { "  " };
@@ -271,7 +271,7 @@ pub fn render_type_select_popup(frame: &mut Frame, app: &crate::app::App, area: 
         .iter()
         .enumerate()
         .map(|(i, ct)| {
-            let is_active = i == app.type_select_index;
+            let is_active = i == app.type_select.index;
             let prefix = if is_active { "▶ " } else { "  " };
             let text = format!("{}{}", prefix, ct.display_name());
             let style = if is_active {
@@ -303,7 +303,7 @@ pub fn render_currency_popup(frame: &mut Frame, app: &crate::app::App, area: Rec
         .iter()
         .enumerate()
         .map(|(i, ck)| {
-            let is_active = i == app.currency_select_index;
+            let is_active = i == app.type_select.currency_index;
             let prefix = if is_active { "▶ " } else { "  " };
             let text = format!("{}{}", prefix, ck.display_name());
             let style = if is_active {
@@ -330,9 +330,9 @@ pub fn render_join_overview_select_popup(frame: &mut Frame, app: &crate::app::Ap
     let popup_area = centered_rect(55, 65, area);
     frame.render_widget(Clear, popup_area);
 
-    let items = &app.join_context_items;
-    let cursor = app.join_overview_cursor;
-    let selected = &app.join_overview_selected;
+    let items = &app.join.context_items;
+    let cursor = app.join.overview_cursor;
+    let selected = &app.join.overview_selected;
 
     let n_selected = selected.len();
     let list_items: Vec<ratatui::widgets::ListItem> = items
@@ -375,13 +375,13 @@ pub fn render_join_source_popup(frame: &mut Frame, app: &crate::app::App, area: 
     let popup_area = centered_rect(50, 60, area);
     frame.render_widget(Clear, popup_area);
 
-    let ctx_items = &app.join_context_items;
+    let ctx_items = &app.join.context_items;
     let ctx_count = ctx_items.len();
     let other_titles = app.stack.sheet_titles_except_active();
     let mut items: Vec<ratatui::widgets::ListItem> = Vec::new();
 
     // ── [Browse file...] ──
-    let browse_active = app.join_source_index == 0;
+    let browse_active = app.join.source_index == 0;
     let prefix = if browse_active { "▶ " } else { "  " };
     let style = if browse_active {
         Style::default().fg(T::YELLOW).bg(T::BG2)
@@ -393,7 +393,7 @@ pub fn render_join_source_popup(frame: &mut Frame, app: &crate::app::App, area: 
     // ── Context items (sibling tables / files / sheets) ──
     for (i, ctx) in ctx_items.iter().enumerate() {
         let idx = i + 1;
-        let is_active = idx == app.join_source_index;
+        let is_active = idx == app.join.source_index;
         let pfx = if is_active { "▶ " } else { "  " };
         let style = if is_active {
             Style::default().fg(T::YELLOW).bg(T::BG2)
@@ -408,7 +408,7 @@ pub fn render_join_source_popup(frame: &mut Frame, app: &crate::app::App, area: 
     // ── Stack sheets ──
     for (i, title) in other_titles.iter().enumerate() {
         let idx = i + 1 + ctx_count;
-        let is_active = idx == app.join_source_index;
+        let is_active = idx == app.join.source_index;
         let pfx = if is_active { "▶ " } else { "  " };
         let style = if is_active {
             Style::default().fg(T::YELLOW).bg(T::BG2)
@@ -437,7 +437,7 @@ pub fn render_join_type_popup(frame: &mut Frame, app: &crate::app::App, area: Re
         .iter()
         .enumerate()
         .map(|(i, jt)| {
-            let is_active = i == app.join_type_index;
+            let is_active = i == app.join.type_index;
             let prefix = if is_active { "▶ " } else { "  " };
             let style = if is_active {
                 Style::default().fg(T::YELLOW).bg(T::BG2)
@@ -515,7 +515,7 @@ pub fn render_chart_agg_popup(frame: &mut Frame, app: &crate::app::App, area: Re
         .iter()
         .enumerate()
         .map(|(i, agg)| {
-            let is_active = i == app.chart_agg_index;
+            let is_active = i == app.chart.agg_index;
             let prefix = if is_active { "> " } else { "  " };
             let style = if is_active {
                 Style::default().fg(T::YELLOW)
@@ -544,7 +544,7 @@ pub fn render_copy_format_popup(frame: &mut Frame, app: &crate::app::App, area: 
     let popup_area = centered_rect(44, 40, area);
     frame.render_widget(Clear, popup_area);
 
-    let pending = match app.copy_pending {
+    let pending = match app.copy.pending {
         Some(p) => p,
         None => return,
     };
@@ -606,7 +606,7 @@ pub fn render_copy_format_popup(frame: &mut Frame, app: &crate::app::App, area: 
         .iter()
         .enumerate()
         .map(|(i, opt)| {
-            let is_active = i == app.copy_format_index;
+            let is_active = i == app.copy.format_index;
             let prefix = if is_active { "▶ " } else { "  " };
             let style = if is_active {
                 Style::default().fg(T::YELLOW).bg(T::BG2)
