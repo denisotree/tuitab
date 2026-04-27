@@ -45,8 +45,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
 bincode = "1"
 arboard = "3"
-polars = { version = "0.53", features = ["csv", "lazy", "dtype-date", "dtype-datetime", "strings", "json", "parquet", "serde", "timezones", "pivot", "is_in"] }
-polars-ops = { version = "0.53", features = ["pivot"] }
+polars = { version = "0.53", features = ["csv", "lazy", "dtype-date", "dtype-datetime", "strings", "json", "parquet", "serde", "pivot", "is_in"] }
 libc = "0.2"
 calamine = "0.22"
 rusqlite = { version = "0.31", features = [] }
@@ -60,6 +59,13 @@ serde_json = { version = "1", features = ["preserve_order"] }
 features = ["bundled-sqlite"]
 targets = ["x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[profile.dev]
+debug = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 opt-level = 3
