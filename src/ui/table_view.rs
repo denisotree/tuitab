@@ -1,10 +1,12 @@
 use crate::app::App;
+use crate::data::dataframe::DataFrame;
 use crate::theme::EverforestTheme as T;
 use ratatui::layout::{Constraint, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation, Table,
+    Block, BorderType, Cell, HighlightSpacing, Row, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Table,
 };
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
@@ -13,12 +15,131 @@ use unicode_width::UnicodeWidthStr;
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let stack_depth = app.stack.depth();
     let sheet = app.stack.active_mut();
-    let df = &mut sheet.dataframe;
 
-    let max_width = area.width.saturating_sub(2); // Border takes 1 cell on each side
+    let (visible_cols, widths_override) = build_column_plan(&sheet.dataframe, sheet.cursor_col, &mut sheet.left_col, area);
+    let aggregates = sheet.dataframe.compute_aggregates();
+    let df = &sheet.dataframe;
+    let max_aggs = aggregates.iter().map(|a| a.len()).max().unwrap_or(0) as u16;
+    let footer_height = max_aggs;
+    let non_row_height = 3 + footer_height;
 
-    // ── Calculate visible columns (Horizontal Scrolling) ─────────────────────
     let cursor_col = sheet.cursor_col;
+    let sort_col = sheet.sort_col;
+    let sort_desc = sheet.sort_desc;
+    let active_display_row = sheet.table_state.selected().unwrap_or(0);
+    let table_height = area.height.saturating_sub(non_row_height) as usize;
+
+    let mut top_row = sheet.top_row;
+    if active_display_row < top_row {
+        top_row = active_display_row;
+    } else if active_display_row >= top_row + table_height && table_height > 0 {
+        top_row = active_display_row.saturating_sub(table_height) + 1;
+    }
+    let max_top = df.visible_row_count().saturating_sub(table_height);
+    top_row = top_row.min(max_top);
+    let end_row = (top_row + table_height).min(df.visible_row_count());
+
+    let header = make_header_row(&visible_cols, &widths_override, df, cursor_col, sort_col, sort_desc);
+    let data_rows = make_data_rows(
+        &visible_cols,
+        &widths_override,
+        df,
+        cursor_col,
+        top_row,
+        end_row,
+        active_display_row,
+    );
+
+    let widths: Vec<Constraint> = widths_override
+        .iter()
+        .map(|&w| Constraint::Length(w))
+        .collect();
+
+    let title = format!(
+        " {}{}{} ",
+        sheet.title,
+        if df.modified { " [*]" } else { "" },
+        if stack_depth > 1 {
+            format!(" [{}/{}]", stack_depth, stack_depth)
+        } else {
+            String::new()
+        }
+    );
+
+    let make_block = |title: String| {
+        Block::bordered()
+            .title(title)
+            .border_type(BorderType::Rounded)
+            .border_style(T::separator_style())
+            .style(Style::default().bg(T::BG0))
+    };
+
+    let table = if footer_height > 0 {
+        let footer = make_footer_row(&visible_cols, &widths_override, &aggregates, footer_height);
+        Table::new(data_rows, &widths)
+            .header(header)
+            .footer(footer)
+            .highlight_spacing(HighlightSpacing::Always)
+            .highlight_symbol("▶ ")
+            .block(make_block(title))
+    } else {
+        Table::new(data_rows, &widths)
+            .header(header)
+            .highlight_spacing(HighlightSpacing::Always)
+            .highlight_symbol("▶ ")
+            .block(make_block(title))
+    };
+
+    sheet.top_row = top_row;
+
+    let relative_col = visible_cols
+        .iter()
+        .position(|&c| c == cursor_col)
+        .unwrap_or(0);
+    let mut relative_state = ratatui::widgets::TableState::default()
+        .with_selected(Some(active_display_row.saturating_sub(top_row)))
+        .with_selected_column(Some(relative_col));
+
+    frame.render_stateful_widget(table, area, &mut relative_state);
+
+    frame.render_stateful_widget(
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::VerticalRight)
+            .style(T::scrollbar_style()),
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut sheet.scroll_state,
+    );
+
+    let mut horizontal_scroll =
+        ScrollbarState::new(df.col_count().saturating_sub(1)).position(cursor_col);
+
+    frame.render_stateful_widget(
+        Scrollbar::default()
+            .orientation(ScrollbarOrientation::HorizontalBottom)
+            .style(T::scrollbar_style()),
+        area.inner(Margin {
+            vertical: 0,
+            horizontal: 1,
+        }),
+        &mut horizontal_scroll,
+    );
+}
+
+/// Compute which columns are visible and their pixel widths given the available area.
+///
+/// Returns `(visible_cols, widths_override)` where `visible_cols` is a list of column
+/// indices (with `usize::MAX` as a separator marker between pinned and unpinned blocks)
+/// and `widths_override` is the matching pixel width for each slot.
+fn build_column_plan(
+    df: &DataFrame,
+    cursor_col: usize,
+    left_col_state: &mut usize,
+    area: Rect,
+) -> (Vec<usize>, Vec<u16>) {
+    let max_width = area.width.saturating_sub(2);
 
     let pinned_cols: Vec<usize> = df
         .columns
@@ -48,7 +169,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let remaining_width = max_width.saturating_sub(pinned_width);
 
-    let mut left_col = sheet.left_col;
+    let mut left_col = *left_col_state;
     if !unpinned_cols.contains(&left_col) {
         left_col = unpinned_cols.first().copied().unwrap_or(0);
     }
@@ -93,7 +214,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    sheet.left_col = left_col;
+    *left_col_state = left_col;
 
     let mut visible_unpinned: Vec<usize> = Vec::new();
     let mut widths_override: Vec<u16> = Vec::new();
@@ -123,7 +244,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 let diff = remaining_width.saturating_sub(current_w);
                 if diff > 0 {
                     if border_added && visible_unpinned.is_empty() {
-                        // The very first unpinned column; add border first
                         widths_override.push(1);
                     }
                     widths_override.push(diff);
@@ -149,12 +269,22 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut visible_cols = visible_pinned;
     if border_added && !visible_unpinned.is_empty() {
-        visible_cols.push(usize::MAX); // Special marker for border
+        visible_cols.push(usize::MAX);
     }
     visible_cols.extend(visible_unpinned);
 
-    // ── Header row ─────────────────────────────────────────────────────────────
-    // Each cell: left-aligned name (+ optional sort arrow), right-aligned type icon
+    (visible_cols, widths_override)
+}
+
+/// Build the header row: column names with sort arrows, type icons, pin/select markers.
+fn make_header_row(
+    visible_cols: &[usize],
+    widths_override: &[u16],
+    df: &DataFrame,
+    cursor_col: usize,
+    sort_col: Option<usize>,
+    sort_desc: bool,
+) -> Row<'static> {
     let header_cells: Vec<Cell> = visible_cols
         .iter()
         .enumerate()
@@ -167,12 +297,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             let icon_ch = col.col_type.icon();
             let icon_str = icon_ch.to_string();
 
-            let sort_mark = if sheet.sort_col == Some(actual_col_idx) {
-                if sheet.sort_desc {
-                    " ▼"
-                } else {
-                    " ▲"
-                }
+            let sort_mark = if sort_col == Some(actual_col_idx) {
+                if sort_desc { " ▼" } else { " ▲" }
             } else {
                 ""
             };
@@ -180,13 +306,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             let sel_mark = if col.selected { "*" } else { "" };
             let name_raw = format!("{}{}{}{}", pin_mark, sel_mark, col.name, sort_mark);
             let name_w = UnicodeWidthStr::width(name_raw.as_str());
-            let cell_w = widths_override[i] as usize; // Use overridden bounded width
+            let cell_w = widths_override[i] as usize;
 
             let (name_display, padding) = if cell_w < 2 {
                 (String::new(), 0usize)
             } else if name_w < cell_w {
-                let padding = cell_w - name_w - 1;
-                (name_raw, padding)
+                (name_raw, cell_w - name_w - 1)
             } else {
                 let max_name = cell_w.saturating_sub(1);
                 let truncated: String = name_raw
@@ -232,56 +357,20 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let header = Row::new(header_cells).style(T::header_style()).height(1);
+    Row::new(header_cells).style(T::header_style()).height(1)
+}
 
-    // ── Aggregates & Dynamic bounds ───────────────────────────────────────────
-    let aggregates = df.compute_aggregates();
-    let max_aggs = aggregates.iter().map(|a| a.len()).max().unwrap_or(0) as u16;
-    let footer_height = if max_aggs > 0 { max_aggs } else { 0 };
-    let non_row_height = 3 + footer_height; // Borders(2) + Header(1) + Footer
-
-    // ── Column width constraints ───────────────────────────────────────────────
-    let widths: Vec<Constraint> = widths_override
-        .iter()
-        .map(|&w| Constraint::Length(w))
-        .collect();
-
-    // ── Data rows ─────────────────────────────────────────────────────────────
-    // All styling is per-cell so we have full control independent of ratatui's
-    // row_highlight_style / column_highlight_style (which can't express our matrix).
-    //
-    // Priority matrix (active = cursor row):
-    //  ┌────────────────────┬──────────────────────┬──────────────────────────┐
-    //  │                    │  normal column       │  active column           │
-    //  ├────────────────────┼──────────────────────┼──────────────────────────┤
-    //  │ normal row         │ normal_row_style     │ normal_row_style + bold* │
-    //  │ active row         │ active_row_style     │ active_row_col_style     │
-    //  │ selected row       │ selected_mark_style  │ selected_mark_style      │
-    //  │ selected+active    │ selected_active_row  │ selected_active_col      │
-    //  └────────────────────┴──────────────────────┴──────────────────────────┘
-    // *bold for active column on normal row handled by column_highlight_style below.
-    let cursor_col = sheet.cursor_col;
-    let active_display_row = sheet.table_state.selected().unwrap_or(0);
-
-    // Virtualization: we only render enough rows to fill the area height
-    let table_height = area.height.saturating_sub(non_row_height) as usize;
-
-    // Auto-adjust top_row if cursor went out of bounds (bounds check logic)
-    // We get mutable access inside render for convenience of this adjustment
-    let mut top_row = sheet.top_row;
-    if active_display_row < top_row {
-        top_row = active_display_row;
-    } else if active_display_row >= top_row + table_height && table_height > 0 {
-        top_row = active_display_row.saturating_sub(table_height) + 1;
-    }
-
-    // Ensure top_row is within bounds
-    let max_top = df.visible_row_count().saturating_sub(table_height);
-    top_row = top_row.min(max_top);
-
-    let end_row = (top_row + table_height).min(df.visible_row_count());
-
-    let rows: Vec<Row> = (top_row..end_row)
+/// Build the visible data rows for the current viewport.
+fn make_data_rows(
+    visible_cols: &[usize],
+    widths_override: &[u16],
+    df: &DataFrame,
+    cursor_col: usize,
+    top_row: usize,
+    end_row: usize,
+    active_display_row: usize,
+) -> Vec<Row<'static>> {
+    (top_row..end_row)
         .map(|display_row| {
             let physical = df.row_order[display_row];
             let is_selected = df.selected_rows.contains(&physical);
@@ -295,9 +384,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         return Cell::from(Span::styled("│", T::separator_style()));
                     }
 
-                    let mut text = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
-                        &df.get_val(display_row, col),
-                    );
+                    let mut text = DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, col));
                     let col_meta = &df.columns[col];
                     let mut is_negative_currency = false;
                     if !text.is_empty() {
@@ -311,7 +398,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                                 let sym = col_meta.currency.map(|k| k.symbol()).unwrap_or("$");
                                 let prefix =
                                     col_meta.currency.map(|k| k.is_prefix()).unwrap_or(true);
-
                                 if f < 0.0 {
                                     is_negative_currency = true;
                                     let abs_f = f.abs();
@@ -320,12 +406,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                                     } else {
                                         text = format!("({:.*}{})", p, abs_f, sym);
                                     }
+                                } else if prefix {
+                                    text = format!("{}{:.*}", sym, p, f);
                                 } else {
-                                    if prefix {
-                                        text = format!("{}{:.*}", sym, p, f);
-                                    } else {
-                                        text = format!("{:.*}{}", p, f, sym);
-                                    }
+                                    text = format!("{:.*}{}", p, f, sym);
                                 }
                             }
                         } else if col_meta.col_type == crate::types::ColumnType::Float {
@@ -337,7 +421,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     let is_active_col = col == cursor_col;
                     let display_chars = widths_override[i] as usize;
 
-                    // Simple truncation for partially visible cells to prevent wrapping or overflowing
                     let truncated_text: String = text
                         .chars()
                         .scan(0usize, |acc, c: char| {
@@ -352,27 +435,18 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         .collect();
 
                     let mut style = match (is_active, is_selected, is_active_col) {
-                        // Active + selected + active column → orange inversion
                         (true, true, true) => T::selected_active_col_style(),
-                        // Active + selected → yellow inversion
                         (true, true, false) => T::selected_active_row_style(),
-                        // Active row, active column → teal inversion
                         (true, false, true) => T::active_row_col_style(),
-                        // Active row, other column → full inversion
                         (true, false, false) => T::active_row_style(),
-                        // Selected, any column → yellow text on normal bg
                         (false, true, _) => T::selected_mark_style(display_row),
-                        // Normal row handled by Row-level style below
                         (false, false, _) => T::normal_row_style(display_row),
                     };
 
-                    // Apply red color for negative currency if not highlighted by selection/cursor
                     if is_negative_currency && !is_selected && !is_active {
                         style = style.fg(T::RED);
                     }
 
-                    // Directory coloring (Phase 13 / F1 Feature)
-                    // If this is the "Name" column of a directory listing, apply colors
                     if !is_selected
                         && !is_active
                         && df.columns.len() == 5
@@ -381,18 +455,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         && df.columns[4].name == "Supported"
                         && col == 0
                     {
-                        // Name column
-                        let is_dir_str = crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
-                            &df.get_val(display_row, 1),
-                        );
-                        let is_supported_str =
-                            crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(
-                                &df.get_val(display_row, 4),
-                            );
-
-                        if is_dir_str == "true" {
+                        let is_dir = DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, 1));
+                        let is_supported =
+                            DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, 4));
+                        if is_dir == "true" {
                             style = style.fg(T::BLUE);
-                        } else if is_supported_str == "true" {
+                        } else if is_supported == "true" {
                             style = style.fg(T::GREEN);
                         } else {
                             style = style.fg(T::RED);
@@ -403,8 +471,6 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                 })
                 .collect();
 
-            // Row-level style: ratatui uses this as a base but per-cell styles
-            // take priority, so we just set a sensible fallback.
             let row_style = if is_active && is_selected {
                 T::selected_active_row_style()
             } else if is_active {
@@ -416,127 +482,51 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             Row::new(cells).style(row_style)
         })
+        .collect()
+}
+
+/// Build the aggregates footer row.
+fn make_footer_row(
+    visible_cols: &[usize],
+    widths_override: &[u16],
+    aggregates: &[Vec<(crate::data::aggregator::AggregatorKind, String)>],
+    footer_height: u16,
+) -> Row<'static> {
+    let footer_cells: Vec<Cell> = visible_cols
+        .iter()
+        .enumerate()
+        .map(|(i, &col_idx)| {
+            if col_idx == usize::MAX {
+                return Cell::from(Span::styled("│", T::separator_style()));
+            }
+            let col_aggs = &aggregates[col_idx];
+            if col_aggs.is_empty() {
+                Cell::from("")
+            } else {
+                let display_chars = widths_override[i] as usize;
+                let text: Vec<String> = col_aggs
+                    .iter()
+                    .map(|(agg, val)| {
+                        let full = format!("{}={}", agg.name(), val);
+                        full.chars()
+                            .scan(0usize, |acc, c: char| {
+                                let w = UnicodeWidthStr::width(c.to_string().as_str());
+                                if *acc + w <= display_chars {
+                                    *acc += w;
+                                    Some(c)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                Cell::from(text.join("\n")).style(T::footer_style())
+            }
+        })
         .collect();
 
-    // ── Aggregates footer row (Phase 12) ──────────────────────────────────────
-    let has_aggregates = footer_height > 0;
-
-    let title = format!(
-        " {}{}{} ",
-        sheet.title,
-        if df.modified { " [*]" } else { "" },
-        // Show stack depth if > 1
-        if stack_depth > 1 {
-            format!(" [{}/{}]", stack_depth, stack_depth)
-        } else {
-            String::new()
-        }
-    );
-
-    let make_block = |title: String| {
-        Block::bordered()
-            .title(title)
-            .border_type(BorderType::Rounded)
-            .border_style(T::separator_style())
-            .style(Style::default().bg(T::BG0))
-    };
-
-    let table = if has_aggregates {
-        let footer_cells: Vec<Cell> = visible_cols
-            .iter()
-            .enumerate()
-            .map(|(i, &col_idx)| {
-                if col_idx == usize::MAX {
-                    return Cell::from(Span::styled("│", T::separator_style()));
-                }
-                let col_aggs = &aggregates[col_idx];
-                if col_aggs.is_empty() {
-                    Cell::from("")
-                } else {
-                    let display_chars = widths_override[i] as usize;
-                    let text: Vec<String> = col_aggs
-                        .iter()
-                        .map(|(agg, val)| {
-                            let full = format!("{}={}", agg.name(), val);
-                            full.chars()
-                                .scan(0usize, |acc, c: char| {
-                                    let w = UnicodeWidthStr::width(c.to_string().as_str());
-                                    if *acc + w <= display_chars {
-                                        *acc += w;
-                                        Some(c)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect()
-                        })
-                        .collect();
-                    Cell::from(text.join("\n")).style(T::footer_style())
-                }
-            })
-            .collect();
-
-        let footer = Row::new(footer_cells)
-            .style(T::footer_style())
-            .height(footer_height);
-
-        Table::new(rows, &widths)
-            .header(header)
-            .footer(footer)
-            // No row_highlight_style / column_highlight_style — all styling is per-cell
-            .highlight_spacing(HighlightSpacing::Always)
-            .highlight_symbol("▶ ")
-            .block(make_block(title))
-    } else {
-        Table::new(rows, &widths)
-            .header(header)
-            // No row_highlight_style / column_highlight_style — all styling is per-cell
-            .highlight_spacing(HighlightSpacing::Always)
-            .highlight_symbol("▶ ")
-            .block(make_block(title))
-    };
-
-    // Need mutable access to sheet state for rendering
-    // s is already mutable reference to the active sheet
-    let s = sheet;
-    s.top_row = top_row; // Save back the bounds-checked top_row
-
-    // Create a temporary relative table state for rendering the slice
-    let relative_col = visible_cols
-        .iter()
-        .position(|&c| c == cursor_col)
-        .unwrap_or(0);
-    let mut relative_state = ratatui::widgets::TableState::default()
-        .with_selected(Some(active_display_row.saturating_sub(top_row)))
-        .with_selected_column(Some(relative_col));
-
-    frame.render_stateful_widget(table, area, &mut relative_state);
-
-    // ── Vertical scrollbar ────────────────────────────────────────────────────
-    frame.render_stateful_widget(
-        Scrollbar::default()
-            .orientation(ScrollbarOrientation::VerticalRight)
-            .style(T::scrollbar_style()),
-        area.inner(Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
-        &mut s.scroll_state,
-    );
-
-    // ── Horizontal scrollbar ──────────────────────────────────────────────────
-    let mut horizontal_scroll =
-        ratatui::widgets::ScrollbarState::new(s.dataframe.col_count().saturating_sub(1))
-            .position(cursor_col);
-
-    frame.render_stateful_widget(
-        Scrollbar::default()
-            .orientation(ScrollbarOrientation::HorizontalBottom)
-            .style(T::scrollbar_style()),
-        area.inner(Margin {
-            vertical: 0,
-            horizontal: 1,
-        }),
-        &mut horizontal_scroll,
-    );
+    Row::new(footer_cells)
+        .style(T::footer_style())
+        .height(footer_height)
 }
