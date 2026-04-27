@@ -6,3 +6,4 @@ test.csv
 test2.csv
 timeout_requests_pivot.csv
 TASK.md
+.worktrees/
