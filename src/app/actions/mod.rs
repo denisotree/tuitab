@@ -1,5 +1,13 @@
+pub(super) mod aggregator;
+pub(super) mod chart;
+pub(super) mod clipboard;
 pub(super) mod column;
+pub(super) mod edit;
 pub(super) mod expression;
+pub(super) mod io;
 pub(super) mod join;
 pub(super) mod navigation;
+pub(super) mod pivot;
 pub(super) mod search;
+pub(super) mod selection;
+pub(super) mod type_select;
