@@ -8,6 +8,9 @@ use std::collections::HashSet;
 pub struct SaveState {
     pub input: TextInput,
     pub error: Option<String>,
+    pub autocomplete_prefix: String,
+    pub autocomplete_candidates: Vec<String>,
+    pub autocomplete_idx: usize,
 }
 
 #[derive(Default)]

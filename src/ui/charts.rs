@@ -147,10 +147,11 @@ fn compute_histogram_bins(
 
     if nums[0] >= nums[n - 1] {
         let v = nums[0];
+        let margin = if v == 0.0 { 0.5 } else { v.abs() * 1e-9 + 0.5 };
         return HistogramBins {
             labels: vec![format_val(v, col_type)],
             counts: vec![n as u64],
-            ranges: vec![(v, v + f64::EPSILON)],
+            ranges: vec![(v - margin, v + margin)],
         };
     }
 

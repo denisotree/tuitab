@@ -16,16 +16,16 @@ impl App {
                 None
             }
             Action::ChartAggSelectUp => {
+                let n = ChartAgg::all().len();
                 if self.chart.agg_index > 0 {
                     self.chart.agg_index -= 1;
+                } else {
+                    self.chart.agg_index = n.saturating_sub(1);
                 }
                 None
             }
             Action::ChartAggSelectDown => {
-                let max = ChartAgg::all().len() - 1;
-                if self.chart.agg_index < max {
-                    self.chart.agg_index += 1;
-                }
+                self.chart.agg_index = (self.chart.agg_index + 1) % ChartAgg::all().len();
                 None
             }
             Action::ApplyChartAgg => {
@@ -54,7 +54,9 @@ impl App {
                 None
             }
             Action::ChartCursorNext => {
-                self.chart.cursor_bin += 1;
+                if self.chart.cursor_bin + 1 < self.chart.drill_keys.len() {
+                    self.chart.cursor_bin += 1;
+                }
                 None
             }
             Action::ChartDrillDown => {

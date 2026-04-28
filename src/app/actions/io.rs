@@ -23,9 +23,9 @@ impl App {
                     })
                     .unwrap_or_else(|| self.stack.active().title.clone());
 
-                self.expression.autocomplete_candidates.clear();
-                self.expression.autocomplete_prefix.clear();
-                self.expression.autocomplete_idx = 0;
+                self.save.autocomplete_candidates.clear();
+                self.save.autocomplete_prefix.clear();
+                self.save.autocomplete_idx = 0;
                 self.save.input =
                     crate::ui::text_input::TextInput::with_value(default_path);
                 self.mode = AppMode::Saving;
@@ -113,11 +113,11 @@ impl App {
             crate::app::expand_tilde(dir_str.to_str().unwrap_or("."));
 
         let full_prefix = input.trim_end_matches(prefix).to_string();
-        if self.expression.autocomplete_prefix != full_prefix
-            || self.expression.autocomplete_candidates.is_empty()
+        if self.save.autocomplete_prefix != full_prefix
+            || self.save.autocomplete_candidates.is_empty()
         {
-            self.expression.autocomplete_prefix = full_prefix.clone();
-            self.expression.autocomplete_idx = 0;
+            self.save.autocomplete_prefix = full_prefix.clone();
+            self.save.autocomplete_idx = 0;
 
             let mut candidates: Vec<String> = std::fs::read_dir(&expanded_dir)
                 .into_iter()
@@ -136,33 +136,33 @@ impl App {
                 .collect();
 
             candidates.sort();
-            self.expression.autocomplete_candidates = candidates;
+            self.save.autocomplete_candidates = candidates;
         }
 
-        if self.expression.autocomplete_candidates.is_empty() {
+        if self.save.autocomplete_candidates.is_empty() {
             return;
         }
 
         let common =
-            crate::app::longest_common_prefix(&self.expression.autocomplete_candidates);
+            crate::app::longest_common_prefix(&self.save.autocomplete_candidates);
         let current_suffix = self
             .save
             .input
             .as_str()
-            .strip_prefix(&self.expression.autocomplete_prefix)
+            .strip_prefix(&self.save.autocomplete_prefix)
             .unwrap_or("");
 
         if common.len() > current_suffix.len() {
             let new_value =
-                format!("{}{}", self.expression.autocomplete_prefix, common);
+                format!("{}{}", self.save.autocomplete_prefix, common);
             self.save.input = crate::ui::text_input::TextInput::with_value(new_value);
         } else {
-            self.expression.autocomplete_idx = (self.expression.autocomplete_idx + 1)
-                % self.expression.autocomplete_candidates.len();
-            let completion = &self.expression.autocomplete_candidates
-                [self.expression.autocomplete_idx];
+            self.save.autocomplete_idx = (self.save.autocomplete_idx + 1)
+                % self.save.autocomplete_candidates.len();
+            let completion = &self.save.autocomplete_candidates
+                [self.save.autocomplete_idx];
             let new_value =
-                format!("{}{}", self.expression.autocomplete_prefix, completion);
+                format!("{}{}", self.save.autocomplete_prefix, completion);
             self.save.input = crate::ui::text_input::TextInput::with_value(new_value);
         }
     }
