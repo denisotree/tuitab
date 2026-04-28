@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-04-28
+
+### Added
+- Chart cursor navigation: `←`/`→` move a highlight across histogram/frequency bars and line-chart points; Enter drills into matching rows
+- Histogram drill-down: Enter on a bar opens a filtered table sheet; `q`/Esc returns to the chart
+- Pin/unpin (`!`) now restores the column's original position when unpinning
+
+### Fixed
+- Save-dialog Tab-completion no longer bleeds expression-autocomplete state — opening Ctrl+S after typing a formula no longer shows formula candidates in the file-path popup
+- Chart cursor (`→`) no longer advances past the last bar
+- Histogram over a constant-value column now renders and drills down correctly (bin range was too narrow to match any value)
+- Chart aggregation selector navigation now wraps at list boundaries, consistent with other selectors
+
+### Changed
+- Internal: `handle_action()` decomposed into 8 focused per-domain modules (`chart`, `aggregator`, `edit`, `type_select`, `clipboard`, `io`, `pivot`, `selection`)
+- Internal: `table_view::render()` split into `build_column_plan`, `make_header_row`, `make_data_rows`, `make_footer_row`
+- Internal: App state extracted into `JoinState`, `ExpressionState`, `ChartState`, `SaveState`, `CopyState`, etc.
+- Internal: `ui/popup.rs` and `data/io.rs` split into format-specific sub-modules
+- Internal: date constants, comparison helper, and type-conversion helpers moved to the data layer
+- Build: `polars` dependency now uses `default-features = false`; release profile upgraded to `lto = "fat"` + `codegen-units = 1`
+
 ## [0.3.7] - 2026-04-24
 
 ### Fixed
@@ -145,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/denisotree/tuitab/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/denisotree/tuitab/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/denisotree/tuitab/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/denisotree/tuitab/compare/v0.3.4...v0.3.5
