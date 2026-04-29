@@ -16,7 +16,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let stack_depth = app.stack.depth();
     let sheet = app.stack.active_mut();
 
-    let (visible_cols, widths_override) = build_column_plan(&sheet.dataframe, sheet.cursor_col, &mut sheet.left_col, area);
+    let (visible_cols, widths_override) = build_column_plan(
+        &sheet.dataframe,
+        sheet.cursor_col,
+        &mut sheet.left_col,
+        area,
+    );
     let aggregates = sheet.dataframe.compute_aggregates();
     let df = &sheet.dataframe;
     let max_aggs = aggregates.iter().map(|a| a.len()).max().unwrap_or(0) as u16;
@@ -39,7 +44,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     top_row = top_row.min(max_top);
     let end_row = (top_row + table_height).min(df.visible_row_count());
 
-    let header = make_header_row(&visible_cols, &widths_override, df, cursor_col, sort_col, sort_desc);
+    let header = make_header_row(
+        &visible_cols,
+        &widths_override,
+        df,
+        cursor_col,
+        sort_col,
+        sort_desc,
+    );
     let data_rows = make_data_rows(
         &visible_cols,
         &widths_override,
@@ -298,7 +310,11 @@ fn make_header_row(
             let icon_str = icon_ch.to_string();
 
             let sort_mark = if sort_col == Some(actual_col_idx) {
-                if sort_desc { " ▼" } else { " ▲" }
+                if sort_desc {
+                    " ▼"
+                } else {
+                    " ▲"
+                }
             } else {
                 ""
             };

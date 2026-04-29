@@ -17,8 +17,8 @@
 mod actions;
 
 use crate::app_state::{
-    AggregatorState, ChartState, CopyState, ExpressionState, JoinState, PartitionState,
-    PivotState, SaveState, TypeSelectState,
+    AggregatorState, ChartState, CopyState, ExpressionState, JoinState, PartitionState, PivotState,
+    SaveState, TypeSelectState,
 };
 use crate::data::aggregator::AggregatorKind;
 use crate::data::async_loader::{self, LoadEvent};
@@ -152,7 +152,10 @@ impl App {
                 SheetStack::new(root_sheet),
                 AppMode::Normal,
                 format!("Loaded directory '{}' ({} items)", filename, row_count),
-                SaveState { input: TextInput::with_value(filename), ..Default::default() },
+                SaveState {
+                    input: TextInput::with_value(filename),
+                    ..Default::default()
+                },
                 None,
             ))
         } else if file_size > ASYNC_THRESHOLD {
@@ -165,7 +168,10 @@ impl App {
                 SheetStack::new(root_sheet),
                 AppMode::Loading,
                 format!("Loading {}...", path.display()),
-                SaveState { input: TextInput::with_value(filename.clone()), ..Default::default() },
+                SaveState {
+                    input: TextInput::with_value(filename.clone()),
+                    ..Default::default()
+                },
                 Some(rx),
             ))
         } else {
@@ -214,7 +220,10 @@ impl App {
                 SheetStack::new(root_sheet),
                 AppMode::Normal,
                 status_message,
-                SaveState { input: TextInput::with_value(filename), ..Default::default() },
+                SaveState {
+                    input: TextInput::with_value(filename),
+                    ..Default::default()
+                },
                 None,
             ))
         }
@@ -234,7 +243,10 @@ impl App {
             SheetStack::new(root_sheet),
             AppMode::Normal,
             format!("Loaded {} rows from stdin", row_count),
-            SaveState { input: TextInput::with_value(title), ..Default::default() },
+            SaveState {
+                input: TextInput::with_value(title),
+                ..Default::default()
+            },
             None,
         ))
     }
@@ -252,7 +264,10 @@ impl App {
             SheetStack::new(root_sheet),
             AppMode::Normal,
             format!("{} files", n),
-            SaveState { input: TextInput::with_value(title), ..Default::default() },
+            SaveState {
+                input: TextInput::with_value(title),
+                ..Default::default()
+            },
             None,
         ))
     }
@@ -574,7 +589,6 @@ impl App {
                     self.pending_action = Some(Action::OpenMultiFrequencyTable);
                 }
             }
-
 
             Action::None => {}
             // Navigation, search, expression, column, and join actions are
@@ -1187,8 +1201,8 @@ impl App {
             self.expression.autocomplete_idx = 0;
             self.expression.autocomplete_prefix = prefix.to_string();
         } else {
-            self.expression.autocomplete_idx =
-                (self.expression.autocomplete_idx + 1) % self.expression.autocomplete_candidates.len();
+            self.expression.autocomplete_idx = (self.expression.autocomplete_idx + 1)
+                % self.expression.autocomplete_candidates.len();
         }
 
         let completion = &self.expression.autocomplete_candidates[self.expression.autocomplete_idx];
@@ -1236,8 +1250,8 @@ impl App {
             self.expression.autocomplete_idx = 0;
             self.expression.autocomplete_prefix = prefix.to_string();
         } else {
-            self.expression.autocomplete_idx =
-                (self.expression.autocomplete_idx + 1) % self.expression.autocomplete_candidates.len();
+            self.expression.autocomplete_idx = (self.expression.autocomplete_idx + 1)
+                % self.expression.autocomplete_candidates.len();
         }
 
         let completion = &self.expression.autocomplete_candidates[self.expression.autocomplete_idx];
@@ -2646,7 +2660,9 @@ impl App {
         };
         let expanded_dir = expand_tilde(dir_str.to_str().unwrap_or("."));
         let full_prefix = input.trim_end_matches(prefix).to_string();
-        if self.expression.autocomplete_prefix != full_prefix || self.expression.autocomplete_candidates.is_empty() {
+        if self.expression.autocomplete_prefix != full_prefix
+            || self.expression.autocomplete_candidates.is_empty()
+        {
             self.expression.autocomplete_prefix = full_prefix.clone();
             self.expression.autocomplete_idx = 0;
             let mut candidates: Vec<String> = std::fs::read_dir(&expanded_dir)
@@ -2672,7 +2688,8 @@ impl App {
         }
         let common = longest_common_prefix(&self.expression.autocomplete_candidates);
         let current_suffix = self
-            .join.path_input
+            .join
+            .path_input
             .as_str()
             .strip_prefix(&self.expression.autocomplete_prefix)
             .unwrap_or("");
@@ -2680,15 +2697,15 @@ impl App {
             let new_value = format!("{}{}", self.expression.autocomplete_prefix, common);
             self.join.path_input = crate::ui::text_input::TextInput::with_value(new_value);
         } else {
-            self.expression.autocomplete_idx =
-                (self.expression.autocomplete_idx + 1) % self.expression.autocomplete_candidates.len();
-            let completion = &self.expression.autocomplete_candidates[self.expression.autocomplete_idx];
+            self.expression.autocomplete_idx = (self.expression.autocomplete_idx + 1)
+                % self.expression.autocomplete_candidates.len();
+            let completion =
+                &self.expression.autocomplete_candidates[self.expression.autocomplete_idx];
             let new_value = format!("{}{}", self.expression.autocomplete_prefix, completion);
             self.join.path_input = crate::ui::text_input::TextInput::with_value(new_value);
         }
     }
 }
-
 
 /// Expand a leading `~` to the user's home directory.
 fn expand_tilde(input: &str) -> std::path::PathBuf {

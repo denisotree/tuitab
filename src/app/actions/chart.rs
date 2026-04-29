@@ -158,10 +158,7 @@ impl App {
             return;
         }
 
-        let matching: Vec<usize> = display_indices
-            .iter()
-            .map(|&di| df.row_order[di])
-            .collect();
+        let matching: Vec<usize> = display_indices.iter().map(|&di| df.row_order[di]).collect();
 
         let label = match self.chart.drill_keys.get(cursor) {
             Some(ChartDrillKey::Exact(s)) => s.clone(),
@@ -175,10 +172,7 @@ impl App {
         new_df.aggregates_cache = None;
 
         let col_name = new_df.columns[filter_col].name.clone();
-        let sheet = crate::sheet::Sheet::new(
-            format!("Filter: {} = {}", col_name, label),
-            new_df,
-        );
+        let sheet = crate::sheet::Sheet::new(format!("Filter: {} = {}", col_name, label), new_df);
         self.chart.drill_return = true;
         self.stack.push(sheet);
         self.mode = AppMode::Normal;

@@ -16,8 +16,7 @@ impl App {
                 self.aggregator.selected = col_meta.aggregators.iter().cloned().collect();
 
                 self.mode = AppMode::AggregatorSelect;
-                self.status_message =
-                    "Space to toggle, Enter to apply, Esc to cancel".to_string();
+                self.status_message = "Space to toggle, Enter to apply, Esc to cancel".to_string();
                 None
             }
             Action::ApplyAggregators => {

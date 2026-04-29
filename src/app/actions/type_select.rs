@@ -81,14 +81,12 @@ impl App {
             Action::CurrencySelectDown => {
                 let n = crate::types::CurrencyKind::all().len();
                 if n > 0 {
-                    self.type_select.currency_index =
-                        (self.type_select.currency_index + 1) % n;
+                    self.type_select.currency_index = (self.type_select.currency_index + 1) % n;
                 }
                 None
             }
             Action::ApplyCurrencySelect => {
-                let currency =
-                    crate::types::CurrencyKind::all()[self.type_select.currency_index];
+                let currency = crate::types::CurrencyKind::all()[self.type_select.currency_index];
                 let s = self.stack.active_mut();
                 s.push_undo();
                 let col = s.cursor_col;

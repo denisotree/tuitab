@@ -19,8 +19,7 @@ impl App {
             }
             Action::EnterGPrefix => {
                 self.mode = AppMode::GPrefix;
-                self.status_message =
-                    "g: (g)o top  (s)elect all  (u)nselect all".to_string();
+                self.status_message = "g: (g)o top  (s)elect all  (u)nselect all".to_string();
                 None
             }
             Action::CancelGPrefix => {

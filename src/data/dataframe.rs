@@ -333,8 +333,10 @@ impl DataFrame {
             // Save backup strings so Datetime can be restored later
             if let Ok(str_series) = series.cast(&polars::prelude::DataType::String) {
                 if let Ok(str_ca) = str_series.str() {
-                    let backup: Vec<Option<String>> =
-                        str_ca.into_iter().map(|s| s.map(|x| x.to_string())).collect();
+                    let backup: Vec<Option<String>> = str_ca
+                        .into_iter()
+                        .map(|s| s.map(|x| x.to_string()))
+                        .collect();
                     self.columns[col_idx].backup_datetime_str = Some(backup);
                 }
             }
@@ -377,7 +379,9 @@ impl DataFrame {
         Ok(())
     }
 
-    fn col_bool_from_str(series: &polars::prelude::Column) -> Result<polars::prelude::Column, String> {
+    fn col_bool_from_str(
+        series: &polars::prelude::Column,
+    ) -> Result<polars::prelude::Column, String> {
         let str_ca = series.str().map_err(|e| e.to_string())?;
         let mut builder =
             polars::prelude::BooleanChunkedBuilder::new(series.name().clone(), str_ca.len());
@@ -395,7 +399,9 @@ impl DataFrame {
                 builder.append_null();
             }
         }
-        Ok(polars::prelude::Column::from(builder.finish().into_series()))
+        Ok(polars::prelude::Column::from(
+            builder.finish().into_series(),
+        ))
     }
 
     fn col_currency_from_str(
@@ -414,10 +420,15 @@ impl DataFrame {
                 })
             })
             .collect();
-        Ok(polars::prelude::Column::from(Series::new(series.name().clone(), vals)))
+        Ok(polars::prelude::Column::from(Series::new(
+            series.name().clone(),
+            vals,
+        )))
     }
 
-    fn col_date_from_str(series: &polars::prelude::Column) -> Result<polars::prelude::Column, String> {
+    fn col_date_from_str(
+        series: &polars::prelude::Column,
+    ) -> Result<polars::prelude::Column, String> {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         let str_ca = series.str().map_err(|e| e.to_string())?;
         let days: Vec<Option<i32>> = str_ca
@@ -534,9 +545,7 @@ impl DataFrame {
             ColumnType::Float => {
                 let vals: Vec<Option<f64>> = str_ca
                     .into_iter()
-                    .map(|opt| {
-                        opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
-                    })
+                    .map(|opt| opt.and_then(|s| s.trim().trim_end_matches('%').parse::<f64>().ok()))
                     .collect();
                 Ok(Column::from(Series::new(series.name().clone(), vals)))
             }
@@ -575,9 +584,7 @@ impl DataFrame {
 
         let target_idx = if !is_pinned {
             // Pinning: remember position among unpinned columns, then move after pinned block
-            let restore_pos = (0..col_idx)
-                .filter(|&i| !self.columns[i].pinned)
-                .count();
+            let restore_pos = (0..col_idx).filter(|&i| !self.columns[i].pinned).count();
             self.columns[col_idx].pin_restore_pos = Some(restore_pos);
 
             let mut insert_pos = 0;

@@ -21,8 +21,8 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
     let mut is_supported = Vec::new();
 
     let supported_exts: HashSet<&str> = [
-        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3",
-        "duckdb", "ddb",
+        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3", "duckdb",
+        "ddb",
     ]
     .iter()
     .cloned()
@@ -99,8 +99,8 @@ pub fn load_files_list(
     use chrono::{DateTime, Local};
 
     let supported_exts: HashSet<&str> = [
-        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3",
-        "duckdb", "ddb",
+        "csv", "tsv", "txt", "json", "parquet", "xlsx", "xls", "db", "sqlite", "sqlite3", "duckdb",
+        "ddb",
     ]
     .iter()
     .cloned()

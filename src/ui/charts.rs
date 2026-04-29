@@ -85,7 +85,12 @@ fn render_single_chart(frame: &mut Frame, app: &mut App, col: usize, area: ratat
             .iter()
             .map(|&(lo, hi)| ChartDrillKey::Range(lo, hi))
             .collect();
-        let data = h.labels.into_iter().zip(h.counts).map(|(l, v)| (l, v as f64)).collect();
+        let data = h
+            .labels
+            .into_iter()
+            .zip(h.counts)
+            .map(|(l, v)| (l, v as f64))
+            .collect();
         (data, keys)
     } else {
         let freq = frequency_bars(s, col, max_bars);
@@ -139,7 +144,11 @@ fn compute_histogram_bins(
     }
 
     if nums.is_empty() {
-        return HistogramBins { labels: vec![], counts: vec![], ranges: vec![] };
+        return HistogramBins {
+            labels: vec![],
+            counts: vec![],
+            ranges: vec![],
+        };
     }
 
     nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -198,7 +207,11 @@ fn compute_histogram_bins(
         ranges.push((b_start, b_end));
     }
 
-    HistogramBins { labels, counts: buckets, ranges }
+    HistogramBins {
+        labels,
+        counts: buckets,
+        ranges,
+    }
 }
 
 fn format_val(v: f64, col_type: ColumnType) -> String {
@@ -663,8 +676,6 @@ fn render_horizontal_bars(
         .title(full_title)
         .borders(Borders::ALL)
         .style(Style::default().fg(T::FG).bg(T::BG0));
-    let para = Paragraph::new(text)
-        .block(block)
-        .scroll((scroll as u16, 0));
+    let para = Paragraph::new(text).block(block).scroll((scroll as u16, 0));
     frame.render_widget(para, area);
 }

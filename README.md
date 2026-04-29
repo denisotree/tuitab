@@ -82,6 +82,41 @@ Download for your platform from the [Releases page](https://github.com/denisotre
 
 ---
 
+## Building from source
+
+### Default — fully self-contained (works everywhere, no system libraries required)
+
+```sh
+cargo build --release
+# or install from crates.io:
+cargo install tuitab
+```
+
+DuckDB and SQLite are compiled from source. This is the recommended option for end users.
+
+### Without bundled DuckDB (faster compilation, requires system DuckDB)
+
+```sh
+# Install system DuckDB first:
+brew install duckdb                    # macOS
+sudo apt install libduckdb-dev         # Debian / Ubuntu
+
+# Then build:
+cargo build --release --no-default-features
+# or install from crates.io:
+cargo install tuitab --no-default-features
+```
+
+Skips the ~5 min DuckDB C++ compilation. Useful when iterating locally or in CI with a pre-cached system DuckDB.
+
+### Feature flags reference
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `bundled-duckdb` | ✓ | Compile DuckDB from source; no system `libduckdb` needed |
+
+---
+
 ## Usage
 
 ```text

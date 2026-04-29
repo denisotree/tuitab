@@ -926,9 +926,13 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
 /// `target` is `Ordering::Less` for `<`/`<=` and `Ordering::Greater` for `>`/`>=`.
 /// `allow_equal` adds equality to the comparison (i.e. `<=` vs `<`).
 fn compare_ordered(l: &Value, r: &Value, target: std::cmp::Ordering, allow_equal: bool) -> Value {
-    let matches = |ord: std::cmp::Ordering| ord == target || (allow_equal && ord == std::cmp::Ordering::Equal);
+    let matches = |ord: std::cmp::Ordering| {
+        ord == target || (allow_equal && ord == std::cmp::Ordering::Equal)
+    };
     if let (Some(n1), Some(n2)) = (l.as_f64(), r.as_f64()) {
-        return Value::Boolean(matches(n1.partial_cmp(&n2).unwrap_or(std::cmp::Ordering::Equal)));
+        return Value::Boolean(matches(
+            n1.partial_cmp(&n2).unwrap_or(std::cmp::Ordering::Equal),
+        ));
     }
     if let (Value::String(s1), Value::String(s2)) = (l, r) {
         return Value::Boolean(matches(s1.cmp(s2)));

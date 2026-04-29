@@ -53,14 +53,14 @@ impl App {
                 None
             }
             Action::RenameColumnBackspace => {
-                self.stack.active_mut().rename_column_input.delete_backward();
-                None
-            }
-            Action::RenameColumnForwardDelete => {
                 self.stack
                     .active_mut()
                     .rename_column_input
-                    .delete_forward();
+                    .delete_backward();
+                None
+            }
+            Action::RenameColumnForwardDelete => {
+                self.stack.active_mut().rename_column_input.delete_forward();
                 None
             }
             Action::RenameColumnCursorLeft => {
@@ -123,10 +123,7 @@ impl App {
                 None
             }
             Action::InsertColumnForwardDelete => {
-                self.stack
-                    .active_mut()
-                    .insert_column_input
-                    .delete_forward();
+                self.stack.active_mut().insert_column_input.delete_forward();
                 None
             }
             Action::InsertColumnCursorLeft => {

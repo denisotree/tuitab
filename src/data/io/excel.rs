@@ -111,7 +111,9 @@ fn parse_excel_range(range: calamine::Range<calamine::DataType>) -> Result<DataF
         .collect();
 
     let mut iter = all_rows.into_iter();
-    let header_row = iter.next().ok_or_else(|| eyre!("Excel sheet has no headers"))?;
+    let header_row = iter
+        .next()
+        .ok_or_else(|| eyre!("Excel sheet has no headers"))?;
 
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let headers: Vec<String> = header_row

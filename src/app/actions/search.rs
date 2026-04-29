@@ -94,7 +94,10 @@ impl App {
                 None
             }
             Action::SelectRegexCursorLeft => {
-                self.stack.active_mut().select_regex_input.move_cursor_left();
+                self.stack
+                    .active_mut()
+                    .select_regex_input
+                    .move_cursor_left();
                 None
             }
             Action::SelectRegexCursorRight => {

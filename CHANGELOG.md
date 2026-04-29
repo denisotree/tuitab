@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.8] - 2026-04-28
+## [0.3.8] - 2026-04-29
 
 ### Added
 - Chart cursor navigation: `←`/`→` move a highlight across histogram/frequency bars and line-chart points; Enter drills into matching rows
 - Histogram drill-down: Enter on a bar opens a filtered table sheet; `q`/Esc returns to the chart
 - Pin/unpin (`!`) now restores the column's original position when unpinning
+- `bundled-duckdb` Cargo feature (default-enabled): DuckDB is compiled from source by default; pass `--no-default-features` when a system DuckDB library is available to skip the ~5 min C++ compilation
 
 ### Fixed
 - Save-dialog Tab-completion no longer bleeds expression-autocomplete state — opening Ctrl+S after typing a formula no longer shows formula candidates in the file-path popup
@@ -26,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal: App state extracted into `JoinState`, `ExpressionState`, `ChartState`, `SaveState`, `CopyState`, etc.
 - Internal: `ui/popup.rs` and `data/io.rs` split into format-specific sub-modules
 - Internal: date constants, comparison helper, and type-conversion helpers moved to the data layer
-- Build: `polars` dependency now uses `default-features = false`; release profile upgraded to `lto = "fat"` + `codegen-units = 1`
+- Build: `polars` uses `default-features = false`; `arboard` drops unused `image` feature; release profile uses `lto = "thin"`, `strip = true`; SQLite always bundled
 
 ## [0.3.7] - 2026-04-24
 
