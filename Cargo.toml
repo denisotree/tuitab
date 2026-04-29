@@ -16,6 +16,7 @@ exclude = [
     ".github/",
     "docs/",
     ".githooks/",
+    ".claude/",
 ]
 
 [features]
