@@ -15,6 +15,7 @@ exclude = [
     "packaging/",
     ".github/",
     "docs/",
+    ".githooks/",
 ]
 
 [features]
