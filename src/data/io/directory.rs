@@ -16,7 +16,7 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
 
     let mut names = Vec::new();
     let mut is_dirs = Vec::new();
-    let mut sizes: Vec<String> = Vec::new();
+    let mut sizes: Vec<Option<i64>> = Vec::new();
     let mut modifieds = Vec::new();
     let mut is_supported = Vec::new();
 
@@ -52,10 +52,10 @@ pub fn load_directory(dir: &Path) -> Result<DataFrame> {
         }
 
         let is_dir = meta.is_dir();
-        let size = if is_dir {
-            "-".to_string()
+        let size: Option<i64> = if is_dir {
+            None
         } else {
-            format_file_size(meta.len())
+            Some(meta.len() as i64)
         };
         let mod_time = meta
             .modified()
@@ -108,7 +108,7 @@ pub fn load_files_list(
 
     let mut names = Vec::new();
     let mut is_dirs = Vec::new();
-    let mut sizes: Vec<String> = Vec::new();
+    let mut sizes: Vec<Option<i64>> = Vec::new();
     let mut modifieds = Vec::new();
     let mut is_supported = Vec::new();
     let mut abs_paths = Vec::new();
@@ -123,10 +123,10 @@ pub fn load_files_list(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| abs.to_string_lossy().to_string());
-        let size = if is_dir {
-            "-".to_string()
+        let size: Option<i64> = if is_dir {
+            None
         } else {
-            format_file_size(meta.len())
+            Some(meta.len() as i64)
         };
         let mod_time = meta
             .modified()
@@ -172,7 +172,7 @@ fn apply_directory_column_types(df: &mut DataFrame) {
     if df.columns.len() == 5 {
         df.columns[0].col_type = ColumnType::String;
         df.columns[1].col_type = ColumnType::Boolean;
-        df.columns[2].col_type = ColumnType::String;
+        df.columns[2].col_type = ColumnType::FileSize;
         df.columns[3].col_type = ColumnType::Datetime;
         df.columns[4].col_type = ColumnType::Boolean;
         df.columns[0].width = 40;
@@ -198,7 +198,6 @@ fn format_file_size(bytes: u64) -> String {
     }
 }
 
-#[cfg(test)]
 pub fn format_file_size_pub(bytes: u64) -> String {
     format_file_size(bytes)
 }

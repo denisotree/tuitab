@@ -20,7 +20,6 @@ pub use duckdb::{duckdb_table_names, load_duckdb_overview, load_duckdb_table_by_
 pub use excel::{excel_sheet_names, load_excel_overview, load_excel_sheet_by_name};
 pub use sqlite::{load_sqlite_overview, load_sqlite_table_by_name, sqlite_table_names};
 
-#[cfg(test)]
 pub use directory::format_file_size_pub;
 
 pub fn load_file(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {

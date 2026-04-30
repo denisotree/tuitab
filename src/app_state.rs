@@ -97,3 +97,16 @@ pub struct CopyState {
     pub pending: Option<CopyPending>,
     pub format_index: usize,
 }
+
+/// Tiebreaker selection for smart dedup (Shift+S → D, when pinned cols exist).
+///
+/// `options[0]` is always `None` — the "Random" choice. The rest are
+/// `Some((column_index, descending))` pairs covering every non-pinned column
+/// in both ASC and DESC directions.
+#[derive(Default)]
+pub struct DedupTiebreakerState {
+    pub options: Vec<Option<(usize, bool)>>,
+    pub select_index: usize,
+    /// Pinned columns used as the dedup grouping key.
+    pub key_cols: Vec<usize>,
+}

@@ -61,6 +61,7 @@ impl App {
             Action::ClearAggregators => {
                 let s = self.stack.active_mut();
                 let col = s.cursor_col;
+                s.push_undo();
                 s.dataframe.clear_aggregators(col);
                 self.mode = AppMode::Normal;
                 self.status_message = "Aggregators cleared".to_string();
@@ -82,6 +83,7 @@ impl App {
     pub(super) fn apply_aggregators(&mut self) {
         let s = self.stack.active_mut();
         let col = s.cursor_col;
+        s.push_undo();
         s.dataframe.clear_aggregators(col);
 
         let mut errs = Vec::new();

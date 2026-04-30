@@ -62,6 +62,22 @@ pub enum AppMode {
     JoinSelectRightKeys,
     /// JOIN wizard (overview mode): multi-select items to chain-join
     JoinOverviewSelect,
+    /// User is typing the find pattern for column replace (zr/zg)
+    ColReplacingFind,
+    /// User is typing the replacement string for column replace (zr/zg)
+    ColReplacingReplace,
+    /// User is typing the delimiter for column split (zx)
+    ColSplitting,
+    /// Column move mode — entered after z←/z→, repeated arrows reorder until Esc
+    ColumnMove,
+    /// Bulk-edit value for selected rows (ge)
+    BulkEditing,
+    /// Waiting for second key after Shift+S (Sr=random, Sd=duplicates, SD=smart dedup)
+    SPrefix,
+    /// Typing N for random row selection (Shift+S → r)
+    SelectRandomInput,
+    /// Picking tiebreaker column + direction for smart dedup (Shift+S → D, with pinned cols)
+    DedupTiebreakerSelect,
 }
 
 /// Distinguishes a regular data sheet from derived views.
@@ -265,6 +281,50 @@ pub enum Action {
     TogglePartitionSelection,
     CancelPartitionSelect,
 
+    // ── Column string operations (zr, zg, zx) ────────────────────────────────
+    StartColReplace,
+    StartColRegexpReplace,
+    StartColSplit,
+    ColFindInput(char),
+    ColFindBackspace,
+    ColFindForwardDelete,
+    ColFindCursorLeft,
+    ColFindCursorRight,
+    ColFindCursorStart,
+    ColFindCursorEnd,
+    ColFindConfirm,
+    ColReplaceInput(char),
+    ColReplaceBackspace,
+    ColReplaceForwardDelete,
+    ColReplaceCursorLeft,
+    ColReplaceCursorRight,
+    ColReplaceCursorStart,
+    ColReplaceCursorEnd,
+    ApplyColReplace,
+    ColSplitInput(char),
+    ColSplitBackspace,
+    ColSplitForwardDelete,
+    ColSplitCursorLeft,
+    ColSplitCursorRight,
+    ColSplitCursorStart,
+    ColSplitCursorEnd,
+    ApplyColSplit,
+    CancelColOp,
+    /// Exit column-move mode (Esc / Enter / any non-arrow key)
+    ExitColumnMove,
+
+    // ── Bulk edit (ge) ────────────────────────────────────────────────────────
+    StartBulkEdit,
+    BulkEditInput(char),
+    BulkEditBackspace,
+    BulkEditForwardDelete,
+    BulkEditCursorLeft,
+    BulkEditCursorRight,
+    BulkEditCursorStart,
+    BulkEditCursorEnd,
+    ApplyBulkEdit,
+    CancelBulkEdit,
+
     // ── Column aggregators ────────────────────────────────────────────────────
     OpenAggregatorSelect,
     ApplyAggregators,
@@ -277,12 +337,13 @@ pub enum Action {
     QuickAggregate,
 
     // ── Row selection ─────────────────────────────────────────────────────────
-    SelectRow,       // 's' — select/mark current row
-    UnselectRow,     // 'u' — unselect current row
-    EnterGPrefix,    // 'g' — wait for next key
-    CancelGPrefix,   // Esc in GPrefix mode
-    SelectAllRows,   // 'gs' — select all visible rows
-    UnselectAllRows, // 'gu' — unselect all visible rows
+    SelectRow,          // 's' — select/mark current row
+    UnselectRow,        // 'u' — unselect current row
+    EnterGPrefix,       // 'g' — wait for next key
+    CancelGPrefix,      // Esc in GPrefix mode
+    SelectAllRows,      // 'gs' — select all visible rows
+    UnselectAllRows,    // 'gu' — unselect all visible rows
+    ToggleAllSelection, // 'gt' — toggle: select all if not all selected, else unselect all
 
     // ── Clipboard & row operations ────────────────────────────────────────────
     PasteRows,                   // 'p' — paste rows from clipboard
@@ -337,6 +398,26 @@ pub enum Action {
     JoinRightKeyToggle,
     JoinRightKeyApply,
     JoinRightKeyCancel,
+
+    // ── Special select (Shift+S) ──────────────────────────────────────────────
+    EnterSPrefix,
+    CancelSPrefix,
+    StartSelectRandom, // Sr — open input popup for N
+    SelectRandomInputChar(char),
+    SelectRandomBackspace,
+    SelectRandomForwardDelete,
+    SelectRandomCursorLeft,
+    SelectRandomCursorRight,
+    SelectRandomCursorStart,
+    SelectRandomCursorEnd,
+    ApplySelectRandom,
+    CancelSelectRandom,
+    SelectDuplicates, // Sd — select all rows that have an exact duplicate
+    StartSmartDedup,  // SD — run smart deduplication
+    DedupTiebreakerUp,
+    DedupTiebreakerDown,
+    ApplyDedupTiebreaker,
+    CancelDedupTiebreaker,
 
     /// Open current cell value in $EDITOR for viewing/editing
     OpenExternalEditor,
@@ -411,6 +492,8 @@ pub enum ColumnType {
     Boolean,
     Percentage,
     Currency,
+    /// Integer bytes (i64), displayed as human-readable file size (e.g. "1.5 MB")
+    FileSize,
 }
 
 impl ColumnType {
@@ -424,6 +507,7 @@ impl ColumnType {
             Self::Boolean,
             Self::Percentage,
             Self::Currency,
+            Self::FileSize,
         ]
     }
 
@@ -437,6 +521,7 @@ impl ColumnType {
             Self::Boolean => "?  Boolean",
             Self::Percentage => "%  Percentage",
             Self::Currency => "$  Currency",
+            Self::FileSize => "B  File size",
         }
     }
 
@@ -450,6 +535,7 @@ impl ColumnType {
             Self::Boolean => '?',
             Self::Percentage => '%',
             Self::Currency => '$',
+            Self::FileSize => 'B',
         }
     }
 }

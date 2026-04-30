@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-30
+
+### Added
+- `Shift+S` Special select prefix mode with three subcommands:
+  - `Shift+S r` — random selection of N visible rows (N entered in popup)
+  - `Shift+S d` — select all rows that have an exact duplicate (full row match)
+  - `Shift+S D` — smart deduplication: dedup by all columns when no pinned columns; with pinned columns, opens a tiebreaker popup to pick column + ASC/DESC (or random) for choosing which row to keep
+- Bulk edit (`ge`) now pre-fills the input with the value of the active cell, so you can quickly tweak or replace it
+- Column string operations under `z` prefix:
+  - `zr` — find/replace in a column (literal)
+  - `zg` — find/replace in a column (regex)
+  - `zx` — split a column by delimiter into N new columns
+- `ColumnType::FileSize` — integer bytes rendered as human-readable `1.5 KB` / `2.3 MB` / etc.; directory listings now use it so the Size column is sortable numerically
+- Three-state column width cycle (`_`): Default (load-time auto-width) → Compact (header-only) → Expanded (full content). Replaces the old binary expand toggle
+- Column move mode (`z←` / `z→`): repeated arrows reorder the column until any other key exits
+
+### Changed
+- `gt` (toggle all) now performs true per-row inversion: previously selected rows become unselected and vice versa, instead of the old "all-or-nothing" behaviour
+- `cargo audit` ignore for `RUSTSEC-2025-0141` (bincode unmaintained warning) — bincode is still pulled transitively by `polars-utils` and we'll drop it once polars upgrades
+
+### Fixed
+- Opening a file from a directory listing (`tuitab ~/Downloads/`) when cwd is not the parent directory: previously failed with "No such file or directory" because the relative path was built from the sheet title; now uses the full `source_path` of the directory sheet, and sub-directories propagate `source_path` correctly
+- File size in directory listings now displays in human-readable form (B/KB/MB/GB) instead of raw byte count
+- `clear_aggregators` and `apply_aggregators` now push undo, so column aggregator changes are reversible
+
 ## [0.3.8] - 2026-04-29
 
 ### Added
@@ -167,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/denisotree/tuitab/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/denisotree/tuitab/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/denisotree/tuitab/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/denisotree/tuitab/compare/v0.3.5...v0.3.6

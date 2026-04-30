@@ -56,6 +56,13 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         | AppMode::JoinSelectLeftKeys
         | AppMode::JoinSelectRightKeys
         | AppMode::JoinOverviewSelect => " JOIN   ",
+        AppMode::ColReplacingFind | AppMode::ColReplacingReplace => " REPLACE",
+        AppMode::ColSplitting => " SPLIT  ",
+        AppMode::ColumnMove => " COL-MOV",
+        AppMode::BulkEditing => " BULK-ED",
+        AppMode::SPrefix => " S-MODE ",
+        AppMode::SelectRandomInput => " RAND-N ",
+        AppMode::DedupTiebreakerSelect => " DEDUP  ",
     };
 
     frame.render_widget(

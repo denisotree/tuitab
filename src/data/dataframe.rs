@@ -157,6 +157,14 @@ impl DataFrame {
                     return format!("{:.*}", p, f);
                 }
             }
+            ColumnType::FileSize => {
+                if let Ok(n) = raw.parse::<i64>() {
+                    if n < 0 {
+                        return "-".to_string();
+                    }
+                    return crate::data::io::format_file_size_pub(n as u64);
+                }
+            }
             _ => {}
         }
         raw
@@ -175,7 +183,10 @@ impl DataFrame {
             .map(|(col_idx, meta)| {
                 let needs_fmt = matches!(
                     meta.col_type,
-                    ColumnType::Percentage | ColumnType::Currency | ColumnType::Float
+                    ColumnType::Percentage
+                        | ColumnType::Currency
+                        | ColumnType::Float
+                        | ColumnType::FileSize
                 );
                 if needs_fmt {
                     let values: Vec<String> = (0..nrows)
@@ -265,6 +276,69 @@ impl DataFrame {
         Ok(())
     }
 
+    /// Set the same `value` on every row in `physical_rows` for column `col`.
+    /// Single-pass over the column — much cheaper than calling `set_cell` N times.
+    pub fn set_cells_bulk(
+        &mut self,
+        physical_rows: &std::collections::HashSet<usize>,
+        col: usize,
+        value: String,
+    ) -> Result<usize, String> {
+        if col >= self.df.width() {
+            return Err("Out of bounds".into());
+        }
+        let series = &self.df.columns()[col];
+        let series_name = series.name().clone();
+
+        let string_series = series
+            .cast(&polars::prelude::DataType::String)
+            .map_err(|e| e.to_string())?;
+        let str_ca = string_series.str().map_err(|e| e.to_string())?;
+
+        let mut parsed_val = value;
+        if col < self.columns.len() {
+            match self.columns[col].col_type {
+                ColumnType::Percentage => {
+                    let s = parsed_val.trim().replace('%', "");
+                    if let Ok(f) = s.parse::<f64>() {
+                        parsed_val = (f / 100.0).to_string();
+                    }
+                }
+                ColumnType::Currency => {
+                    let cleaned: String = parsed_val
+                        .trim()
+                        .chars()
+                        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+                        .collect();
+                    if let Ok(f) = cleaned.parse::<f64>() {
+                        parsed_val = f.to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut builder = polars::prelude::StringChunkedBuilder::new(series_name, str_ca.len());
+        let mut updated = 0usize;
+        for (i, opt_s) in str_ca.into_iter().enumerate() {
+            if physical_rows.contains(&i) {
+                builder.append_value(&parsed_val);
+                updated += 1;
+            } else {
+                builder.append_option(opt_s);
+            }
+        }
+
+        let new_series = builder.finish().into_series();
+        let final_series = new_series.cast(series.dtype()).unwrap_or(new_series);
+        self.df
+            .with_column(final_series.into())
+            .map_err(|e| e.to_string())?;
+        self.modified = true;
+        self.aggregates_cache = None;
+        Ok(updated)
+    }
+
     /// Number of rows currently visible (after any active filter).
     pub fn visible_row_count(&self) -> usize {
         self.row_order.len()
@@ -300,7 +374,7 @@ impl DataFrame {
         }
 
         let target_dtype = match col_type {
-            ColumnType::Integer => polars::prelude::DataType::Int64,
+            ColumnType::Integer | ColumnType::FileSize => polars::prelude::DataType::Int64,
             ColumnType::Float | ColumnType::Percentage | ColumnType::Currency => {
                 polars::prelude::DataType::Float64
             }
@@ -712,6 +786,143 @@ impl DataFrame {
         Ok(())
     }
 
+    // ── String column operations ───────────────────────────────────────────────
+
+    /// Replace all occurrences of `find` in the string column at `col_idx`.
+    /// If `literal` is true, treats `find` as a literal string; otherwise as a regexp.
+    pub fn col_replace(
+        &mut self,
+        col_idx: usize,
+        find: &str,
+        replace: &str,
+        literal: bool,
+    ) -> Result<(), String> {
+        if col_idx >= self.columns.len() {
+            return Err("Column index out of bounds".to_string());
+        }
+        let col_name = self.columns[col_idx].name.clone();
+        let series = self
+            .df
+            .column(&col_name)
+            .map_err(|e| e.to_string())?
+            .as_materialized_series()
+            .clone();
+        let str_ca = series
+            .cast(&polars::prelude::DataType::String)
+            .map_err(|e| e.to_string())?;
+        let str_ca = str_ca.str().map_err(|e| e.to_string())?;
+
+        let new_values: Vec<Option<String>> = if literal {
+            str_ca
+                .iter()
+                .map(|opt| opt.map(|s| s.replace(find, replace)))
+                .collect()
+        } else {
+            let re = regex::Regex::new(find).map_err(|e| format!("Invalid regex: {}", e))?;
+            str_ca
+                .iter()
+                .map(|opt| opt.map(|s| re.replace_all(s, replace).into_owned()))
+                .collect()
+        };
+
+        use polars::prelude::*;
+        let new_series = Series::new(col_name.as_str().into(), new_values);
+        self.df
+            .with_column(new_series.into())
+            .map_err(|e| e.to_string())?;
+        self.columns[col_idx].col_type = crate::types::ColumnType::String;
+        self.modified = true;
+        self.aggregates_cache = None;
+        Ok(())
+    }
+
+    /// Split the column at `col_idx` by `delimiter`, inserting one new column
+    /// per part immediately after the source column. Returns the number of new columns.
+    /// Non-String columns are cast to String first.
+    pub fn col_split(&mut self, col_idx: usize, delimiter: &str) -> Result<usize, String> {
+        if col_idx >= self.columns.len() {
+            return Err("Column index out of bounds".to_string());
+        }
+        let col_name = self.columns[col_idx].name.clone();
+
+        let series = self
+            .df
+            .column(&col_name)
+            .map_err(|e| e.to_string())?
+            .as_materialized_series()
+            .clone();
+        let casted = series
+            .cast(&polars::prelude::DataType::String)
+            .map_err(|e| e.to_string())?;
+        let str_ca = casted.str().map_err(|e| e.to_string())?;
+
+        let splits: Vec<Vec<String>> = str_ca
+            .iter()
+            .map(|opt| {
+                opt.map(|s| s.split(delimiter).map(String::from).collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        let max_parts = splits.iter().map(Vec::len).max().unwrap_or(0);
+        if max_parts <= 1 {
+            return Err(format!(
+                "Delimiter '{}' not found in column values",
+                delimiter
+            ));
+        }
+
+        // Generate unique names for the new part columns, avoiding collisions
+        // with existing columns and with each other.
+        let existing: std::collections::HashSet<String> =
+            self.columns.iter().map(|c| c.name.clone()).collect();
+        let mut new_names: Vec<String> = Vec::with_capacity(max_parts);
+        for part_idx in 0..max_parts {
+            let base = format!("{}.{}", col_name, part_idx + 1);
+            let mut candidate = base.clone();
+            let mut suffix = 1;
+            while existing.contains(&candidate) || new_names.contains(&candidate) {
+                suffix += 1;
+                candidate = format!("{}_{}", base, suffix);
+            }
+            new_names.push(candidate);
+        }
+
+        // Append all new columns at the end of the DataFrame.
+        use polars::prelude::*;
+        for (part_idx, new_col_name) in new_names.iter().enumerate() {
+            let values: Vec<Option<String>> = splits
+                .iter()
+                .map(|parts| parts.get(part_idx).cloned())
+                .collect();
+            let new_series = Series::new(new_col_name.as_str().into(), &values);
+            self.df
+                .with_column(new_series.into())
+                .map_err(|e| e.to_string())?;
+            let mut meta = ColumnMeta::new(new_col_name.clone());
+            meta.col_type = crate::types::ColumnType::String;
+            self.columns.push(meta);
+        }
+
+        // Move the M new columns from the end to position col_idx + 1 in a single
+        // batch reorder — one drain/insert on metadata Vec, one DataFrame select.
+        let total = self.columns.len();
+        let new_start = total - max_parts;
+        let target = col_idx + 1;
+        if new_start != target {
+            let new_meta: Vec<ColumnMeta> = self.columns.drain(new_start..).collect();
+            for (i, meta) in new_meta.into_iter().enumerate() {
+                self.columns.insert(target + i, meta);
+            }
+            let final_names: Vec<&str> = self.columns.iter().map(|c| c.name.as_str()).collect();
+            self.df = self.df.select(final_names).map_err(|e| e.to_string())?;
+        }
+
+        self.modified = true;
+        self.aggregates_cache = None;
+        Ok(max_parts)
+    }
+
     // ── Aggregators ────────────────────────────────────────────────────────────
 
     // ── Aggregators ────────────────────────────────────────────────────────────
@@ -1058,6 +1269,10 @@ impl DataFrame {
         let header_w = UnicodeWidthStr::width(col_meta.name.as_str()) as u16 + 2;
         let actual_min = col_meta.min_width.max(header_w);
         col_meta.width = actual_min.max(max_val_width).min(max_width);
+        // Save the first-ever calculated width as the "Default" width for the 3-state cycle.
+        if col_meta.default_width == 0 {
+            col_meta.default_width = col_meta.width;
+        }
     }
 
     // ── Vectorized helpers ────────────────────────────────────────────────────
@@ -1224,6 +1439,9 @@ impl DataFrame {
             let agg_col_name = self.columns[agg_col_idx].name.clone();
             let src_meta = &self.columns[agg_col_idx];
             for agg_kind in aggregators {
+                if !agg_kind.is_compatible(src_meta.col_type) {
+                    continue;
+                }
                 if let Some(expr) = agg_kind.to_expr(&agg_col_name) {
                     let alias_name = format!("{}:{}", agg_col_name, agg_kind.name());
                     agg_exprs.push(expr.alias(&alias_name));
@@ -1355,6 +1573,9 @@ impl DataFrame {
             let agg_col_name = self.columns[agg_col_idx].name.clone();
             let src_meta = &self.columns[agg_col_idx];
             for agg_kind in aggregators {
+                if !agg_kind.is_compatible(src_meta.col_type) {
+                    continue;
+                }
                 if let Some(expr) = agg_kind.to_expr(&agg_col_name) {
                     let alias_name = format!("{}:{}", agg_col_name, agg_kind.name());
                     agg_exprs.push(expr.alias(&alias_name));

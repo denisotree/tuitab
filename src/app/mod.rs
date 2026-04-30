@@ -17,8 +17,8 @@
 mod actions;
 
 use crate::app_state::{
-    AggregatorState, ChartState, CopyState, ExpressionState, JoinState, PartitionState, PivotState,
-    SaveState, TypeSelectState,
+    AggregatorState, ChartState, CopyState, DedupTiebreakerState, ExpressionState, JoinState,
+    PartitionState, PivotState, SaveState, TypeSelectState,
 };
 use crate::data::aggregator::AggregatorKind;
 use crate::data::async_loader::{self, LoadEvent};
@@ -52,6 +52,7 @@ pub struct App {
 
     pub save: SaveState,
     pub aggregator: AggregatorState,
+    pub col_op_literal: bool,
     pub type_select: TypeSelectState,
     pub partition: PartitionState,
     pub expression: ExpressionState,
@@ -59,6 +60,7 @@ pub struct App {
     pub chart: ChartState,
     pub join: JoinState,
     pub copy: CopyState,
+    pub dedup_tiebreaker: DedupTiebreakerState,
 }
 
 impl App {
@@ -81,6 +83,7 @@ impl App {
             open_in_editor_pending: false,
             save,
             aggregator: AggregatorState::default(),
+            col_op_literal: true,
             type_select: TypeSelectState::default(),
             partition: PartitionState::default(),
             expression: ExpressionState::default(),
@@ -88,6 +91,7 @@ impl App {
             chart: ChartState::default(),
             join: JoinState::default(),
             copy: CopyState::default(),
+            dedup_tiebreaker: DedupTiebreakerState::default(),
         }
     }
 }
@@ -600,47 +604,81 @@ impl App {
     // ── Column width adjustment ───────────────────────────────────────────────
 
     fn adjust_column_width(&mut self) {
+        use crate::data::column::ColumnWidthMode;
         let s = self.stack.active_mut();
         let col = s.cursor_col;
         if col >= s.dataframe.columns.len() {
             return;
         }
-        if s.dataframe.columns[col].width_expanded {
-            // Toggle OFF: contract to header width (min_width)
-            let header_w = s.dataframe.columns[col].min_width;
-            s.dataframe.columns[col].width = header_w;
-            s.dataframe.columns[col].width_expanded = false;
-            let col_name = s.dataframe.columns[col].name.clone();
-            self.status_message = format!("Column '{}' width reset to header", col_name);
-        } else {
-            // Toggle ON: expand to content width
-            s.dataframe.calc_column_width(col, u16::MAX, usize::MAX);
-            s.dataframe.columns[col].width_expanded = true;
-            let col_name = s.dataframe.columns[col].name.clone();
-            let width = s.dataframe.columns[col].width;
-            self.status_message = format!("Column '{}' width set to {}", col_name, width);
+        let col_name = s.dataframe.columns[col].name.clone();
+        match s.dataframe.columns[col].width_mode {
+            ColumnWidthMode::Default => {
+                // Default → Compact: contract to header-name width
+                let header_w = s.dataframe.columns[col].min_width;
+                s.dataframe.columns[col].width = header_w;
+                s.dataframe.columns[col].width_mode = ColumnWidthMode::Compact;
+                self.status_message = format!("Column '{}' width: compact", col_name);
+            }
+            ColumnWidthMode::Compact => {
+                // Compact → Expanded: full content scan
+                s.dataframe.calc_column_width(col, u16::MAX, usize::MAX);
+                s.dataframe.columns[col].width_mode = ColumnWidthMode::Expanded;
+                let width = s.dataframe.columns[col].width;
+                self.status_message = format!("Column '{}' width: expanded ({})", col_name, width);
+            }
+            ColumnWidthMode::Expanded => {
+                // Expanded → Default: restore load-time width
+                let default_w = s.dataframe.columns[col].default_width;
+                if default_w > 0 {
+                    s.dataframe.columns[col].width = default_w;
+                } else {
+                    s.dataframe.calc_column_width(col, 40, 1000);
+                }
+                s.dataframe.columns[col].width_mode = ColumnWidthMode::Default;
+                self.status_message = format!("Column '{}' width: default", col_name);
+            }
         }
     }
 
     fn adjust_all_column_widths(&mut self) {
+        use crate::data::column::ColumnWidthMode;
         let s = self.stack.active_mut();
-        let any_expanded = s.dataframe.columns.iter().any(|c| c.width_expanded);
-        if any_expanded {
-            // Toggle OFF: contract all to header width
-            for col_meta in s.dataframe.columns.iter_mut() {
-                col_meta.width = col_meta.min_width;
-                col_meta.width_expanded = false;
-            }
-            self.mode = AppMode::Normal;
-            self.status_message = "All column widths reset to header".to_string();
-        } else {
-            // Toggle ON: expand all to content width
+        let all_default = s
+            .dataframe
+            .columns
+            .iter()
+            .all(|c| c.width_mode == ColumnWidthMode::Default);
+        if all_default {
+            // All Default → expand all to full content width
             s.dataframe.calc_widths(u16::MAX, usize::MAX);
             for col_meta in s.dataframe.columns.iter_mut() {
-                col_meta.width_expanded = true;
+                col_meta.width_mode = ColumnWidthMode::Expanded;
             }
             self.mode = AppMode::Normal;
-            self.status_message = "All column widths adjusted to content".to_string();
+            self.status_message = "All column widths: expanded".to_string();
+        } else {
+            // Any non-Default → restore all to Default width.
+            // For columns whose default_width was never cached, compute it now using
+            // the same calc params used at load time (and as adjust_column_width does).
+            let needs_calc: Vec<usize> = s
+                .dataframe
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.default_width == 0)
+                .map(|(i, _)| i)
+                .collect();
+            for idx in needs_calc {
+                s.dataframe.calc_column_width(idx, 40, 1000);
+            }
+            for col_meta in s.dataframe.columns.iter_mut() {
+                if col_meta.default_width > 0 {
+                    col_meta.width = col_meta.default_width;
+                }
+                col_meta.width_mode = ColumnWidthMode::Default;
+            }
+            self.mode = AppMode::Normal;
+            self.status_message = "All column widths: default".to_string();
         }
     }
 
@@ -1018,20 +1056,37 @@ impl App {
         let col = s.cursor_col;
         let target = DataFrame::anyvalue_to_string_fmt(&s.dataframe.get_val(display_row, col));
 
-        // Vectorized equality scan via Polars str() iteration
         let matching_display_rows = s.dataframe.find_rows_by_value(col, &target);
         let count = matching_display_rows.len();
-        for display_idx in matching_display_rows {
-            if display_idx < s.dataframe.row_order.len() {
-                s.dataframe
-                    .selected_rows
-                    .insert(s.dataframe.row_order[display_idx]);
+
+        let physical_rows: Vec<usize> = matching_display_rows
+            .iter()
+            .filter(|&&di| di < s.dataframe.row_order.len())
+            .map(|&di| s.dataframe.row_order[di])
+            .collect();
+
+        let all_selected = !physical_rows.is_empty()
+            && physical_rows
+                .iter()
+                .all(|idx| s.dataframe.selected_rows.contains(idx));
+
+        if all_selected {
+            for idx in &physical_rows {
+                s.dataframe.selected_rows.remove(idx);
             }
+            self.status_message = format!(
+                "Deselected {} rows where {} = '{}'",
+                count, s.dataframe.columns[col].name, target
+            );
+        } else {
+            for idx in physical_rows {
+                s.dataframe.selected_rows.insert(idx);
+            }
+            self.status_message = format!(
+                "Selected {} rows where {} = '{}'",
+                count, s.dataframe.columns[col].name, target
+            );
         }
-        self.status_message = format!(
-            "Selected {} rows where {} = '{}'",
-            count, s.dataframe.columns[col].name, target
-        );
     }
 
     // ── Select by regex (|) ────────────────────────────────────────────────────
@@ -1131,8 +1186,7 @@ impl App {
     // ── Expression / computed column (=) ───────────────────────────────────────
 
     fn apply_expression(&mut self) {
-        let s = self.stack.active_mut();
-        let input = s.expr_input.as_str().to_string();
+        let input = self.stack.active_mut().expr_input.as_str().to_string();
 
         if input.is_empty() {
             self.mode = AppMode::Normal;
@@ -1148,6 +1202,8 @@ impl App {
 
         match Expr::parse(&input) {
             Ok(expr) => {
+                let s = self.stack.active_mut();
+                s.push_undo();
                 let name = format!("={}", input);
                 let col = s.cursor_col;
                 match s.dataframe.add_computed_column(&name, &expr, col) {
@@ -1447,28 +1503,24 @@ impl App {
                 crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&supported_val) == "true";
 
             // For synthetic file-list sheets, use the stored absolute path directly.
+            // Otherwise prefer the full source_path of the directory sheet, falling
+            // back to the title only if neither is available.
+            let resolve_base = |s: &crate::sheet::Sheet| -> std::path::PathBuf {
+                if let Some(ref p) = s.source_path {
+                    p.clone()
+                } else if s.title == "." || s.title.is_empty() {
+                    std::path::PathBuf::from(".")
+                } else {
+                    std::path::PathBuf::from(&s.title)
+                }
+            };
             let target_path = if let Some(ref paths) = s.explicit_row_paths {
-                paths.get(row_idx).cloned().unwrap_or_else(|| {
-                    let current_dir_str = s.title.clone();
-                    let base_path = std::path::PathBuf::from(
-                        if current_dir_str == "." || current_dir_str.is_empty() {
-                            "."
-                        } else {
-                            &current_dir_str
-                        },
-                    );
-                    base_path.join(&name)
-                })
+                paths
+                    .get(row_idx)
+                    .cloned()
+                    .unwrap_or_else(|| resolve_base(s).join(&name))
             } else {
-                let current_dir_str = s.title.clone();
-                let base_path = std::path::PathBuf::from(
-                    if current_dir_str == "." || current_dir_str.is_empty() {
-                        "."
-                    } else {
-                        &current_dir_str
-                    },
-                );
-                base_path.join(&name)
+                resolve_base(s).join(&name)
             };
 
             if is_dir {
@@ -1479,6 +1531,7 @@ impl App {
                             new_df,
                         );
                         new_sheet.is_dir_sheet = true;
+                        new_sheet.source_path = Some(target_path.clone());
                         self.stack.push(new_sheet);
                     }
                     Err(e) => {
@@ -2618,13 +2671,17 @@ impl App {
             s.push_undo();
             if let Err(e) = s.dataframe.swap_columns(col, col - 1) {
                 self.status_message = format!("Move error: {}", e);
-            } else {
-                s.cursor_col -= 1;
-                s.table_state.select_column(Some(s.cursor_col));
-                self.status_message = "Moved column left".to_string();
+                self.mode = AppMode::ColumnMove;
+                return;
             }
+            s.cursor_col -= 1;
+            s.table_state.select_column(Some(s.cursor_col));
         }
-        self.mode = AppMode::ZPrefix; // Stay in ZPrefix mode
+        let col_name = self.stack.active().dataframe.columns[self.stack.active().cursor_col]
+            .name
+            .clone();
+        self.mode = AppMode::ColumnMove;
+        self.status_message = format!("Move column '{}': ←/→ to reorder, Esc to exit", col_name);
     }
 
     fn move_col_right(&mut self) {
@@ -2634,13 +2691,17 @@ impl App {
             s.push_undo();
             if let Err(e) = s.dataframe.swap_columns(col, col + 1) {
                 self.status_message = format!("Move error: {}", e);
-            } else {
-                s.cursor_col += 1;
-                s.table_state.select_column(Some(s.cursor_col));
-                self.status_message = "Moved column right".to_string();
+                self.mode = AppMode::ColumnMove;
+                return;
             }
+            s.cursor_col += 1;
+            s.table_state.select_column(Some(s.cursor_col));
         }
-        self.mode = AppMode::ZPrefix; // Stay in ZPrefix mode
+        let col_name = self.stack.active().dataframe.columns[self.stack.active().cursor_col]
+            .name
+            .clone();
+        self.mode = AppMode::ColumnMove;
+        self.status_message = format!("Move column '{}': ←/→ to reorder, Esc to exit", col_name);
     }
 
     fn join_path_autocomplete(&mut self) {

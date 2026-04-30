@@ -79,6 +79,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('_') => Action::AdjustColumnWidth,
             // Row selection
             KeyCode::Char('s') => Action::SelectRow,
+            KeyCode::Char('S') => Action::EnterSPrefix,
             KeyCode::Char('u') => Action::UnselectRow,
             KeyCode::Char('g') => Action::EnterGPrefix,
             // Column operations
@@ -288,6 +289,8 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('g') => Action::GoTop,           // gg → go to top
             KeyCode::Char('s') => Action::SelectAllRows,   // gs → select all
             KeyCode::Char('u') => Action::UnselectAllRows, // gu → unselect all
+            KeyCode::Char('t') => Action::ToggleAllSelection, // gt → toggle all selection
+            KeyCode::Char('e') => Action::StartBulkEdit,   // ge → bulk-edit selected rows
             KeyCode::Char('_') => Action::AdjustAllColumnWidths, // g_ → adjust all column widths
             KeyCode::Char('F') => Action::OpenMultiFrequencyTable, // gF → multi frequency table
             KeyCode::Char('D') | KeyCode::Char('d') | KeyCode::Char('U') => {
@@ -311,8 +314,103 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             // Precision: z> increase decimal places, z< decrease
             KeyCode::Char('>') | KeyCode::Char('.') => Action::IncreasePrecision,
             KeyCode::Char('<') | KeyCode::Char(',') => Action::DecreasePrecision,
+            KeyCode::Char('r') => Action::StartColReplace,
+            KeyCode::Char('g') => Action::StartColRegexpReplace,
+            KeyCode::Char('x') => Action::StartColSplit,
             KeyCode::Esc => Action::CancelZPrefix,
             _ => Action::CancelZPrefix,
+        },
+
+        AppMode::ColReplacingFind => match key.code {
+            KeyCode::Esc => Action::CancelColOp,
+            KeyCode::Enter => Action::ColFindConfirm,
+            KeyCode::Backspace => Action::ColFindBackspace,
+            KeyCode::Delete => Action::ColFindForwardDelete,
+            KeyCode::Left => Action::ColFindCursorLeft,
+            KeyCode::Right => Action::ColFindCursorRight,
+            KeyCode::Home => Action::ColFindCursorStart,
+            KeyCode::End => Action::ColFindCursorEnd,
+            KeyCode::Char(c) => Action::ColFindInput(c),
+            _ => Action::None,
+        },
+
+        AppMode::ColReplacingReplace => match key.code {
+            KeyCode::Esc => Action::CancelColOp,
+            KeyCode::Enter => Action::ApplyColReplace,
+            KeyCode::Backspace => Action::ColReplaceBackspace,
+            KeyCode::Delete => Action::ColReplaceForwardDelete,
+            KeyCode::Left => Action::ColReplaceCursorLeft,
+            KeyCode::Right => Action::ColReplaceCursorRight,
+            KeyCode::Home => Action::ColReplaceCursorStart,
+            KeyCode::End => Action::ColReplaceCursorEnd,
+            KeyCode::Char(c) => Action::ColReplaceInput(c),
+            _ => Action::None,
+        },
+
+        AppMode::ColSplitting => match key.code {
+            KeyCode::Esc => Action::CancelColOp,
+            KeyCode::Enter => Action::ApplyColSplit,
+            KeyCode::Tab => Action::ColSplitInput('\t'),
+            KeyCode::Backspace => Action::ColSplitBackspace,
+            KeyCode::Delete => Action::ColSplitForwardDelete,
+            KeyCode::Left => Action::ColSplitCursorLeft,
+            KeyCode::Right => Action::ColSplitCursorRight,
+            KeyCode::Home => Action::ColSplitCursorStart,
+            KeyCode::End => Action::ColSplitCursorEnd,
+            KeyCode::Char(c) => Action::ColSplitInput(c),
+            _ => Action::None,
+        },
+
+        // Column move mode — repeated arrows reorder column until Esc / Enter
+        AppMode::ColumnMove => match key.code {
+            KeyCode::Left | KeyCode::Char('h') => Action::MoveColumnLeft,
+            KeyCode::Right | KeyCode::Char('l') => Action::MoveColumnRight,
+            _ => Action::ExitColumnMove,
+        },
+
+        // S-prefix modifier (Shift+S → r/d/D)
+        AppMode::SPrefix => match key.code {
+            KeyCode::Char('r') => Action::StartSelectRandom,
+            KeyCode::Char('d') => Action::SelectDuplicates,
+            KeyCode::Char('D') => Action::StartSmartDedup,
+            KeyCode::Esc => Action::CancelSPrefix,
+            _ => Action::CancelSPrefix,
+        },
+
+        // Random row count input
+        AppMode::SelectRandomInput => match key.code {
+            KeyCode::Esc => Action::CancelSelectRandom,
+            KeyCode::Enter => Action::ApplySelectRandom,
+            KeyCode::Backspace => Action::SelectRandomBackspace,
+            KeyCode::Delete => Action::SelectRandomForwardDelete,
+            KeyCode::Left => Action::SelectRandomCursorLeft,
+            KeyCode::Right => Action::SelectRandomCursorRight,
+            KeyCode::Home => Action::SelectRandomCursorStart,
+            KeyCode::End => Action::SelectRandomCursorEnd,
+            KeyCode::Char(c) if c.is_ascii_digit() => Action::SelectRandomInputChar(c),
+            _ => Action::None,
+        },
+
+        // Tiebreaker column/direction selection for smart dedup
+        AppMode::DedupTiebreakerSelect => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Action::DedupTiebreakerUp,
+            KeyCode::Down | KeyCode::Char('j') => Action::DedupTiebreakerDown,
+            KeyCode::Enter => Action::ApplyDedupTiebreaker,
+            KeyCode::Esc | KeyCode::Char('q') => Action::CancelDedupTiebreaker,
+            _ => Action::None,
+        },
+
+        AppMode::BulkEditing => match key.code {
+            KeyCode::Esc => Action::CancelBulkEdit,
+            KeyCode::Enter => Action::ApplyBulkEdit,
+            KeyCode::Backspace => Action::BulkEditBackspace,
+            KeyCode::Delete => Action::BulkEditForwardDelete,
+            KeyCode::Left => Action::BulkEditCursorLeft,
+            KeyCode::Right => Action::BulkEditCursorRight,
+            KeyCode::Home => Action::BulkEditCursorStart,
+            KeyCode::End => Action::BulkEditCursorEnd,
+            KeyCode::Char(c) => Action::BulkEditInput(c),
+            _ => Action::None,
         },
 
         // Partition selection for zF

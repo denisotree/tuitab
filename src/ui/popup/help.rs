@@ -36,6 +36,9 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         Line::from("  | !=expr          Select rows by Expression"),
         Line::from("  s / u             Select / unselect row"),
         Line::from("  gs / gu           Select all / unselect all"),
+        Line::from("  Shift+S r         Select N random rows"),
+        Line::from("  Shift+S d         Select all duplicate rows"),
+        Line::from("  Shift+S D         Smart dedup (asks tiebreaker if pinned cols)"),
         Line::from(""),
         Line::from(Span::styled(
             "── Clipboard ───────────────────────────",

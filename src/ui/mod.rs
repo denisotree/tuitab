@@ -50,6 +50,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | AppMode::ZPrefix
         | AppMode::RenamingColumn
         | AppMode::InsertingColumn
+        | AppMode::ColReplacingFind
+        | AppMode::ColReplacingReplace
+        | AppMode::ColSplitting
+        | AppMode::ColumnMove
+        | AppMode::BulkEditing
         | AppMode::Calculating
         | AppMode::ConfirmQuit
         | AppMode::YPrefix
@@ -64,7 +69,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         | AppMode::JoinSelectType
         | AppMode::JoinSelectLeftKeys
         | AppMode::JoinSelectRightKeys
-        | AppMode::JoinOverviewSelect => {
+        | AppMode::JoinOverviewSelect
+        | AppMode::SPrefix
+        | AppMode::SelectRandomInput
+        | AppMode::DedupTiebreakerSelect => {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
@@ -111,6 +119,58 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                     frame,
                     "Insert Empty Column (Enter to confirm, Esc to cancel)",
                     &app.stack.active().insert_column_input,
+                    None,
+                    frame.area(),
+                );
+            }
+            if app.mode == AppMode::BulkEditing {
+                let s = app.stack.active();
+                let count = s.dataframe.selected_rows.len();
+                let col_name = s
+                    .dataframe
+                    .columns
+                    .get(s.edit_col)
+                    .map(|c| c.name.as_str())
+                    .unwrap_or("?");
+                let title = format!(
+                    "Bulk edit '{}' for {} rows — Enter to apply, Esc to cancel",
+                    col_name, count
+                );
+                popup::render_input_popup(frame, &title, &s.edit_input, None, frame.area());
+            }
+            if app.mode == AppMode::ColReplacingFind {
+                let title = if app.col_op_literal {
+                    "Find (literal) — Enter to continue, Esc to cancel"
+                } else {
+                    "Find (regexp) — Enter to continue, Esc to cancel"
+                };
+                popup::render_input_popup(
+                    frame,
+                    title,
+                    &app.stack.active().col_find_input,
+                    None,
+                    frame.area(),
+                );
+            }
+            if app.mode == AppMode::ColReplacingReplace {
+                let title = if app.col_op_literal {
+                    "Replace with — Enter to apply, Esc to cancel"
+                } else {
+                    "Replace with (regexp) — Enter to apply, Esc to cancel"
+                };
+                popup::render_input_popup(
+                    frame,
+                    title,
+                    &app.stack.active().col_replace_input,
+                    None,
+                    frame.area(),
+                );
+            }
+            if app.mode == AppMode::ColSplitting {
+                popup::render_input_popup(
+                    frame,
+                    "Split by delimiter — Enter to apply, Esc to cancel",
+                    &app.stack.active().col_split_input,
                     None,
                     frame.area(),
                 );
@@ -195,6 +255,18 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             }
             if app.mode == AppMode::CopyFormatSelect {
                 popup::render_copy_format_popup(frame, app, frame.area());
+            }
+            if app.mode == AppMode::SelectRandomInput {
+                popup::render_input_popup(
+                    frame,
+                    "Random select: enter N rows (Enter to apply, Esc to cancel)",
+                    &app.stack.active().select_count_input,
+                    None,
+                    frame.area(),
+                );
+            }
+            if app.mode == AppMode::DedupTiebreakerSelect {
+                popup::render_dedup_tiebreaker_popup(frame, app, frame.area());
             }
         }
         AppMode::Loading => {

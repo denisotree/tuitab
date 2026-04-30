@@ -63,6 +63,9 @@ pub struct Sheet {
     // ── Z Prefix state ────────────────────────────────────────────────────────
     pub rename_column_input: TextInput,
     pub insert_column_input: TextInput,
+    pub col_find_input: TextInput,
+    pub col_replace_input: TextInput,
+    pub col_split_input: TextInput,
     /// True if this sheet represents a directory listing
     pub is_dir_sheet: bool,
     /// For SQLite browser sheets: path to the .db file so we can open individual tables.
@@ -89,6 +92,10 @@ pub struct Sheet {
     // ── Pivot Table ───────────────────────────────────────────────────────────
     pub pivot_input: TextInput,
     pub sheet_type: SheetType,
+
+    // ── Special select (Shift+S → r) ──────────────────────────────────────────
+    /// Numeric input field for random row selection
+    pub select_count_input: TextInput,
 }
 
 impl Sheet {
@@ -119,6 +126,9 @@ impl Sheet {
             edit_col: 0,
             rename_column_input: TextInput::new(),
             insert_column_input: TextInput::new(),
+            col_find_input: TextInput::new(),
+            col_replace_input: TextInput::new(),
+            col_split_input: TextInput::new(),
             is_dir_sheet: false,
             sqlite_db_path: None,
             duckdb_db_path: None,
@@ -132,6 +142,7 @@ impl Sheet {
             xlsx_source_path: None,
             pivot_input: TextInput::new(),
             sheet_type: SheetType::Normal,
+            select_count_input: TextInput::new(),
         }
     }
 

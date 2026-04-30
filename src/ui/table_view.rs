@@ -432,6 +432,14 @@ fn make_data_rows(
                             if let Ok(f) = text.parse::<f64>() {
                                 text = format!("{:.*}", p, f);
                             }
+                        } else if col_meta.col_type == crate::types::ColumnType::FileSize {
+                            if let Ok(n) = text.parse::<i64>() {
+                                text = if n < 0 {
+                                    "-".to_string()
+                                } else {
+                                    crate::data::io::format_file_size_pub(n as u64)
+                                };
+                            }
                         }
                     }
                     let is_active_col = col == cursor_col;

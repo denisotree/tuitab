@@ -3,6 +3,18 @@ use crate::data::expression::Expr;
 use crate::types::{ColumnType, CurrencyKind};
 use serde::{Deserialize, Serialize};
 
+/// Three-state cycle for column display width (`_` key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ColumnWidthMode {
+    /// Width auto-calculated at load time (bounded, ~40 chars max).
+    #[default]
+    Default,
+    /// Contracted to header-name width only.
+    Compact,
+    /// Expanded to full content width (scans all rows).
+    Expanded,
+}
+
 /// Metadata about a single data column.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnMeta {
@@ -26,8 +38,14 @@ pub struct ColumnMeta {
     pub pin_restore_pos: Option<usize>,
     /// Currency kind, used when col_type == Currency
     pub currency: Option<CurrencyKind>,
-    /// Whether the column width is currently expanded to content width (toggle state for _ / g_)
-    pub width_expanded: bool,
+    /// Current width display mode (Default / Compact / Expanded).
+    /// Replaces the old `width_expanded: bool`; old sessions that lack this field get Default.
+    #[serde(default)]
+    pub width_mode: ColumnWidthMode,
+    /// Width saved the first time calc_column_width runs (= load-time width).
+    /// Used by the Default mode to restore the original auto-calculated width.
+    #[serde(default)]
+    pub default_width: u16,
     /// Whether this column is selected (zs/zu in z-prefix mode)
     pub selected: bool,
     /// Backup of original Datetime values before converting to Date
@@ -51,7 +69,8 @@ impl ColumnMeta {
             pinned: false,
             pin_restore_pos: None,
             currency: None,
-            width_expanded: false,
+            width_mode: ColumnWidthMode::Default,
+            default_width: 0,
             selected: false,
             backup_datetime_str: None,
         }
