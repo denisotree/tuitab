@@ -1260,7 +1260,10 @@ impl DataFrame {
         let max_val_width: u16 = (0..sample_end)
             .map(|physical_row| {
                 let text = self.format_display(physical_row, col_idx);
-                UnicodeWidthStr::width(text.as_str()) as u16
+                text.lines()
+                    .map(|line| UnicodeWidthStr::width(line) as u16)
+                    .max()
+                    .unwrap_or(0)
             })
             .max()
             .unwrap_or(0);

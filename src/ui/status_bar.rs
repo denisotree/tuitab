@@ -78,7 +78,14 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         String::new()
     };
-    let base_status = format!(" {}{}{}", depth_hint, app.status_message, modified);
+    let clip_hint = match app.cursor_cell_overflow {
+        Some((shown, full)) => format!(" [clip {}/{}]", shown, full),
+        None => String::new(),
+    };
+    let base_status = format!(
+        " {}{}{}{}",
+        depth_hint, app.status_message, modified, clip_hint
+    );
     let final_status = if let Some((ref name, current, total)) = app.background_task {
         let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let spin = spinner_chars[(app.spinner_tick as usize) % spinner_chars.len()];

@@ -3,16 +3,15 @@ use crate::data::expression::Expr;
 use crate::types::{ColumnType, CurrencyKind};
 use serde::{Deserialize, Serialize};
 
-/// Three-state cycle for column display width (`_` key).
+/// Two-state toggle for column display width (`_` key).
+/// Header width (name + 2 chars padding) is the floor in both modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ColumnWidthMode {
-    /// Width auto-calculated at load time (bounded, ~40 chars max).
+    /// Width auto-calculated at load time (bounded, ~40 chars max, samples first 1000 rows).
     #[default]
     Default,
-    /// Contracted to header-name width only.
-    Compact,
-    /// Expanded to full content width (scans all rows).
-    Expanded,
+    /// Fitted to full content width across all rows. Never less than the header width.
+    Fit,
 }
 
 /// Metadata about a single data column.
@@ -38,8 +37,8 @@ pub struct ColumnMeta {
     pub pin_restore_pos: Option<usize>,
     /// Currency kind, used when col_type == Currency
     pub currency: Option<CurrencyKind>,
-    /// Current width display mode (Default / Compact / Expanded).
-    /// Replaces the old `width_expanded: bool`; old sessions that lack this field get Default.
+    /// Current width display mode (Default / Fit).
+    /// Old sessions that lack this field get Default.
     #[serde(default)]
     pub width_mode: ColumnWidthMode,
     /// Width saved the first time calc_column_width runs (= load-time width).

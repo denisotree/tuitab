@@ -93,12 +93,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             .footer(footer)
             .highlight_spacing(HighlightSpacing::Always)
             .highlight_symbol("▶ ")
+            .column_spacing(0)
             .block(make_block(title))
     } else {
         Table::new(data_rows, &widths)
             .header(header)
             .highlight_spacing(HighlightSpacing::Always)
             .highlight_symbol("▶ ")
+            .column_spacing(0)
             .block(make_block(title))
     };
 
@@ -138,6 +140,20 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         }),
         &mut horizontal_scroll,
     );
+
+    // Compute viewport-clip indicator for the cursor column. `widths_override[pos]`
+    // is the chars allocated to the column on this frame; when it is less than
+    // the column's stored `width`, content wider than `shown` is hidden on the
+    // right by the viewport (column at edge / not enough room).
+    let cursor_overflow: Option<(u16, u16)> = visible_cols
+        .iter()
+        .position(|&c| c == cursor_col)
+        .and_then(|pos| {
+            let shown = *widths_override.get(pos)?;
+            let stored = df.columns.get(cursor_col)?.width;
+            (shown < stored).then_some((shown, stored))
+        });
+    app.cursor_cell_overflow = cursor_overflow;
 }
 
 /// Compute which columns are visible and their pixel widths given the available area.
@@ -151,7 +167,11 @@ fn build_column_plan(
     left_col_state: &mut usize,
     area: Rect,
 ) -> (Vec<usize>, Vec<u16>) {
-    let max_width = area.width.saturating_sub(2);
+    // Subtract 4: 2 for the table block border + 2 for the always-reserved
+    // highlight symbol "▶ " before the first column. Leaving these out causes
+    // the last visible column to be silently clipped by ratatui below the
+    // width we hand it.
+    let max_width = area.width.saturating_sub(4);
 
     let pinned_cols: Vec<usize> = df
         .columns
@@ -324,12 +344,14 @@ fn make_header_row(
             let name_w = UnicodeWidthStr::width(name_raw.as_str());
             let cell_w = widths_override[i] as usize;
 
+            // Reserve 1 char on the left so the header name doesn't visually
+            // touch the previous column's type icon when column_spacing is 0.
             let (name_display, padding) = if cell_w < 2 {
                 (String::new(), 0usize)
-            } else if name_w < cell_w {
-                (name_raw, cell_w - name_w - 1)
+            } else if name_w + 2 <= cell_w {
+                (name_raw, cell_w - name_w - 2)
             } else {
-                let max_name = cell_w.saturating_sub(1);
+                let max_name = cell_w.saturating_sub(2);
                 let truncated: String = name_raw
                     .chars()
                     .scan(0usize, |acc, c: char| {
@@ -365,6 +387,7 @@ fn make_header_row(
 
             let spaces = " ".repeat(padding);
             let line = Line::from(vec![
+                Span::styled(" ", name_style),
                 Span::styled(name_display, name_style),
                 Span::styled(spaces, name_style),
                 Span::styled(icon_str, icon_style),
@@ -448,6 +471,9 @@ fn make_data_rows(
                     let truncated_text: String = text
                         .chars()
                         .scan(0usize, |acc, c: char| {
+                            if c == '\n' {
+                                return None;
+                            }
                             let w = UnicodeWidthStr::width(c.to_string().as_str());
                             if *acc + w <= display_chars {
                                 *acc += w;

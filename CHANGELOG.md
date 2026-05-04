@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-05
+
+### Added
+- Status-bar viewport-clip indicator: `[clip 71/80]` when the cursor column's allocated viewport width is smaller than its stored width, so it's clear when content gets cut off purely because the terminal is too narrow
+
+### Changed
+- `_` column-width toggle simplified from three modes (Default → Compact → Expanded → Default) to two (Default ↔ Fit). Fit measures content width across all rows; Default restores the load-time bounded width. Header width remains the floor in both
+- Column header now has a 1-char left padding so its name doesn't visually touch the previous column's type icon (paired with `column_spacing(0)` to remove the redundant ratatui gap)
+
+### Fixed
+- Multi-line cell content (cells containing `\n`, e.g. "Geo allowed list" with newline-separated countries) no longer makes columns expand to full screen width — `calc_column_width` now uses the longest single line instead of summing all lines via `UnicodeWidthStr::width()` on the whole string. Cell rendering also stops at the first `\n` so only the first line is shown
+- Drill-down + `q` panic: `Failed to read sheet data from disk: io error` after multiple drill-downs followed by pop. The previous refactor introduced an asymmetric serde impl for `ColumnWidthMode` (auto-derived `Serialize` wrote a `u32` enum index, custom `Deserialize` tried to read a `String` length), causing bincode to read past the swap file's EOF
+- `build_column_plan` over-allocated viewport space by 4 chars (highlight symbol `▶ ` and ratatui's default `column_spacing=1` were not subtracted), so the last visible column was silently clipped by ratatui below the width handed to it. Fixed with `max_width = area.width - 4` and explicit `column_spacing(0)` on the table
+
 ## [0.4.0] - 2026-04-30
 
 ### Added
@@ -192,7 +206,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/denisotree/tuitab/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/denisotree/tuitab/compare/v0.3.8...v0.4.0
 [0.3.8]: https://github.com/denisotree/tuitab/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/denisotree/tuitab/compare/v0.3.6...v0.3.7

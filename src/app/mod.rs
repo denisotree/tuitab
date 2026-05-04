@@ -49,6 +49,11 @@ pub struct App {
     pub spinner_tick: u8,
     pub pending_action: Option<Action>,
     pub open_in_editor_pending: bool,
+    /// Set by the table renderer each frame: `Some((shown, full))` when the
+    /// current cursor cell's first-line content width (`full`) exceeds the
+    /// display width allocated to its column by the viewport (`shown`).
+    /// Read by the status bar to show a clip indicator. None when not clipped.
+    pub cursor_cell_overflow: Option<(u16, u16)>,
 
     pub save: SaveState,
     pub aggregator: AggregatorState,
@@ -81,6 +86,7 @@ impl App {
             spinner_tick: 0,
             pending_action: None,
             open_in_editor_pending: false,
+            cursor_cell_overflow: None,
             save,
             aggregator: AggregatorState::default(),
             col_op_literal: true,
@@ -613,21 +619,14 @@ impl App {
         let col_name = s.dataframe.columns[col].name.clone();
         match s.dataframe.columns[col].width_mode {
             ColumnWidthMode::Default => {
-                // Default → Compact: contract to header-name width
-                let header_w = s.dataframe.columns[col].min_width;
-                s.dataframe.columns[col].width = header_w;
-                s.dataframe.columns[col].width_mode = ColumnWidthMode::Compact;
-                self.status_message = format!("Column '{}' width: compact", col_name);
-            }
-            ColumnWidthMode::Compact => {
-                // Compact → Expanded: full content scan
+                // Default → Fit: scan all rows for full content width (header width is the floor).
                 s.dataframe.calc_column_width(col, u16::MAX, usize::MAX);
-                s.dataframe.columns[col].width_mode = ColumnWidthMode::Expanded;
+                s.dataframe.columns[col].width_mode = ColumnWidthMode::Fit;
                 let width = s.dataframe.columns[col].width;
-                self.status_message = format!("Column '{}' width: expanded ({})", col_name, width);
+                self.status_message = format!("Column '{}' width: fit ({})", col_name, width);
             }
-            ColumnWidthMode::Expanded => {
-                // Expanded → Default: restore load-time width
+            ColumnWidthMode::Fit => {
+                // Fit → Default: restore load-time width.
                 let default_w = s.dataframe.columns[col].default_width;
                 if default_w > 0 {
                     s.dataframe.columns[col].width = default_w;
@@ -649,17 +648,23 @@ impl App {
             .iter()
             .all(|c| c.width_mode == ColumnWidthMode::Default);
         if all_default {
-            // All Default → expand all to full content width
+            // All Default → fit all to full content width.
             s.dataframe.calc_widths(u16::MAX, usize::MAX);
             for col_meta in s.dataframe.columns.iter_mut() {
-                col_meta.width_mode = ColumnWidthMode::Expanded;
+                col_meta.width_mode = ColumnWidthMode::Fit;
             }
             self.mode = AppMode::Normal;
-            self.status_message = "All column widths: expanded".to_string();
+            self.status_message = "All column widths: fit".to_string();
         } else {
             // Any non-Default → restore all to Default width.
             // For columns whose default_width was never cached, compute it now using
-            // the same calc params used at load time (and as adjust_column_width does).
+            // the same calc params used at load time.
+            for col_meta in s.dataframe.columns.iter_mut() {
+                if col_meta.default_width > 0 {
+                    col_meta.width = col_meta.default_width;
+                }
+                col_meta.width_mode = ColumnWidthMode::Default;
+            }
             let needs_calc: Vec<usize> = s
                 .dataframe
                 .columns
@@ -670,12 +675,6 @@ impl App {
                 .collect();
             for idx in needs_calc {
                 s.dataframe.calc_column_width(idx, 40, 1000);
-            }
-            for col_meta in s.dataframe.columns.iter_mut() {
-                if col_meta.default_width > 0 {
-                    col_meta.width = col_meta.default_width;
-                }
-                col_meta.width_mode = ColumnWidthMode::Default;
             }
             self.mode = AppMode::Normal;
             self.status_message = "All column widths: default".to_string();
