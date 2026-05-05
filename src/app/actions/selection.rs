@@ -356,7 +356,7 @@ impl App {
     }
 
     fn apply_select_random(&mut self) {
-        use rand::seq::SliceRandom;
+        use rand::prelude::IndexedRandom;
         let s = self.stack.active_mut();
         let raw = s.select_count_input.as_str().trim().to_string();
         s.select_count_input.clear();
@@ -371,7 +371,7 @@ impl App {
         let visible: Vec<usize> = s.dataframe.row_order.iter().copied().collect();
         let total = visible.len();
         let take = n.min(total);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let chosen: Vec<usize> = visible.choose_multiple(&mut rng, take).copied().collect();
         s.dataframe.selected_rows.clear();
         s.dataframe.selected_rows.extend(chosen);
@@ -465,7 +465,7 @@ impl App {
         key_cols: &[usize],
         tiebreaker: Option<Option<(usize, bool)>>,
     ) {
-        use rand::seq::SliceRandom;
+        use rand::prelude::IndexedRandom;
         use std::collections::{HashMap, HashSet};
 
         let s = self.stack.active_mut();
@@ -484,7 +484,7 @@ impl App {
         let keepers: HashSet<usize> = match tiebreaker {
             None => groups.values().map(|rows| rows[0]).collect(),
             Some(None) => {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 groups
                     .values()
                     .map(|rows| *rows.choose(&mut rng).unwrap_or(&rows[0]))
