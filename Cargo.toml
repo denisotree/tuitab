@@ -55,7 +55,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 duckdb = { version = "1" }
 rust_xlsxwriter = "0.80"
 serde_json = { version = "1", features = ["preserve_order"] }
-rand = "0.9.0"
+rand = "0.10.1"
 
 [package.metadata.docs.rs]
 # Build only for Linux x86_64 (docs.rs default); enables bundled SQLite so

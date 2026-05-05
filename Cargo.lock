@@ -4961,7 +4961,7 @@ dependencies = [
  "duckdb",
  "libc",
  "polars",
- "rand 0.9.4",
+ "rand 0.10.1",
  "ratatui",
  "regex",
  "rusqlite",
