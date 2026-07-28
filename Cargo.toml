@@ -53,7 +53,7 @@ libc = "0.2"
 calamine = "0.36"
 rusqlite = { version = "0.40", features = ["bundled"] }
 duckdb = { version = "1" }
-rust_xlsxwriter = "0.95"
+rust_xlsxwriter = "0.96"
 serde_json = { version = "1", features = ["preserve_order"] }
 rand = "0.10"
 serde_yaml_ng = "0.10.0"
