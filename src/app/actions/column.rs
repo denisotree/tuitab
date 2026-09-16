@@ -3,11 +3,11 @@ use crate::types::{Action, AppMode};
 use crate::ui::text_input::TextInput;
 
 impl App {
-    /// Column operations that add, remove or reorder columns cannot run on a sheet
-    /// backed by a document: the table is a projection, so the change would be lost on
-    /// the next reprojection *and* would desync the cell→node mapping in the meantime,
-    /// sending later edits to the wrong node.  Changing the document itself is what `E`
-    /// is for.
+    /// Column operations that compute or reshape the table cannot run on a sheet backed
+    /// by a document: the table is a projection, so the change would be lost on the next
+    /// reprojection *and* would desync the cell→node mapping in the meantime, sending
+    /// later edits to the wrong node.  Adding, renaming, deleting and moving a column go
+    /// through the tree instead (see `DocState::delete_field` and friends).
     pub(crate) fn reject_on_doc_sheet(&mut self, what: &str) -> bool {
         if self.stack.active().doc.is_none() {
             return false;
@@ -59,8 +59,14 @@ impl App {
             }
             Action::StartRenameColumn => {
                 let s = self.stack.active_mut();
-                s.rename_column_input =
-                    TextInput::with_value(s.dataframe.columns[s.cursor_col].name.clone());
+                // A record column's header is its path (`meta.ok`); what gets renamed is
+                // only the last key.
+                let name = s
+                    .doc
+                    .as_ref()
+                    .and_then(|d| d.field_key(s.cursor_col))
+                    .unwrap_or_else(|| s.dataframe.columns[s.cursor_col].name.clone());
+                s.rename_column_input = TextInput::with_value(name);
                 self.mode = AppMode::RenamingColumn;
                 self.status_message = "Rename column: ".to_string();
                 None
@@ -119,15 +125,10 @@ impl App {
                 None
             }
             Action::DeleteColumn => {
-                if !self.reject_on_doc_sheet("Deleting a column") {
-                    self.delete_column();
-                }
+                self.delete_column();
                 None
             }
             Action::StartInsertColumn => {
-                if self.reject_on_doc_sheet("Inserting a column") {
-                    return None;
-                }
                 self.stack.active_mut().insert_column_input.clear();
                 self.mode = AppMode::InsertingColumn;
                 self.status_message = "Insert column: ".to_string();
@@ -187,15 +188,11 @@ impl App {
                 None
             }
             Action::MoveColumnLeft => {
-                if !self.reject_on_doc_sheet("Moving a column") {
-                    self.move_col_left();
-                }
+                self.move_col_left();
                 None
             }
             Action::MoveColumnRight => {
-                if !self.reject_on_doc_sheet("Moving a column") {
-                    self.move_col_right();
-                }
+                self.move_col_right();
                 None
             }
             Action::AdjustColumnWidth => {

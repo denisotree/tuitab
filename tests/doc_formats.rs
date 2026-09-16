@@ -568,8 +568,8 @@ fn undo_after_expanding_keeps_the_table_and_the_node_mapping_in_step() {
     assert_eq!(s.dataframe.get_physical(0, name_col), "alpha");
 }
 
-/// Regression: column operations reshape the table but not the document, so on a
-/// doc-backed sheet they must be refused rather than desync the cell→node mapping.
+/// Regression: column operations that reshape the table but not the document must be
+/// refused on a doc-backed sheet rather than desync the cell→node mapping.
 #[test]
 fn column_ops_are_refused_on_a_doc_sheet() {
     use tuitab::types::Action;
@@ -584,13 +584,7 @@ fn column_ops_are_refused_on_a_doc_sheet() {
         .map(|c| c.name.clone())
         .collect();
 
-    for action in [
-        Action::DeleteColumn,
-        Action::StartInsertColumn,
-        Action::MoveColumnRight,
-        Action::StartColReplace,
-        Action::StartColSplit,
-    ] {
+    for action in [Action::StartColReplace, Action::StartColSplit] {
         app.stack.active_mut().cursor_col = 0;
         app.handle_action(action);
         let s = app.stack.active();
@@ -619,6 +613,108 @@ fn column_ops_are_refused_on_a_doc_sheet() {
             .get(&[Seg::Idx(0), Seg::Key("name".into())]),
         Some(&tuitab::data::doc::Node::Str("ALPHA".into()))
     );
+}
+
+/// `zd` / `ze` / `zi` / `z→` on a records sheet change keys in the document, keep the
+/// cell→node mapping valid, save, and undo.
+#[test]
+fn column_ops_on_a_doc_sheet_change_the_document() {
+    use tuitab::types::Action;
+    use tuitab::ui::text_input::TextInput;
+
+    let path = out("column-ops.json");
+    std::fs::write(
+        &path,
+        r#"[{"id":1,"name":"a","tmp":0},{"id":2,"name":"b"}]"#,
+    )
+    .unwrap();
+    let mut app = tuitab::app::App::new(&path, None).unwrap();
+    let cols = |app: &tuitab::app::App| -> Vec<String> {
+        app.stack
+            .active()
+            .dataframe
+            .columns
+            .iter()
+            .map(|c| c.name.clone())
+            .collect()
+    };
+
+    app.stack.active_mut().cursor_col = 2;
+    app.stack.active_mut().sort_keys = vec![("id".into(), true)];
+    app.handle_action(Action::DeleteColumn);
+    assert!(
+        app.stack.active().sort_keys.is_empty(),
+        "rows come back in tree order"
+    );
+    assert_eq!(cols(&app), vec!["id", "name"], "{}", app.status_message);
+
+    app.stack.active_mut().cursor_col = 1;
+    app.handle_action(Action::StartRenameColumn);
+    app.stack.active_mut().rename_column_input = TextInput::with_value("title".into());
+    app.handle_action(Action::ApplyRenameColumn);
+    assert_eq!(cols(&app), vec!["id", "title"], "{}", app.status_message);
+
+    app.handle_action(Action::StartInsertColumn);
+    app.stack.active_mut().insert_column_input = TextInput::with_value("note".into());
+    app.handle_action(Action::ApplyInsertColumn);
+    assert_eq!(
+        cols(&app),
+        vec!["id", "note", "title"],
+        "{}",
+        app.status_message
+    );
+    assert_eq!(
+        app.stack.active().cursor_col,
+        1,
+        "cursor lands on the new column"
+    );
+
+    app.handle_action(Action::MoveColumnLeft);
+    assert_eq!(
+        cols(&app),
+        vec!["note", "id", "title"],
+        "{}",
+        app.status_message
+    );
+    assert_eq!(
+        app.stack.active().cursor_col,
+        0,
+        "cursor follows the moved column"
+    );
+    app.handle_action(Action::MoveColumnLeft);
+    assert_eq!(cols(&app), vec!["note", "id", "title"], "edge is a no-op");
+    assert!(app.stack.active().doc_mapping_ok());
+
+    // editing the new column writes a typed value into the right node
+    {
+        let s = app.stack.active_mut();
+        s.edit_row = 1;
+        s.edit_col = 0;
+        s.edit_input = TextInput::with_value("7".into());
+    }
+    app.handle_action(Action::ApplyEdit);
+
+    app.handle_action(Action::SaveFile);
+    app.save.input = TextInput::with_value(path.to_string_lossy().into_owned());
+    app.handle_action(Action::ApplySave);
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved,
+        serde_json::json!([
+            {"note": null, "id": 1, "title": "a"},
+            {"note": 7, "id": 2, "title": "b"}
+        ])
+    );
+
+    // undo walks back through the document, not just the table
+    for _ in 0..4 {
+        app.handle_action(Action::Undo);
+    }
+    assert_eq!(cols(&app), vec!["id", "name"]);
+    app.handle_action(Action::Undo);
+    assert_eq!(cols(&app), vec!["id", "name", "tmp"]);
+    assert!(app.stack.active().doc_mapping_ok());
 }
 
 /// Regression: a file large enough to take the background loader must still arrive with

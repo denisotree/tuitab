@@ -221,9 +221,14 @@ resolve says how far it got — `servers[1] exists` — instead of only that it 
 A conversion that cannot carry everything says so in the status line as it saves —
 multi-document YAML written as JSON, or a commented TOML written as anything else.
 
+In a records view a column is a key, so `zd`, `ze`, `zi` and `z←`/`z→` change that key
+in every record that has it: delete it, rename it in place, add it as null before the
+cursor column, or swap it with its neighbour. A rename that clashes with an existing
+key in any record changes nothing. Key/value and list views have fixed columns.
+
 Operations that would reshape the table without a matching change in the document —
-paste, computed columns, and the `z` column operations — are refused with a note
-pointing at `E`.
+paste, computed columns, find & replace and split — are refused with a note pointing
+at `E`.
 
 Every sheet in a dive chain shares one document, so an edit made three levels down is
 there when you come back up, and `U` undoes it at any level.
