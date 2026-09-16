@@ -14,7 +14,7 @@ override_dh_auto_install:
 	ln -s /usr/bin/tuitab \
 		$(CURDIR)/debian/tuitab/usr/bin/ttab
 	ln -s /usr/bin/tuitab \
-		$(CURDIR)/debian/tuitab/usr/bin/tt
+		$(CURDIR)/debian/tuitab/usr/bin/ttb
 
 override_dh_auto_test:
 	cargo test --locked

@@ -66,6 +66,30 @@ jaq-core = "3.1.0"
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"
 
+# `.deb` built by cargo-deb in the release workflow and served from the APT
+# repository on GitHub Pages.  Only the `tuitab` binary ships; the short names
+# are symlinks, as in the Homebrew and AUR packages.
+[package.metadata.deb]
+maintainer = "denisotree <denisotree@users.noreply.github.com>"
+copyright = "2026, denisotree"
+license-file = ["LICENSE", "0"]
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+TOML open as a table over the parsed document, so nested data can be browsed,
+edited and converted between formats. Installs `tuitab` plus the aliases
+`ttab` and `ttb`."""
+assets = [
+    ["target/release/tuitab", "usr/bin/", "755"],
+    { dest = "usr/bin/ttab", link_name = "tuitab" },
+    { dest = "usr/bin/ttb", link_name = "tuitab" },
+    ["README.md", "usr/share/doc/tuitab/", "644"],
+]
+
 [package.metadata.docs.rs]
 # Build only for Linux x86_64. The default features bundle DuckDB and SQLite
 # from source, so the crate compiles without any system C libraries.

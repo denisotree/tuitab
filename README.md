@@ -163,13 +163,19 @@ yay -S tuitab          # pre-built binary: tuitab-bin
 git clone https://aur.archlinux.org/tuitab.git && cd tuitab && makepkg -si
 ```
 
-### Debian / Ubuntu
-
-Download the `.deb` from the [Releases page](https://github.com/denisotree/tuitab/releases), then:
+### Debian / Ubuntu (APT)
 
 ```sh
-sudo dpkg -i tuitab_*_amd64.deb
+curl -fsSL https://denisotree.github.io/tuitab/apt/tuitab.gpg \
+  | sudo tee /usr/share/keyrings/tuitab.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/tuitab.gpg] https://denisotree.github.io/tuitab/apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/tuitab.list
+sudo apt update && sudo apt install tuitab
 ```
+
+`apt upgrade` then picks up new releases. amd64 and arm64; Debian 12+ and Ubuntu
+22.04+. A single `.deb` is also attached to every
+[release](https://github.com/denisotree/tuitab/releases): `sudo apt install ./tuitab_*.deb`.
 
 ### Pre-built binaries
 

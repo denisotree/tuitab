@@ -21,12 +21,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Linux builds on 22.04 so the binary and the .deb need glibc 2.35 at
+          # most: Debian 12 and Ubuntu 22.04 cannot run a 24.04 build.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
-          - os: ubuntu-24.04-arm
+            deb: true
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
+            deb: true
             cargo_build_jobs: "2"
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -72,6 +76,27 @@ jobs:
           name: ${{ matrix.target }}
           path: ${{ env.ASSET }}
 
+      - name: Install cargo-deb
+        if: matrix.deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      # Packaging metadata lives in Cargo.toml under [package.metadata.deb].
+      - name: Package (.deb)
+        if: matrix.deb
+        shell: bash
+        run: |
+          cargo deb --no-build --locked --target ${{ matrix.target }} --output target/debian/
+          echo "DEB=$(ls target/debian/*.deb)" >> "$GITHUB_ENV"
+
+      - name: Upload .deb
+        if: matrix.deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.target }}
+          path: ${{ env.DEB }}
+
   release:
     name: Create GitHub Release
     needs: build
@@ -112,3 +137,14 @@ jobs:
           files: artifacts/*
           body: ${{ steps.cliff.outputs.content }}
           fail_on_unmatched_files: true
+
+  apt:
+    name: APT repository
+    needs: release
+    permissions:
+      contents: write
+    uses: ./.github/workflows/apt.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}

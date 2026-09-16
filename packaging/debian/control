@@ -22,4 +22,4 @@ Description: Terminal tabular data explorer
  Features include filtering, sorting, pivot tables, computed columns,
  column statistics, histograms and line/bar charts, transposing, and export.
  .
- The package provides three command names: tuitab, ttab, and tt.
+ The package provides three command names: tuitab, ttab, and ttb.

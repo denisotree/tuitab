@@ -1,0 +1,91 @@
+name: APT repository
+
+# Publishes a release's .deb files into the signed APT repository served from
+# the gh-pages branch (https://denisotree.github.io/tuitab/apt).  Called by
+# release.yml once the GitHub Release exists; run it by hand to republish a tag.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+    secrets:
+      APT_GPG_PRIVATE_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose .deb assets to publish (e.g. v0.9.7)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apt-repository
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    env:
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      # A release must not go red because the repository is not set up yet.
+      - name: Check signing key
+        id: key
+        run: |
+          if [ -z "$APT_GPG_PRIVATE_KEY" ]; then
+            echo "::warning::APT_GPG_PRIVATE_KEY is not set — the APT repository was not updated"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.key.outputs.ok == 'true'
+
+      - name: Download .deb assets
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          mkdir debs
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.deb' --dir debs
+          ls -l debs
+
+      - name: Import signing key
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          echo "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "APT_GPG_KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')" >> "$GITHUB_ENV"
+
+      - name: Check out gh-pages
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$url" gh-pages >/dev/null; then
+            git clone --depth 1 --branch gh-pages "$url" site
+          else
+            git init -b gh-pages site
+            git -C site remote add origin "$url"
+          fi
+          touch site/.nojekyll
+
+      - name: Build repository
+        if: steps.key.outputs.ok == 'true'
+        run: packaging/apt/publish.sh debs site/apt
+
+      - name: Push gh-pages
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          # One orphan commit each time: packages dropped from the pool would
+          # otherwise stay in the branch history and grow the repository forever.
+          git checkout --orphan publish
+          git add -A
+          git commit -q -m "apt: publish $TAG"
+          git push --force origin publish:gh-pages
