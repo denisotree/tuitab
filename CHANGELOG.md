@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-09-16
+
+### Added
+
+- **Columns of a JSON/YAML/TOML records view can be deleted, renamed, inserted
+  and moved.** A column there is a key, so `zd`, `ze`, `zi` and `z←`/`z→` now
+  change that key in every record that holds it instead of being refused with a
+  pointer at `E`. Records are sparse: a record without the key is skipped. A
+  rename that clashes with an existing key in any one record changes nothing; a
+  new key is null and sits before the cursor column (TOML writes it once it is
+  filled); a move that the first-seen key order would not show is rolled back
+  and says so. The table is rebuilt from the document after each, so cell edits
+  keep reaching the right node, and `U` undoes them in the document. Key/value
+  and list views keep their fixed columns.
+
+### Fixed
+
+- **`ze` on a document sheet renamed only the table header.** The key in the
+  document stayed as it was, so the new name vanished on the next reprojection
+  and never reached the saved file.
+
+### Security
+
+- rustls bumped to 0.23.45 for RUSTSEC-2026-0285.
+
 ## [0.9.5] - 2026-08-19
 
 ### Added
@@ -1125,7 +1150,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.9.6...HEAD
+[0.9.6]: https://github.com/denisotree/tuitab/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/denisotree/tuitab/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/denisotree/tuitab/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/denisotree/tuitab/compare/v0.9.2...v0.9.3
