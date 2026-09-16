@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-09-16
+
+### Added
+
+- **Debian and Ubuntu install with `apt install tuitab`.** Every release now
+  builds a `.deb` for amd64 and arm64 and publishes it to a signed APT
+  repository at `https://denisotree.github.io/tuitab/apt`, so `apt upgrade`
+  picks up new versions; the README has the three lines that add it. The
+  package installs `tuitab` with `ttab` and `ttb` as symlinks, and each `.deb`
+  is also attached to the GitHub release.
+
+### Changed
+
+- **Linux binaries are built on Ubuntu 22.04.** They need glibc 2.35 at most, so
+  the release tarballs and packages run on Debian 12 and Ubuntu 22.04, which a
+  24.04 build did not.
+
 ## [0.9.6] - 2026-09-16
 
 ### Added
@@ -1150,7 +1167,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.9.6...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.9.7...HEAD
+[0.9.7]: https://github.com/denisotree/tuitab/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/denisotree/tuitab/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/denisotree/tuitab/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/denisotree/tuitab/compare/v0.9.3...v0.9.4
