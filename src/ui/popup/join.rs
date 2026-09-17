@@ -104,7 +104,7 @@ pub fn render_join_source_popup(frame: &mut Frame, app: &crate::app::App, area: 
 
 pub fn render_join_type_popup(frame: &mut Frame, app: &crate::app::App, area: Rect) {
     use crate::data::join::JoinType;
-    let popup_area = centered_rect(40, 35, area);
+    let popup_area = centered_rect(45, 45, area);
     frame.render_widget(Clear, popup_area);
 
     let items: Vec<ListItem> = JoinType::all()
@@ -131,21 +131,30 @@ pub fn render_join_type_popup(frame: &mut Frame, app: &crate::app::App, area: Re
     frame.render_widget(list, popup_area);
 }
 
+/// `conflicts` names the keys whose type cannot meet their partner on the other
+/// side; they are drawn in red so the mismatch shows before Enter does.
 pub fn render_join_key_popup(
     frame: &mut Frame,
     title: &str,
-    columns: &[String],
+    columns: &[crate::data::column::ColumnMeta],
     selected_keys: &[String],
+    conflicts: &[String],
     cursor_index: usize,
     area: Rect,
 ) {
     let popup_area = centered_rect(45, 60, area);
     frame.render_widget(Clear, popup_area);
 
+    let name_width = columns
+        .iter()
+        .map(|c| c.name.chars().count())
+        .max()
+        .unwrap_or(0);
     let items: Vec<ListItem> = columns
         .iter()
         .enumerate()
-        .map(|(i, col)| {
+        .map(|(i, meta)| {
+            let col = &meta.name;
             let is_selected = selected_keys.contains(col);
             let is_active = i == cursor_index;
             let order = selected_keys
@@ -159,10 +168,20 @@ pub fn render_join_key_popup(
                 "[ ]".to_string()
             };
             let prefix = if is_active { "> " } else { "  " };
-            let text = format!("{}{} {}", prefix, checkbox, col);
+            let text = format!(
+                "{}{} {:<width$}  {}",
+                prefix,
+                checkbox,
+                col,
+                meta.col_type.name(),
+                width = name_width
+            );
             let mut style = Style::default().fg(T::FG);
             if is_selected {
                 style = style.fg(T::GREEN);
+            }
+            if conflicts.contains(col) {
+                style = style.fg(T::RED);
             }
             if is_active {
                 style = style.bg(T::BG2);
@@ -173,7 +192,7 @@ pub fn render_join_key_popup(
 
     let list = List::new(items).block(
         Block::default()
-            .title(format!(" {} (Space toggle, Enter apply) ", title))
+            .title(format!(" {} ", title))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(T::PURPLE)),
     );

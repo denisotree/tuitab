@@ -425,6 +425,56 @@ fn make_header_row(
     Row::new(header_cells).style(T::header_style()).height(1)
 }
 
+/// Where a DIFF result keeps its status and each compared column's right-hand twin.
+///
+/// Read off the column names rather than a flag on the sheet, so a DIFF saved and
+/// reopened, or filtered into a new sheet, still reads as one.
+struct DiffLayout {
+    status_col: usize,
+    /// For each column, the index of its `_right` twin or of the column it twins.
+    twin: Vec<Option<usize>>,
+    /// Whether each column is a `_right` twin.
+    is_right: Vec<bool>,
+}
+
+impl DiffLayout {
+    fn of(df: &DataFrame) -> Option<Self> {
+        use crate::data::join::{DIFF_COL, RIGHT_SUFFIX};
+        let status_col = df.columns.iter().position(|c| c.name == DIFF_COL)?;
+        let index = |name: &str| df.columns.iter().position(|c| c.name == name);
+        let twin = df
+            .columns
+            .iter()
+            .map(|c| match c.name.strip_suffix(RIGHT_SUFFIX) {
+                Some(base) => index(base),
+                None => index(&format!("{}{}", c.name, RIGHT_SUFFIX)),
+            })
+            .collect();
+        let is_right = df
+            .columns
+            .iter()
+            .map(|c| {
+                c.name
+                    .strip_suffix(RIGHT_SUFFIX)
+                    .is_some_and(|base| index(base).is_some())
+            })
+            .collect();
+        Some(Self {
+            status_col,
+            twin,
+            is_right,
+        })
+    }
+
+    fn cell_changed(&self, df: &DataFrame, display_row: usize, col: usize) -> bool {
+        self.twin
+            .get(col)
+            .copied()
+            .flatten()
+            .is_some_and(|other| df.get_val(display_row, col) != df.get_val(display_row, other))
+    }
+}
+
 /// Build the visible data rows for the current viewport.
 fn make_data_rows(
     visible_cols: &[usize],
@@ -435,11 +485,15 @@ fn make_data_rows(
     end_row: usize,
     active_display_row: usize,
 ) -> Vec<Row<'static>> {
+    let diff = DiffLayout::of(df);
     (top_row..end_row)
         .map(|display_row| {
             let physical = df.row_order[display_row];
             let is_selected = df.selected_rows.contains(&physical);
             let is_active = display_row == active_display_row;
+            let diff_status = diff
+                .as_ref()
+                .map(|d| DataFrame::anyvalue_to_string_fmt(&df.get_val(display_row, d.status_col)));
 
             let cells: Vec<Cell> = visible_cols
                 .iter()
@@ -454,8 +508,19 @@ fn make_data_rows(
                     // saving one as the other is a silent data change, so they must not
                     // look alike on screen.  Dim italic keeps a literal "NULL" in a text
                     // column distinguishable from the real thing.
-                    let is_null = matches!(raw_val, polars::prelude::AnyValue::Null);
-                    let mut text = if is_null {
+                    // A `_right` cell that repeats its left twin says nothing: blank, not NULL.
+                    let blank_right = match (&diff, &diff_status) {
+                        (Some(d), Some(status)) if d.is_right[col] => {
+                            status == "="
+                                || (status == "~" && !d.cell_changed(df, display_row, col))
+                        }
+                        _ => false,
+                    };
+                    let is_null =
+                        !blank_right && matches!(raw_val, polars::prelude::AnyValue::Null);
+                    let mut text = if blank_right {
+                        String::new()
+                    } else if is_null {
                         "NULL".to_string()
                     } else {
                         DataFrame::anyvalue_to_string_fmt(&raw_val)
@@ -531,6 +596,19 @@ fn make_data_rows(
 
                     if is_negative_currency && !is_selected && !is_active {
                         style = style.fg(T::RED);
+                    }
+
+                    let plain = !is_selected && !is_active;
+                    if let (Some(d), Some(status), true) = (&diff, &diff_status, plain) {
+                        match status.as_str() {
+                            "-" => style = style.fg(T::RED),
+                            "+" => style = style.fg(T::GREEN),
+                            "~" => style = style.fg(T::YELLOW),
+                            _ => {}
+                        }
+                        if status == "~" && d.cell_changed(df, display_row, col) {
+                            style = style.fg(T::BG_DIM).bg(T::YELLOW);
+                        }
                     }
 
                     if is_null {

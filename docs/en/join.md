@@ -26,12 +26,20 @@ A popup lists:
 | `LEFT` | `LEFT JOIN` | All left rows; unmatched right cells are null |
 | `RIGHT` | `RIGHT JOIN` | All right rows; unmatched left cells are null |
 | `OUTER` | `FULL OUTER JOIN` | All rows from both tables |
+| `ANTI` | `WHERE NOT EXISTS (…)` | Left rows with no match in the right table |
+| `SEMI` | `WHERE EXISTS (…)` | Left rows with a match in the right table |
+| `DIFF` | — | Both tables compared row by row, like `git diff` — see below |
+
+ANTI and SEMI keep only the left table's columns, and a NULL key matches a NULL
+key (in DIFF too) — two empty cells are the same value. The other four follow SQL, where
+NULL matches nothing.
 
 ### 3. Select the left key columns
 
-A checkbox list of the current table's columns. Toggle with `Space`; the
-**order** you pick them in matters — left key 1 matches right key 1, and so on.
-Press `Enter` to continue.
+A checkbox list of the current table's columns. Toggle with `Space`, or press `a` to
+take every column (again to clear). The **order** you pick them in matters —
+left key 1 matches right key 1, and so on. Each column shows its type. Press
+`Enter` to continue.
 
 ### 4. Select the right key columns
 
@@ -41,9 +49,17 @@ pre-selected. Adjust and press `Enter` to run the join.
 > The key counts must match: two left keys ⇒ exactly two right keys. A mismatch
 > shows an error in the status bar.
 
+> Paired keys must have the same type. A right key whose type cannot meet its
+> left partner is shown in red, and `Enter` names both columns and their types
+> instead of joining. Change one of them with `t` and run JOIN again; to retype a
+> file's column, open it as a sheet first. Integers of different widths, floats
+> of different widths and datetimes of different precision are matched as they
+> are.
+
 ## Result
 
-A new sheet is pushed onto the stack titled `left JOIN right`. Press `Esc` / `q`
+A new sheet is pushed onto the stack titled `left JOIN right` (`left ANTI JOIN
+right`, `left SEMI JOIN right`, `left DIFF right`). Press `Esc` / `q`
 to pop back to the original table. Non-key columns that exist in both tables get
 a `_right` suffix so nothing is overwritten.
 
@@ -62,6 +78,46 @@ tuitab orders.csv
 5. Toggle `customer_id` on the right, press `Enter`.
 
 The result is every order enriched with its customer's `name` and `country`.
+
+## Finding what differs between two tables
+
+DIFF compares two tables the way `git diff` compares two files. The keys say
+which rows are the same row; every other column both tables have is compared.
+
+```sh
+tuitab march.csv
+```
+
+1. Press `J`, choose **`[Browse file…]`**, type `april.csv`, press `Enter`.
+2. Choose **DIFF**, press `Enter`.
+3. Toggle the column that identifies a row (say `id`), press `Enter`.
+4. The right key is already matched by name — press `Enter`.
+
+```
+ _diff │ id name   city   amount  name_right city_right amount_right
+ =     │ 1  Anna   Lisbon 100
+ =     │ 2  Boris         200
+ ~     │ 3  Clara  Porto  300                           350
+ -     │ 4  Dmitry Faro   400
+ +     │ 5  Elena  Braga  500
+```
+
+- `_diff` is pinned first: `=` same, `~` changed (yellow, the differing cells
+  highlighted), `-` only in the left table (red), `+` only in the right table
+  (green).
+- `<column>_right` shows the right table's value only where it differs from the
+  left one.
+- Left rows keep their order; added rows follow. The status bar counts each kind.
+- NULL equals NULL, in keys and in cells; a value that became NULL is a change.
+- `_diff` is an ordinary column: filter on it to see only the changes, or press
+  `F` on it for the counts.
+
+Press `a` at step 3 to key on every column: then a changed row shows as a `-` row
+and a `+` row, exactly as in git, and nothing is `~`.
+
+A key has to be unique on both sides — with two rows per key there is no telling
+which to compare with which, so DIFF asks for more key columns instead. Columns
+only one table has are carried along but not compared.
 
 ## See also
 

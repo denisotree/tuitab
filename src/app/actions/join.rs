@@ -249,8 +249,14 @@ impl App {
                 self.join.left_keys.clear();
                 self.join.left_key_index = 0;
                 self.mode = AppMode::JoinSelectLeftKeys;
-                self.status_message =
-                    "JOIN: select LEFT key columns (Space=toggle, Enter=next)".to_string();
+                let is_diff = crate::data::join::JoinType::all()[self.join.type_index]
+                    == crate::data::join::JoinType::Diff;
+                self.status_message = if is_diff {
+                    "DIFF: keys identify a row, other columns are compared (Space=toggle, a=all, Enter=next)"
+                } else {
+                    "JOIN: select LEFT key columns (Space=toggle, a=all, Enter=next)"
+                }
+                .to_string();
                 None
             }
             Action::JoinTypeCancel => {
@@ -288,6 +294,15 @@ impl App {
                         self.join.left_keys.push(name);
                     }
                 }
+                None
+            }
+            Action::JoinLeftKeyToggleAll => {
+                let cols = &self.stack.active().dataframe.columns;
+                self.join.left_keys = if self.join.left_keys.len() == cols.len() {
+                    Vec::new()
+                } else {
+                    cols.iter().map(|c| c.name.clone()).collect()
+                };
                 None
             }
             Action::JoinLeftKeyApply => {

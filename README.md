@@ -44,7 +44,8 @@ cat data.csv | tuitab -t csv      # read from a pipe
 - **Vim-style navigation** — `hjkl`, `gg`/`G`, page jumps, sticky pinned columns.
 - **Instant analysis** — per-column statistics, frequency tables, and charts
   (histogram, bar, line, grouped bar) rendered right in the terminal.
-- **Reshape on the fly** — pivot tables, JOINs across files, transpose, group by,
+- **Reshape on the fly** — pivot tables, JOINs across files, a `git diff`-style
+  comparison of two tables, transpose, group by,
   deduplication, computed columns and window functions (rank, running total,
   lag/lead, share of a group) from an expression language with `and` / `or` / `not`.
 - **Clean, fast, type-aware** — Polars-backed engine, Everforest theme, undo/redo,
@@ -102,7 +103,9 @@ press `W`, and type an aggregation formula such as `sum(revenue)`.
 ### JOIN across files
 
 Press `J` for a step-by-step wizard: pick another file (or an open sheet),
-choose `INNER` / `LEFT` / `RIGHT` / `OUTER`, and select the key columns.
+choose `INNER` / `LEFT` / `RIGHT` / `OUTER` / `ANTI` / `SEMI`, and select the key
+columns. `DIFF` compares two tables like `git diff`: unchanged, changed (with the
+differing cells marked), removed and added rows, each in its own colour.
 
 ![JOIN](https://raw.githubusercontent.com/denisotree/tuitab/master/.github/assets/join.gif)
 

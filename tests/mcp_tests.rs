@@ -695,6 +695,39 @@ fn join_brings_in_columns_from_a_second_file() {
     assert_eq!(cell(&result, 1, "value"), json!(200));
 }
 
+#[test]
+fn anti_join_keeps_the_rows_the_second_file_lacks() {
+    let mut server = Server::new();
+    let result = query(
+        &mut server,
+        json!([
+            {"join": {"source": {"path": "test_data/prices.csv"},
+                      "left_on": ["id"], "how": "anti"}}
+        ]),
+    );
+    // sample.csv holds ids 1..=20, prices.csv ids 1 and 2.
+    assert_eq!(result["row_count"], 18);
+}
+
+#[test]
+fn diff_join_marks_each_row() {
+    let mut server = Server::new();
+    let result = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": {"path": "test_data/diff_march.csv"}, "ops": [
+            {"join": {"source": {"path": "test_data/diff_april.csv"},
+                      "left_on": ["id"], "how": "diff"}}
+        ]}),
+    );
+    let status: Vec<Value> = (0..5).map(|i| cell(&result, i, "_diff")).collect();
+    assert_eq!(
+        status,
+        vec![json!("="), json!("="), json!("~"), json!("-"), json!("+")]
+    );
+    assert_eq!(cell(&result, 2, "amount_right"), json!(350));
+}
+
 // ── output shaping ──────────────────────────────────────────────────────────
 
 #[test]

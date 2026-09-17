@@ -2086,7 +2086,8 @@ impl App {
     }
 
     fn execute_join(&mut self) {
-        let join_type = crate::data::join::JoinType::all()[self.join.type_index];
+        use crate::data::join::JoinType;
+        let join_type = JoinType::all()[self.join.type_index];
         let left_keys = self.join.left_keys.clone();
         let right_keys = self.join.right_keys.clone();
         let other_title = self.join.other_title.clone();
@@ -2101,6 +2102,21 @@ impl App {
             }
         };
 
+        let mismatch = left_keys
+            .iter()
+            .zip(&right_keys)
+            .find_map(|(lk, rk)| crate::data::join::key_type_mismatch(&left_df, lk, &right_df, rk));
+        if let Some(why) = mismatch {
+            self.join.other_df = Some(right_df);
+            self.status_message = format!(
+                "{} impossible: {}. Change the column type (t) so both keys match, then run it again",
+                join_type.sql_name(),
+                why
+            );
+            self.mode = AppMode::JoinSelectRightKeys;
+            return;
+        }
+
         match crate::data::join::join_dataframes(
             &left_df,
             &right_df,
@@ -2111,7 +2127,8 @@ impl App {
             Ok(result_df) => {
                 let row_count = result_df.visible_row_count();
                 let left_title = self.stack.active().title.clone();
-                let result_title = format!("{} JOIN {}", left_title, other_title);
+                let result_title =
+                    format!("{} {} {}", left_title, join_type.sql_name(), other_title);
                 let new_sheet = crate::sheet::Sheet::new(result_title, result_df);
                 self.stack.push(new_sheet);
 
@@ -2145,7 +2162,31 @@ impl App {
                     }
                 } else {
                     self.mode = AppMode::Normal;
-                    self.status_message = format!("JOIN result: {} rows", row_count);
+                    self.status_message = match join_type {
+                        JoinType::Anti if row_count == 0 => {
+                            format!(
+                                "ANTI JOIN: every row of {} found in {}",
+                                left_title, other_title
+                            )
+                        }
+                        JoinType::Anti => format!(
+                            "ANTI JOIN: {} rows of {} not found in {}",
+                            row_count, left_title, other_title
+                        ),
+                        JoinType::Semi => format!(
+                            "SEMI JOIN: {} rows of {} found in {}",
+                            row_count, left_title, other_title
+                        ),
+                        JoinType::Diff => {
+                            let [same, changed, removed, added] =
+                                crate::data::join::diff_counts(&self.stack.active().dataframe);
+                            format!(
+                                "DIFF: {} same, {} changed, {} removed, {} added",
+                                same, changed, removed, added
+                            )
+                        }
+                        _ => format!("JOIN result: {} rows", row_count),
+                    };
                 }
             }
             Err(e) => {

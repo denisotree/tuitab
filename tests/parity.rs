@@ -388,6 +388,7 @@ fn parity(action: &Action) -> Parity {
         Action::JoinPathApply => Parity::UiOnly("a wizard step"),
         Action::JoinTypeApply => Parity::UiOnly("a wizard step"),
         Action::JoinLeftKeyToggle => Parity::UiOnly("a wizard step"),
+        Action::JoinLeftKeyToggleAll => Parity::UiOnly("a wizard step"),
         Action::JoinLeftKeyApply => Parity::Shared("join"),
         Action::JoinRightKeyToggle => Parity::UiOnly("a wizard step"),
         Action::JoinRightKeyApply => Parity::Shared("join"),

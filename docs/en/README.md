@@ -14,7 +14,7 @@ SQLite · DuckDB**.
 | [Keybindings](keybindings.md) | The complete command reference, grouped by mode |
 | [Expressions](expressions.md) | Computed columns and expression filters: operators, functions, dates |
 | [Charts](charts.md) | Histogram, frequency, line, and grouped-bar charts; pinning & drill-down |
-| [JOIN](join.md) | The step-by-step JOIN wizard and join types |
+| [JOIN](join.md) | The step-by-step JOIN wizard, join types, and DIFF of two tables |
 | [Databases](database.md) | Editing a SQLite/DuckDB table and writing it back, and building one from nothing |
 | [Pivot tables](pivot.md) | Pivot syntax, aggregations, and worked examples |
 | [MCP server](mcp.md) | Letting an AI assistant compute with tuitab's engine: tools, operations, connecting |

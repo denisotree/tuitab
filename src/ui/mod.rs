@@ -249,37 +249,39 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 popup::render_join_type_popup(frame, app, frame.area());
             }
             if app.mode == AppMode::JoinSelectLeftKeys {
-                let cols: Vec<String> = app
-                    .stack
-                    .active()
-                    .dataframe
-                    .columns
-                    .iter()
-                    .map(|c| c.name.clone())
-                    .collect();
                 popup::render_join_key_popup(
                     frame,
-                    "LEFT key columns",
-                    &cols,
+                    "LEFT key columns (Space toggle, a all, Enter next)",
+                    &app.stack.active().dataframe.columns,
                     &app.join.left_keys,
+                    &[],
                     app.join.left_key_index,
                     frame.area(),
                 );
             }
             if app.mode == AppMode::JoinSelectRightKeys {
-                let cols: Vec<String> = if let Some(ref df) = app.join.other_df {
-                    df.columns.iter().map(|c| c.name.clone()).collect()
-                } else {
-                    Vec::new()
-                };
-                popup::render_join_key_popup(
-                    frame,
-                    "RIGHT key columns",
-                    &cols,
-                    &app.join.right_keys,
-                    app.join.right_key_index,
-                    frame.area(),
-                );
+                if let Some(ref right) = app.join.other_df {
+                    let left = &app.stack.active().dataframe;
+                    let conflicts: Vec<String> = app
+                        .join
+                        .left_keys
+                        .iter()
+                        .zip(&app.join.right_keys)
+                        .filter(|(lk, rk)| {
+                            crate::data::join::key_type_mismatch(left, lk, right, rk).is_some()
+                        })
+                        .map(|(_, rk)| rk.clone())
+                        .collect();
+                    popup::render_join_key_popup(
+                        frame,
+                        "RIGHT key columns (Space toggle, Enter apply)",
+                        &right.columns,
+                        &app.join.right_keys,
+                        &conflicts,
+                        app.join.right_key_index,
+                        frame.area(),
+                    );
+                }
             }
             if app.mode == AppMode::CopyFormatSelect {
                 popup::render_copy_format_popup(frame, app, frame.area());

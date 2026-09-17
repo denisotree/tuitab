@@ -95,7 +95,13 @@ OPERATIONS for tuitab_query
       specific aggregates and your own ordering.
   {\"pivot\": {\"index\":[\"region\"],\"on\":\"quarter\",\"formula\":\"sum(amount)\"}}
   {\"join\": {\"source\":{\"path\":\"prices.csv\"},\"left_on\":[\"id\"],\"how\":\"left\"}}
-      how: inner, left, right, outer. 'right_on' defaults to 'left_on'.
+      how: inner, left, right, outer, anti, semi, diff. 'right_on' defaults to 'left_on'. \
+      anti keeps the rows with no match in the other table, semi the rows with one; \
+      both keep this table's columns only and treat NULL keys as equal. diff compares \
+      the tables like git diff: the keys say which rows are the same row, every other \
+      shared column is compared, and a leading _diff column holds = (same), ~ (changed), \
+      - (only in this table) or + (only in the other). <col>_right holds the other \
+      table's value on ~ rows. Keys must be unique on both sides; NULL equals NULL.
   {\"dedup\": {\"by\":[\"id\"],\"keep\":\"first\"}}
       keep: first, last, min, max (both need \"on\": column), random (pass \
       \"seed\" to repeat the same choice).

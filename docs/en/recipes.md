@@ -54,6 +54,8 @@ list.
 - **Transpose the table** — press `T` to swap rows and columns; press `T` again
   to undo.
 - **Pivot** — see [Pivot tables](pivot.md).
+- **Compare two tables** — `J`, pick the other table, choose **DIFF**, select the
+  key columns. See [Finding what differs](join.md#finding-what-differs-between-two-tables).
 - **Random sample** — `Shift+S` then `r`, enter how many rows.
 
 ## Edit data

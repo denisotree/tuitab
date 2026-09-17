@@ -515,6 +515,8 @@ pub enum Action {
     JoinLeftKeyUp,
     JoinLeftKeyDown,
     JoinLeftKeyToggle,
+    /// Every column as a left key, or none when all already are.
+    JoinLeftKeyToggleAll,
     JoinLeftKeyApply,
     JoinLeftKeyCancel,
     JoinRightKeyUp,

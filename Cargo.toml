@@ -48,7 +48,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
 bincode = "1"
 arboard = { version = "3", default-features = false }
-polars = { version = "0.53", default-features = false, features = ["csv", "lazy", "dtype-date", "dtype-datetime", "strings", "parquet", "ipc", "serde", "pivot", "is_in", "regex", "rank", "cum_agg", "diagonal_concat"] }
+polars = { version = "0.53", default-features = false, features = ["csv", "lazy", "dtype-date", "dtype-datetime", "strings", "parquet", "ipc", "serde", "pivot", "is_in", "regex", "rank", "cum_agg", "diagonal_concat", "semi_anti_join"] }
 libc = "0.2"
 calamine = { version = "0.36", features = ["chrono"] }
 glob = "0.3"

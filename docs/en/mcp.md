@@ -109,7 +109,7 @@ result of the last.
 | `aggregate` | A grand total — one row, no grouping |
 | `frequency` | Distribution ranked by count, with `Count` and `Pct` |
 | `pivot` | Rows by `index`, columns by `on`, cells by `formula` |
-| `join` | Against a second file, `how`: inner / left / right / outer |
+| `join` | Against a second file, `how`: inner / left / right / outer / anti / semi / diff. anti and semi keep this table's columns and treat NULL keys as equal. diff compares the tables like `git diff`: a leading `_diff` column holds `=` `~` `-` `+`, and `<col>_right` carries the other table's values on `~` rows. Keys must be unique on both sides |
 | `dedup` | One row per key. `keep`: first, last, min, max, random |
 | `duplicates` | Only the rows whose key repeats |
 | `sample` | `n` rows at random |

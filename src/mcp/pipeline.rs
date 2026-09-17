@@ -474,9 +474,12 @@ fn parse_join(body: &Value) -> Result<JoinSpec, String> {
         "left" => JoinType::Left,
         "right" => JoinType::Right,
         "outer" | "full" => JoinType::Outer,
+        "anti" => JoinType::Anti,
+        "semi" => JoinType::Semi,
+        "diff" => JoinType::Diff,
         other => {
             return Err(format!(
-                "Unknown join type '{}'. Available: inner, left, right, outer",
+                "Unknown join type '{}'. Available: inner, left, right, outer, anti, semi, diff",
                 other
             ))
         }

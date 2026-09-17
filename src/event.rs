@@ -657,6 +657,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Up | KeyCode::Char('k') => Action::JoinLeftKeyUp,
             KeyCode::Down | KeyCode::Char('j') => Action::JoinLeftKeyDown,
             KeyCode::Char(' ') => Action::JoinLeftKeyToggle,
+            KeyCode::Char('a') => Action::JoinLeftKeyToggleAll,
             KeyCode::Enter => Action::JoinLeftKeyApply,
             KeyCode::Esc | KeyCode::Char('q') => Action::JoinLeftKeyCancel,
             _ => Action::None,
