@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-17
+
+### Added
+
+- **Compare two tables like `git diff`.** The JOIN wizard (`J`) has a `DIFF`
+  type: the keys say which rows are the same row, every other shared column is
+  compared, and the result marks each row `=` unchanged, `~` changed (yellow,
+  with the differing cells highlighted), `-` only in the left table (red) or
+  `+` only in the right one (green). `_diff` is an ordinary pinned column, so
+  filtering on it or counting it with `F` works as on any other; the right-hand
+  values of a changed row sit in `<column>_right`. NULL equals NULL. Keys must
+  be unique on both sides — DIFF says so instead of guessing which rows to pair.
+  ([#46](https://github.com/denisotree/tuitab/issues/46))
+- **`ANTI` and `SEMI` joins** keep the left rows without, or with, a match on
+  the keys, and count a NULL key as equal to a NULL key.
+- **The key picker shows each column's type**, marks a right key whose type
+  cannot meet its left partner in red, and `a` takes every column as a key —
+  two keystrokes to diff tables with the same columns.
+- **`tuitab_calc`, a fifth MCP tool, for calculations with no file at all.** A
+  model sends named steps (`rate = 0.12 / 12`, `payment = pmt(rate, 360,
+  250000)`) and reads every value back instead of doing arithmetic in its head.
+  Numbers are 28-digit decimals, so `0.1 + 0.2` is `0.3`, and each value says
+  whether it is exact, rounded or approximate. Math, statistics over lists,
+  finance with spreadsheet signatures (`pmt`, `fv`, `pv`, `npv`, `irr`), the
+  normal, t, chi-square, Poisson and binomial distributions, and Holm and
+  Benjamini–Hochberg corrections.
+- MCP `join` accepts `how: anti`, `semi` and `diff`.
+
+### Changed
+
+- **Join keys of different types are refused with a sentence** naming both
+  columns and both types, where Polars used to fail with its own error. Integer,
+  float and datetime keys that differ only in width or precision are matched.
+
 ## [0.9.7] - 2026-09-16
 
 ### Added
@@ -1167,7 +1201,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.9.7...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/denisotree/tuitab/compare/v0.9.7...v0.10.0
 [0.9.7]: https://github.com/denisotree/tuitab/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/denisotree/tuitab/compare/v0.9.5...v0.9.6
 [0.9.5]: https://github.com/denisotree/tuitab/compare/v0.9.4...v0.9.5
