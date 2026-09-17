@@ -85,11 +85,14 @@ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
 TOML open as a table over the parsed document, so nested data can be browsed,
 edited and converted between formats. Installs `tuitab` plus the aliases
 `ttab` and `ttb`."""
+# Every entry is a table on purpose: dependabot's TOML library cannot re-emit an
+# array that mixes arrays with tables, and dies on Cargo.toml before it can open
+# an update PR.  Table form is what cargo-deb documents for symlinks anyway.
 assets = [
-    ["target/release/tuitab", "usr/bin/", "755"],
+    { source = "target/release/tuitab", dest = "usr/bin/", mode = "755" },
     { dest = "usr/bin/ttab", link_name = "tuitab" },
     { dest = "usr/bin/ttb", link_name = "tuitab" },
-    ["README.md", "usr/share/doc/tuitab/", "644"],
+    { source = "README.md", dest = "usr/share/doc/tuitab/", mode = "644" },
 ]
 
 [package.metadata.docs.rs]
