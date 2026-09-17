@@ -65,6 +65,8 @@ jaq-core = "3.1.0"
 # defaults, and feature unification wins.  jiff, base64 and urlencoding come along.
 jaq-std = "3.0.1"
 jaq-json = "2.0.1"
+libm = "0.2"
+rust_decimal = { version = "1.43", default-features = false, features = ["std", "maths"] }
 
 # `.deb` built by cargo-deb in the release workflow and served from the APT
 # repository on GitHub Pages.  Only the `tuitab` binary ships; the short names
@@ -116,3 +118,6 @@ lto = "thin"
 # backtraces; the error chain color-eyre prints is unaffected, and packagers strip
 # anyway.  Set to false when bisecting a crash.
 strip = "symbols"
+
+[dev-dependencies]
+statrs = "0.19"

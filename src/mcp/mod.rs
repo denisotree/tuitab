@@ -15,10 +15,12 @@
 //! Transport is stdio, so **nothing may be written to stdout except protocol
 //! messages**.  Diagnostics go to stderr.
 
+pub mod calc;
 pub mod pipeline;
 pub mod render;
 pub mod rpc;
 pub mod source;
+mod special;
 pub mod tools;
 pub mod write;
 

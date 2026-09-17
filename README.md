@@ -301,11 +301,13 @@ A source may be a glob — `content/**/index.md` reads every page of a static si
 one table, each page a row of its frontmatter — so a site can be checked against a
 database in one call rather than through an export script.
 
-Four tools: `tuitab_inspect` (columns, types, row count, sample rows),
+Five tools: `tuitab_inspect` (columns, types, row count, sample rows),
 `tuitab_query` (fifteen operations composed as a pipeline — filter, group by,
 window functions, pivot, join, dedup and the rest — returning JSON or writing
-xlsx/csv/parquet/sqlite), `tuitab_describe` (per-column statistics), and
-`tuitab_jq` (jq programs over nested JSON/YAML/TOML). Several questions can share
+xlsx/csv/parquet/sqlite), `tuitab_describe` (per-column statistics),
+`tuitab_jq` (jq programs over nested JSON/YAML/TOML), and `tuitab_calc` — any
+calculation, file or no file, in 28-digit decimals with math, statistics and
+finance functions, each value labelled exact, rounded or approximate. Several questions can share
 one call, and one of them failing does not cost the answers beside it.
 
 Two more appear with `--mcp-write`: `tuitab_write` works out what a change would
@@ -322,8 +324,9 @@ Every operation is shared with a keybinding rather than written twice, and a tes
 holds the two surfaces together: adding an action to the terminal fails to
 compile until someone says how a model reaches it.
 
-Costs no extra dependencies: the protocol is newline-delimited JSON-RPC, which
-`serde_json` already covers.
+The protocol is newline-delimited JSON-RPC, which `serde_json` already covers;
+`tuitab_calc` adds `rust_decimal` for exact arithmetic and `libm` for the normal
+distribution, and implements the other distributions itself.
 
 Full details in the [MCP server guide](https://github.com/denisotree/tuitab/blob/master/docs/en/mcp.md).
 

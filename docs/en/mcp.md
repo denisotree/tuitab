@@ -66,12 +66,13 @@ Code, `/mcp` shows the same thing.
 | `tuitab_query` | Everything computational, as a pipeline of operations |
 | `tuitab_describe` | A statistical profile of every column |
 | `tuitab_jq` | A jq program over nested JSON, JSONL, YAML or TOML |
+| `tuitab_calc` | Any calculation, with or without a file — see [Calculations](#calculations) |
 
 `tuitab_inspect` comes first in any session. Column names guessed from a file
 name are wrong often enough to cost a round trip. It takes `sample_rows` (default
 5) if the default is too few or too many.
 
-Every tool takes the same `source`: `path`, plus `container` for a sheet or
+Every tool that reads a file takes the same `source`: `path`, plus `container` for a sheet or
 table, `delimiter` to override CSV auto-detection, and `format` to override the
 extension (`{"path": "deploy.conf", "format": "yaml"}`). A bare path string works
 too. `tuitab_describe` takes `columns` to profile only some of them;
@@ -196,6 +197,48 @@ rank orders by the value it reads.
 
 Use `window` with `over` for a share within a group, and `compute` with
 `amount / sum(amount)` for a share of the whole table.
+
+## Calculations
+
+Not every question is about a table. A loan payment, a percentage change, the mean
+of numbers the user pasted — a model does that arithmetic in its head just as
+unreliably as it sums a column. `tuitab_calc` takes expressions as text and computes
+them:
+
+```json
+{"steps": [
+  {"name": "rate",    "expr": "0.12 / 12"},
+  {"name": "payment", "expr": "pmt(rate, 360, 250000)"},
+  {"name": "total",   "expr": "round(payment * 360, 2)"}
+]}
+```
+
+Each step may use the names of the steps before it, and every step's value comes
+back — the model quotes intermediate results instead of copying them between calls.
+A single `{"expr": "…"}` works too.
+
+**Numbers are decimals**, 28 significant digits, not floats: `0.1 + 0.2` is `0.3`,
+and a sum of money does not drift by a fraction of a cent. Values come back as
+strings, so no digit is lost in JSON, each with a `precision`:
+
+| `precision` | Meaning | Examples |
+|-------------|---------|----------|
+| `exact` | No digit was lost | `0.1 + 0.2`, `1.07^10`, `round(x, 2)`, `stdev_p(…)` of whole squares |
+| `rounded` | A decimal rounded to 28 significant digits | `1/3`, `sqrt(2)`, `pi`, anything computed from a rounded value |
+| `approximate` | Floating point, about 15 digits | `ln`, `exp`, `norm_cdf`, trigonometry, fractional powers, `irr`, results beyond ±7.9·10²⁸ |
+
+| Kind | Available |
+|------|-----------|
+| Operators | `+ - * / %`, `^` (or `**`; right-associative, `-2^2` is `-4`), `== != < > <= >=`, `and or not`, parentheses, lists `[1, 2, 3]` |
+| Constants | `pi`, `e` |
+| Math | `abs`, `round(x[, places])` (half away from zero; negative places round to tens, hundreds…), `floor`, `ceil`, `trunc`, `sqrt`, `exp`, `ln`, `log10`, `log(x[, base])`, `sin cos tan asin acos atan` (radians), `radians`, `degrees`, `min`, `max`, `factorial`, `gcd`, `lcm`, `if(cond, a, b)` |
+| Statistics | `sum`, `product`, `count`, `mean`/`avg`, `median`, `variance` and `stdev` (sample), `var_p` and `stdev_p` (population), `percentile(list, p)` with `p` from 0 to 1 (as `PERCENTILE.INC`) — each takes numbers, lists, or both. `norm_cdf(z)`, `norm_inv(p)`, `erf`, `erfc` for the standard normal distribution: p-values and critical values. `holm(p-values)` and `bh(p-values)` return the list adjusted for multiple comparisons (Holm–Bonferroni and Benjamini–Hochberg), in the order given |
+| Distributions | `t_cdf(x, df)`, `t_inv(p, df)` (Student's t), `chi2_cdf(x, df)`, `chi2_inv(p, df)`, `poisson_cdf(k, mean)`, `binom_cdf(k, n, p)`. A CDF is P(X ≤ x); an upper-tail p-value is `1 - …_cdf(…)`, which cannot go below about 10⁻¹⁵ |
+| Finance | `pmt(rate, nper, pv[, fv[, type]])`, `fv(rate, nper, pmt[, pv[, type]])`, `pv(rate, nper, pmt[, fv[, type]])`, `npv(rate, flows…)`, `irr(flows[, guess])` — spreadsheet signatures and signs: money paid out is negative |
+
+A mistake names the step and says what is wrong: `b (a + c): unknown name 'c' —
+earlier steps: a`, `division by zero`, `'=' is not an operator here: compare with
+'=='`. A step name cannot shadow a function or a constant.
 
 ## Many files at once
 
@@ -353,7 +396,8 @@ seed it drew, so the same answer can be had again by passing it back.
 
 ## What it will not do
 
-There is no SQL and no arbitrary code. The model sends structured operations,
+There is no SQL and no arbitrary code — `tuitab_calc` reads a closed arithmetic
+language, not a programming one. The model sends structured operations,
 each one mapping onto a function tuitab already had, and gets back numbers Polars
 computed. That is a deliberate limit, not an unfinished one: an operation
 validated against a schema fails loudly when it is wrong, where a mistyped SQL

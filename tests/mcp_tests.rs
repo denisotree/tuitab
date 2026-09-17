@@ -145,7 +145,7 @@ fn malformed_input_is_a_parse_error_rather_than_a_crash() {
 }
 
 #[test]
-fn tools_list_offers_the_four_tools() {
+fn tools_list_offers_the_five_tools() {
     let mut server = Server::new();
     let response = send(
         &mut server,
@@ -164,7 +164,8 @@ fn tools_list_offers_the_four_tools() {
             "tuitab_inspect",
             "tuitab_query",
             "tuitab_describe",
-            "tuitab_jq"
+            "tuitab_jq",
+            "tuitab_calc"
         ]
     );
 
