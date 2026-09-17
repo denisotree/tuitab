@@ -1,0 +1,48 @@
+Package: tuitab
+Architecture: arm64
+Version: 0.10.0-1
+Priority: optional
+Section: utils
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Installed-Size: 105158
+Depends: libc6 (>= 2.34), libstdc++6 (>= 11)
+Filename: pool/main/t/tuitab/tuitab_0.10.0-1_arm64.deb
+Size: 22390912
+MD5sum: c1754c17d8d81f83ddaa2dbeb2105b5e
+SHA1: 409cb6a390446f9ea6a0bd011c369bb6ed3dbdf6
+SHA256: 50c96c1ad374970ccc73b67244d74010ea4d036b378882f4e599710c509ccca4
+SHA512: 98071e5c609246462859d607a0343b165314550314bf66abf10744e970f65b5dd6be2a4ffa8c8a4434753b2217b5c65b735060b46e5b254cc007f134a98367f0
+Homepage: https://github.com/denisotree/tuitab
+Description: Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite
+ viewer with filtering, sorting, pivot tables, and charts
+ A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+ JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+ TOML open as a table over the parsed document, so nested data can be browsed,
+ edited and converted between formats. Installs `tuitab` plus the aliases
+ `ttab` and `ttb`.
+
+Package: tuitab
+Architecture: arm64
+Version: 0.9.7-1
+Priority: optional
+Section: utils
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Installed-Size: 104922
+Depends: libc6 (>= 2.34), libstdc++6 (>= 11)
+Filename: pool/main/t/tuitab/tuitab_0.9.7-1_arm64.deb
+Size: 22307732
+MD5sum: 17bd84e55e08e72ae0a2cc3e8578ec4e
+SHA1: 6b1021d3d9ec89daf51a20ba56063f5a7a2700bd
+SHA256: fd26cc24096f561cd2cd4caa90a663755bbcf60802f1a1dbb8ea1b50232fa8f5
+SHA512: 3b14a53f50e12e77d3e485ab65d0a94be86881aef732c48d61966b39c10abca562dedbfda9610e586dca86029211fe3d5ac1a35c43318b45185394eab6fd347c
+Homepage: https://github.com/denisotree/tuitab
+Description: Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite
+ viewer with filtering, sorting, pivot tables, and charts
+ A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+ JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+ TOML open as a table over the parsed document, so nested data can be browsed,
+ edited and converted between formats. Installs `tuitab` plus the aliases
+ `ttab` and `ttb`.
+
