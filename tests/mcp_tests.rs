@@ -708,7 +708,8 @@ fn compute_string_functions_return_text() {
     assert_eq!(type_of("s_s"), json!("string"));
     assert_eq!(cell(&result, 0, "s_col"), json!("2026-01-01-x"));
     assert_eq!(cell(&result, 0, "sub"), json!("2026-01"));
-    assert_eq!(cell(&result, 0, "ln"), json!(10.0));
+    assert_eq!(cell(&result, 0, "ln"), json!(10));
+    assert_eq!(type_of("ln"), json!("integer"));
     // Numbers stay numbers, unrounded.
     assert_eq!(cell(&result, 0, "yr"), json!(2026.125));
     assert_eq!(type_of("yr"), json!("float"));

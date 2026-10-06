@@ -300,7 +300,7 @@ impl Expr {
                     .to_polars_expr()?
                     .str()
                     .len_chars()
-                    .cast(polars::prelude::DataType::Float64)),
+                    .cast(polars::prelude::DataType::Int64)),
                 "sum" if args.len() == 1 => Ok(args[0]
                     .to_polars_expr()?
                     .sum()
