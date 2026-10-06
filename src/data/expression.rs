@@ -365,7 +365,18 @@ impl Expr {
             Expr::IsNull(inner) => {
                 Value::Boolean(inner.eval(row_idx, col_lookup, df) == Value::Null)
             }
+            // A text column is text: read by its look, `007` became 7 and `nan` NaN.
             Expr::ColumnRef(name) => match col_lookup.get(name.as_str()) {
+                Some(&col_idx) if df.is_null_physical(row_idx, col_idx) => Value::Null,
+                Some(&col_idx)
+                    if df
+                        .df
+                        .columns()
+                        .get(col_idx)
+                        .is_some_and(|c| c.dtype() == &polars::prelude::DataType::String) =>
+                {
+                    Value::String(df.get_physical(row_idx, col_idx))
+                }
                 Some(&col_idx) => infer(&df.get_physical(row_idx, col_idx)),
                 None => Value::Null,
             },
@@ -379,6 +390,13 @@ impl Expr {
                         return Value::String(format!("{}{}", s1, s2));
                     }
                 }
+
+                // Text that reads as a date takes part in date arithmetic as one.
+                let (l, r) = if matches!(op, Op::Add | Op::Sub) {
+                    (as_temporal(l), as_temporal(r))
+                } else {
+                    (l, r)
+                };
 
                 // 2. Date Math
                 match op {
@@ -416,10 +434,10 @@ impl Expr {
                 // 3. Comparisons
                 match op {
                     Op::Eq => {
-                        return Value::Boolean(l == r);
+                        return Value::Boolean(values_equal(&l, &r));
                     }
                     Op::NotEq => {
-                        return Value::Boolean(l != r);
+                        return Value::Boolean(!values_equal(&l, &r));
                     }
                     Op::Lt => return compare_ordered(&l, &r, std::cmp::Ordering::Less, false),
                     Op::Gt => return compare_ordered(&l, &r, std::cmp::Ordering::Greater, false),
@@ -474,17 +492,26 @@ impl Expr {
             Expr::InList { left, list } => {
                 let l = left.eval(row_idx, col_lookup, df);
                 for item in list {
-                    if l == item.eval(row_idx, col_lookup, df) {
+                    if values_equal(&l, &item.eval(row_idx, col_lookup, df)) {
                         return Value::Boolean(true);
                     }
                 }
                 Value::Boolean(false)
             }
             Expr::FunctionCall { name, args } => {
-                let evaluated_args: Vec<Value> = args
+                let mut evaluated_args: Vec<Value> = args
                     .iter()
                     .map(|a| a.eval(row_idx, col_lookup, df))
                     .collect();
+                // A date read from a text column.
+                if matches!(
+                    name.as_str(),
+                    "year" | "month" | "day" | "hour" | "minute" | "date_format"
+                ) {
+                    if let Some(first) = evaluated_args.first_mut() {
+                        *first = as_temporal(std::mem::replace(first, Value::Null));
+                    }
+                }
 
                 match name.as_str() {
                     "text" if evaluated_args.len() == 1 => match &evaluated_args[0] {
@@ -698,6 +725,32 @@ fn infer(text: &str) -> Value {
         Value::Null
     } else {
         Value::String(text.to_string())
+    }
+}
+
+/// Text that reads as a date or a datetime, as one; any other value unchanged.  A
+/// text column stays text until an operation needs a date from it.
+fn as_temporal(v: Value) -> Value {
+    if let Value::String(s) = &v {
+        if let Some(t) = parse_temporal(s) {
+            return t;
+        }
+    }
+    v
+}
+
+/// `==` for the interpreter.  Text meets a number as a number when it reads as one
+/// (`"007" == 7`), and a date as a date; everything else compares as it is.
+fn values_equal(l: &Value, r: &Value) -> bool {
+    match (l, r) {
+        (Value::String(s), Value::Number(n)) | (Value::Number(n), Value::String(s)) => {
+            s.parse::<f64>().is_ok_and(|x| x == *n)
+        }
+        (Value::String(_), Value::Date(_) | Value::Datetime(_))
+        | (Value::Date(_) | Value::Datetime(_), Value::String(_)) => {
+            as_temporal(l.clone()) == as_temporal(r.clone())
+        }
+        _ => l == r,
     }
 }
 
@@ -1161,16 +1214,20 @@ fn compare_ordered(l: &Value, r: &Value, target: std::cmp::Ordering, allow_equal
             n1.partial_cmp(&n2).unwrap_or(std::cmp::Ordering::Equal),
         ));
     }
-    if let (Value::String(s1), Value::String(s2)) = (l, r) {
-        return Value::Boolean(matches(s1.cmp(s2)));
+    // Text against a date compares as a date when it reads as one.
+    let (l, r) = match (l, r) {
+        (Value::String(_), Value::Date(_) | Value::Datetime(_))
+        | (Value::Date(_) | Value::Datetime(_), Value::String(_)) => {
+            (as_temporal(l.clone()), as_temporal(r.clone()))
+        }
+        _ => (l.clone(), r.clone()),
+    };
+    match (&l, &r) {
+        (Value::String(s1), Value::String(s2)) => Value::Boolean(matches(s1.cmp(s2))),
+        (Value::Date(d1), Value::Date(d2)) => Value::Boolean(matches(d1.cmp(d2))),
+        (Value::Datetime(dt1), Value::Datetime(dt2)) => Value::Boolean(matches(dt1.cmp(dt2))),
+        _ => Value::Null,
     }
-    if let (Value::Date(d1), Value::Date(d2)) = (l, r) {
-        return Value::Boolean(matches(d1.cmp(d2)));
-    }
-    if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (l, r) {
-        return Value::Boolean(matches(dt1.cmp(dt2)));
-    }
-    Value::Null
 }
 
 #[cfg(test)]
@@ -1189,15 +1246,23 @@ mod tests {
         tui_df
     }
 
+    fn mock_int_df(data: Vec<Vec<i64>>, names: Vec<&str>) -> crate::data::dataframe::DataFrame {
+        let series_vec = data
+            .into_iter()
+            .enumerate()
+            .map(|(i, col_data)| Series::new(names[i].into(), &col_data).into())
+            .collect();
+        let mut tui_df = crate::data::dataframe::DataFrame::empty();
+        tui_df.df = polars::prelude::DataFrame::new_infer_height(series_vec).unwrap();
+        tui_df
+    }
+
     #[test]
     fn test_parse_simple_add() {
         let expr = Expr::parse("a+b").unwrap();
-        let data = vec![
-            vec!["10".to_string(), "20".to_string()],
-            vec!["3".to_string(), "7".to_string()],
-        ];
+        let data = vec![vec![10, 20], vec![3, 7]];
         let lookup: HashMap<&str, usize> = [("a", 0), ("b", 1)].into_iter().collect();
-        let df = mock_df(data, vec!["a", "b"]);
+        let df = mock_int_df(data, vec!["a", "b"]);
         assert_eq!(expr.eval(0, &lookup, &df), Value::Number(13.0));
         assert_eq!(expr.eval(1, &lookup, &df), Value::Number(27.0));
     }
@@ -1215,13 +1280,9 @@ mod tests {
     #[test]
     fn test_parse_parentheses() {
         let expr = Expr::parse("(a+b)*c").unwrap();
-        let data = vec![
-            vec!["2".to_string()],
-            vec!["3".to_string()],
-            vec!["4".to_string()],
-        ];
+        let data = vec![vec![2], vec![3], vec![4]];
         let lookup: HashMap<&str, usize> = [("a", 0), ("b", 1), ("c", 2)].into_iter().collect();
-        let df = mock_df(data, vec!["a", "b", "c"]);
+        let df = mock_int_df(data, vec!["a", "b", "c"]);
         assert_eq!(expr.eval(0, &lookup, &df), Value::Number(20.0));
     }
 
@@ -1448,5 +1509,76 @@ mod tests {
             .check_text_arithmetic(&is_col)
             .unwrap_err();
         assert!(err.contains("backticks"), "{}", err);
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn codes() -> (
+        crate::data::dataframe::DataFrame,
+        HashMap<&'static str, usize>,
+    ) {
+        let df = mock_df(
+            vec![
+                strings(&["007", "nan", "1e3", "A12"]),
+                strings(&["2026-01-15", "2026-01-15 10:30:00", "x", "y"]),
+            ],
+            vec!["sku", "when"],
+        );
+        (df, [("sku", 0), ("when", 1)].into_iter().collect())
+    }
+
+    /// Reading a text cell by its look turned `007` into 7 and `nan` into NaN.
+    #[test]
+    fn a_text_column_stays_text() {
+        let (df, lookup) = codes();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("concat(sku, '|')", 0), Value::String("007|".into()));
+        assert_eq!(at("concat(sku, '|')", 2), Value::String("1e3|".into()));
+        assert_eq!(at("substring(sku, 0, 2)", 1), Value::String("na".into()));
+        // Two texts add up to one text, as in Polars.
+        assert_eq!(at("sku + sku", 0), Value::String("007007".into()));
+        // Arithmetic still reads a number out of text.
+        assert_eq!(at("sku * 2", 0), Value::Number(14.0));
+        // Date functions and date arithmetic still read a date out of text.
+        assert_eq!(at("year(when)", 0), Value::Number(2026.0));
+        assert_eq!(at("hour(when)", 1), Value::Number(10.0));
+        assert_eq!(
+            at("date_format(when, '%Y-%m')", 0),
+            Value::String("2026-01".into())
+        );
+        assert_eq!(
+            at("when - 1", 0),
+            Value::Date(NaiveDate::from_ymd_opt(2026, 1, 14).unwrap())
+        );
+    }
+
+    #[test]
+    fn text_meets_numbers_and_dates_on_their_terms() {
+        let (df, lookup) = codes();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("sku == 7", 0), Value::Boolean(true));
+        assert_eq!(at("sku != 7", 0), Value::Boolean(false));
+        assert_eq!(at("sku in (7, 8)", 0), Value::Boolean(true));
+        assert_eq!(at("sku == 7", 3), Value::Boolean(false));
+        assert_eq!(at("sku > 9", 2), Value::Boolean(true));
+        // Text that is not a number has no order against one.
+        assert_eq!(at("sku > 9", 3), Value::Null);
+    }
+
+    #[test]
+    fn a_date_compares_with_text_that_reads_as_one() {
+        let d = Series::new("d".into(), [NaiveDate::from_ymd_opt(2026, 1, 15)]);
+        let mut df = crate::data::dataframe::DataFrame::empty();
+        df.df = polars::prelude::DataFrame::new_infer_height(vec![d.into()]).unwrap();
+        let lookup: HashMap<&str, usize> = [("d", 0)].into_iter().collect();
+        let at = |e: &str| Expr::parse(e).unwrap().eval(0, &lookup, &df);
+
+        assert_eq!(at("d > '2026-01-01'"), Value::Boolean(true));
+        assert_eq!(at("d == '2026-01-15'"), Value::Boolean(true));
+        assert_eq!(at("d < 'not a date'"), Value::Null);
     }
 }

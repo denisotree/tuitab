@@ -53,6 +53,10 @@ In the input prompt, press `Tab` to autocomplete column names.
 `+` also concatenates when applied to strings. Comparisons produce a boolean,
 which is what the `|!=` row-select uses.
 
+A text column stays text: `concat(sku, "-", size)` keeps `007` as written. Where an
+operation needs a number or a date, text that reads as one is used as one — `sku * 2`,
+`code == 7`, `year(updated_at)` and `updated_at - 7` work on text columns too.
+
 ```text
 salary > 90000
 department == "Engineering"

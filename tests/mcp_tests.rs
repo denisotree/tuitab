@@ -714,6 +714,30 @@ fn compute_string_functions_return_text() {
     assert_eq!(type_of("yr"), json!("float"));
 }
 
+/// A text column stays text in an expression: read by its look, `007` became 7.
+#[test]
+fn compute_keeps_a_text_column_as_written() {
+    let path = tmp("compute_codes.csv");
+    std::fs::write(&path, "sku,name\n007,Москва\nA12,\n1e3,nan\n").unwrap();
+    let mut server = Server::new();
+    let result = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": {"path": path}, "ops": [
+            {"compute": {"name": "label", "expr": "concat(sku, '|', name)"}},
+            {"compute": {"name": "head", "expr": "substring(name, 0, 3)"}}
+        ]}),
+    );
+    assert_eq!(cell(&result, 0, "label"), json!("007|Москва"));
+    // A NULL name joins as nothing.
+    assert_eq!(cell(&result, 1, "label"), json!("A12|"));
+    assert_eq!(cell(&result, 2, "label"), json!("1e3|nan"));
+    // Characters, not bytes.
+    assert_eq!(cell(&result, 0, "head"), json!("Мос"));
+    assert_eq!(cell(&result, 1, "head"), json!(null));
+    assert_eq!(cell(&result, 2, "head"), json!("nan"));
+}
+
 // ── join ────────────────────────────────────────────────────────────────────
 
 #[test]

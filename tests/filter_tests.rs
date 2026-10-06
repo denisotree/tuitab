@@ -1,7 +1,7 @@
 //! Row selection shared by the TUI's typed expressions and the MCP server's
 //! structured predicates.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tuitab::data::dataframe::DataFrame;
 use tuitab::data::expression::{Expr, Value};
 use tuitab::data::filter::{
@@ -456,4 +456,21 @@ fn a_projection_reports_the_same_types_as_its_source() {
         let after = projected.columns[projected.column_index(name).unwrap()].col_type;
         assert_eq!(before, after, "'{}' changed type by being selected", name);
     }
+}
+
+/// The TUI's typed filter runs through the interpreter when Polars cannot lower it;
+/// there `007` must stay `007`, not become 7.
+#[test]
+fn an_interpreted_filter_reads_a_text_column_as_written() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("filter-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("codes.csv");
+    std::fs::write(&path, "sku\n007\nA12\n7\n").unwrap();
+    let df = load_file(&path, None).unwrap();
+
+    // concat() has no Polars form, so this runs row by row.
+    let expr = Expr::parse("concat(sku, '') == '007'").unwrap();
+    assert_eq!(select_rows(&df, &expr, Fallback::Allowed).unwrap(), vec![0]);
 }
