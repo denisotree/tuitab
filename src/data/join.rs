@@ -278,6 +278,26 @@ pub fn diff_dataframes(
             ));
         }
     }
+    // Polars puts the right table's value of a shared column in `<col>_right`.  A
+    // table that already has that name collides, and the way out Polars suggests —
+    // its `suffix` parameter — is not one tuitab offers.
+    for r in &right.columns {
+        let shared = !right_keys.contains(&r.name) && left.columns.iter().any(|l| l.name == r.name);
+        let suffixed = format!("{}{RIGHT_SUFFIX}", r.name);
+        if shared
+            && left
+                .columns
+                .iter()
+                .chain(&right.columns)
+                .any(|c| c.name == suffixed)
+        {
+            return Err(eyre!(
+                "cannot diff: the right table's values of \"{}\" would go into \"{suffixed}\", \
+                 but a table already has a column with that name; rename it first",
+                r.name
+            ));
+        }
+    }
     let (left_df, right_df) = aligned_frames(left, right, left_keys, right_keys, "diff")?;
     refuse_repeated_keys(&left_df, left_keys, "left")?;
     refuse_repeated_keys(&right_df, right_keys, "right")?;

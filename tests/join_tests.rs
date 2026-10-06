@@ -515,3 +515,59 @@ fn a_right_column_suffixed_onto_a_name_the_right_table_has_gets_a_number() {
 
     assert_eq!(column_names(&out), vec!["id", "v", "v_right_1", "v_right"]);
 }
+
+/// Both tables already hold `v_right` next to `v`: the right-hand values of `v`
+/// have nowhere to go.  Polars' advice about its `suffix` parameter is no help here.
+#[test]
+fn diff_refuses_a_table_that_already_has_the_right_hand_name() {
+    let left = frame(vec![
+        int("id", &[1]),
+        text("v", &["a"]),
+        text("v_right", &["x"]),
+    ]);
+    let right = frame(vec![
+        int("id", &[1]),
+        text("v", &["b"]),
+        text("v_right", &["y"]),
+    ]);
+
+    let err = join_dataframes(
+        &left,
+        &right,
+        &keys(&["id"]),
+        &keys(&["id"]),
+        JoinType::Diff,
+    )
+    .err()
+    .expect("diff must refuse")
+    .to_string();
+
+    assert!(err.starts_with("cannot diff:"), "{err}");
+    assert!(err.contains("\"v_right\""), "{err}");
+    assert!(!err.contains("suffix"), "{err}");
+}
+
+/// Only the right table holds `v_right`; its `v` would still be renamed onto it.
+#[test]
+fn diff_refuses_when_only_the_right_table_has_the_right_hand_name() {
+    let left = frame(vec![int("id", &[1]), text("v", &["a"])]);
+    let right = frame(vec![
+        int("id", &[1]),
+        text("v", &["b"]),
+        text("v_right", &["y"]),
+    ]);
+
+    let err = join_dataframes(
+        &left,
+        &right,
+        &keys(&["id"]),
+        &keys(&["id"]),
+        JoinType::Diff,
+    )
+    .err()
+    .expect("diff must refuse")
+    .to_string();
+
+    assert!(err.starts_with("cannot diff:"), "{err}");
+    assert!(err.contains("\"v_right\""), "{err}");
+}
