@@ -365,48 +365,10 @@ impl Expr {
             Expr::IsNull(inner) => {
                 Value::Boolean(inner.eval(row_idx, col_lookup, df) == Value::Null)
             }
-            Expr::ColumnRef(name) => {
-                if let Some(&col_idx) = col_lookup.get(name.as_str()) {
-                    let cell_text = df.get_physical(row_idx, col_idx);
-                    if let Ok(n) = cell_text.parse::<f64>() {
-                        Value::Number(n)
-                    } else if let Ok(b) = cell_text.parse::<bool>() {
-                        Value::Boolean(b)
-                    } else if let Ok(d) = NaiveDate::parse_from_str(&cell_text, "%Y-%m-%d") {
-                        Value::Date(d)
-                    } else if let Ok(dt) =
-                        chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f%#z")
-                    {
-                        Value::Datetime(dt.naive_local())
-                    } else if let Ok(dt) =
-                        chrono::DateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f%#z")
-                    {
-                        Value::Datetime(dt.naive_local())
-                    } else if let Ok(dt) =
-                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S%.f")
-                    {
-                        Value::Datetime(dt)
-                    } else if let Ok(dt) =
-                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S%.f")
-                    {
-                        Value::Datetime(dt)
-                    } else if let Ok(dt) =
-                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%d %H:%M:%S")
-                    {
-                        Value::Datetime(dt)
-                    } else if let Ok(dt) =
-                        NaiveDateTime::parse_from_str(&cell_text, "%Y-%m-%dT%H:%M:%S")
-                    {
-                        Value::Datetime(dt)
-                    } else if cell_text.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(cell_text.clone())
-                    }
-                } else {
-                    Value::Null
-                }
-            }
+            Expr::ColumnRef(name) => match col_lookup.get(name.as_str()) {
+                Some(&col_idx) => infer(&df.get_physical(row_idx, col_idx)),
+                None => Value::Null,
+            },
             Expr::BinOp { op, left, right } => {
                 let l = left.eval(row_idx, col_lookup, df);
                 let r = right.eval(row_idx, col_lookup, df);
@@ -721,6 +683,45 @@ fn text_of(v: &Value) -> Option<String> {
         Value::Null => None,
         v => Some(v.to_string()),
     }
+}
+
+/// What a cell's text reads as: a number, a boolean, a date or a datetime, NULL when
+/// empty, text otherwise.
+fn infer(text: &str) -> Value {
+    if let Ok(n) = text.parse::<f64>() {
+        Value::Number(n)
+    } else if let Ok(b) = text.parse::<bool>() {
+        Value::Boolean(b)
+    } else if let Some(t) = parse_temporal(text) {
+        t
+    } else if text.is_empty() {
+        Value::Null
+    } else {
+        Value::String(text.to_string())
+    }
+}
+
+/// A date (`YYYY-MM-DD`) or a datetime in one of the forms a cell takes.
+fn parse_temporal(text: &str) -> Option<Value> {
+    if let Ok(d) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        return Some(Value::Date(d));
+    }
+    for fmt in ["%Y-%m-%d %H:%M:%S%.f%#z", "%Y-%m-%dT%H:%M:%S%.f%#z"] {
+        if let Ok(dt) = chrono::DateTime::parse_from_str(text, fmt) {
+            return Some(Value::Datetime(dt.naive_local()));
+        }
+    }
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(text, fmt) {
+            return Some(Value::Datetime(dt));
+        }
+    }
+    None
 }
 
 impl Parser {
