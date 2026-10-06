@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-06
+
+### Fixed
+
+- **Chained joins over tables that share a column no longer crash.** Joining
+  three tables that all have, say, `updated_at` gave two `updated_at_right`
+  columns, and the next filter or aggregate panicked — in the MCP server that
+  ended the process, and the client lost every tuitab tool. The second one is
+  now `updated_at_right_1`. A right table that already holds `v_right` next to
+  `v` joins too, where it used to be refused.
+- **A crash inside one MCP tool call no longer stops the server.** The call
+  returns an error result and the server keeps answering.
+
 ## [0.10.0] - 2026-09-17
 
 ### Added
@@ -1201,7 +1214,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/denisotree/tuitab/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/denisotree/tuitab/compare/v0.9.7...v0.10.0
 [0.9.7]: https://github.com/denisotree/tuitab/compare/v0.9.6...v0.9.7
 [0.9.6]: https://github.com/denisotree/tuitab/compare/v0.9.5...v0.9.6
