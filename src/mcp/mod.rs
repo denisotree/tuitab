@@ -138,6 +138,15 @@ fn call_tool(server: &mut Server, id: Value, params: &Value) -> Value {
         tools::call(server, name, &arguments)
     }));
 
+    tool_response(id, outcome)
+}
+
+/// The response to `tools/call`, from how the tool ended: with a result, with a
+/// failure the model should see, as an unknown tool, or in a panic.
+fn tool_response(
+    id: Value,
+    outcome: std::thread::Result<Result<Value, tools::CallError>>,
+) -> Value {
     match outcome {
         Ok(Ok(payload)) => rpc::success(id, rpc::tool_success(payload)),
         // An unknown tool breaks the protocol contract; a tool that ran and
@@ -186,4 +195,21 @@ pub fn serve(write: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No input is known to panic any more, so the boundary is tested with one made up.
+    #[test]
+    fn a_panicking_tool_becomes_an_error_result() {
+        let outcome =
+            std::panic::catch_unwind(|| -> Result<Value, tools::CallError> { panic!("boom") });
+        let response = tool_response(json!(7), outcome);
+        assert_eq!(response["id"], json!(7));
+        assert_eq!(response["result"]["isError"], json!(true));
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("boom"), "{text}");
+    }
 }
