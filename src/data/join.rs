@@ -1,8 +1,10 @@
 use crate::data::dataframe::DataFrame;
 use crate::data::io::wrap_polars_df;
+use crate::data::view::unique_name;
 use crate::types::ColumnType;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
+use indexmap::IndexSet;
 use polars::prelude::{
     col, lit, when, DataFrameJoinOps, DataType, Expr, IntoLazy, JoinArgs, JoinCoalesce,
     JoinType as PolarsJoinType, SortMultipleOptions, TimeUnit, NULL,
@@ -161,11 +163,42 @@ pub fn join_dataframes(
     // ANTI and SEMI answer "is this row in the other table", where a NULL key is a
     // value like any other.  The rest keep SQL's NULL <> NULL.
     args.nulls_equal = matches!(join_type, JoinType::Anti | JoinType::Semi);
+    // Polars suffixes a right column whose name the left has without checking the
+    // new name is free: a chain of joins over tables that share `updated_at` gave
+    // two `updated_at_right`, and the next op panicked.  So polars gets a suffix no
+    // real column carries, and each suffixed column gets a free name here.
+    args.suffix = Some(JOIN_SUFFIX.into());
 
-    let result = left_df.join(&right_df, &left_key_strs, &right_key_strs, args, None)?;
+    let mut result = left_df.join(&right_df, &left_key_strs, &right_key_strs, args, None)?;
+
+    let names: Vec<String> = result
+        .get_column_names()
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+    let mut taken: IndexSet<String> = names
+        .iter()
+        .filter(|n| !n.ends_with(JOIN_SUFFIX))
+        .cloned()
+        .collect();
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|n| match n.strip_suffix(JOIN_SUFFIX) {
+            Some(base) => {
+                let name = unique_name(&format!("{base}{RIGHT_SUFFIX}"), &taken);
+                taken.insert(name.clone());
+                name
+            }
+            None => n,
+        })
+        .collect();
+    result.set_column_names(&names)?;
 
     wrap_polars_df(result)
 }
+
+/// What polars appends to a clashing right column, renamed away by [`join_dataframes`].
+const JOIN_SUFFIX: &str = "__tuitab_join_right";
 
 /// The status column of a DIFF result.
 pub const DIFF_COL: &str = "_diff";

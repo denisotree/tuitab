@@ -2207,3 +2207,29 @@ fn inspecting_a_spreadsheet_gives_the_size_of_every_sheet() {
     assert_eq!(sheet["columns"], json!(5), "{}", listing);
     std::fs::remove_file(&xlsx).unwrap();
 }
+
+/// Three files sharing an audit column, joined in a chain: the issue's exact
+/// request, which used to leave two `updated_at_right` columns and crash the count.
+#[test]
+fn chained_joins_on_tables_with_a_shared_column_can_be_aggregated() {
+    let (a, b, c) = (tmp("chain_a.csv"), tmp("chain_b.csv"), tmp("chain_c.csv"));
+    std::fs::write(&a, "id,b_id,updated_at\n1,10,2026-01-01\n2,20,2026-01-02\n").unwrap();
+    std::fs::write(
+        &b,
+        "id,c_id,updated_at\n10,100,2026-02-01\n20,200,2026-02-02\n",
+    )
+    .unwrap();
+    std::fs::write(&c, "id,updated_at\n100,2026-03-01\n200,2026-03-02\n").unwrap();
+
+    let mut server = Server::new();
+    let result = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": {"path": a}, "ops": [
+            {"join": {"source": {"path": b}, "left_on": ["b_id"], "right_on": ["id"], "how": "left"}},
+            {"join": {"source": {"path": c}, "left_on": ["c_id"], "right_on": ["id"], "how": "left"}},
+            {"aggregate": [{"col": "*", "fn": "count"}]}
+        ]}),
+    );
+    assert_eq!(cell(&result, 0, "count"), json!(2));
+}

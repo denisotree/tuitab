@@ -321,8 +321,8 @@ fn child_segments(values: &[Option<&Node>]) -> Vec<Seg> {
     (0..max_len).map(Seg::Idx).collect()
 }
 
-/// Pick a column name for the bare-value column that no real key already uses.
-fn unique_name(base: &str, taken: &IndexSet<String>) -> String {
+/// `base`, or `base_1`, `base_2`… — the first that `taken` does not hold.
+pub(crate) fn unique_name(base: &str, taken: &IndexSet<String>) -> String {
     if !taken.contains(base) {
         return base.to_string();
     }

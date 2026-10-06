@@ -437,3 +437,81 @@ fn diff_rows_are_drawn_in_their_status_colours() {
         "a removed row has no right side, and says so"
     );
 }
+
+fn column_names(df: &DataFrame) -> Vec<&str> {
+    df.columns.iter().map(|c| c.name.as_str()).collect()
+}
+
+fn text(name: &str, values: &[&str]) -> (Series, ColumnType) {
+    (Series::new(name.into(), values), ColumnType::String)
+}
+
+fn int(name: &str, values: &[i64]) -> (Series, ColumnType) {
+    (Series::new(name.into(), values), ColumnType::Integer)
+}
+
+/// Three tables with the same audit column: the second join's `_right` is taken
+/// by the first one's, and two columns of one name crash the next op.
+#[test]
+fn chained_joins_keep_column_names_unique() {
+    let a = frame(vec![
+        int("id", &[1, 2]),
+        int("b_id", &[10, 20]),
+        text("updated_at", &["a1", "a2"]),
+    ]);
+    let b = frame(vec![
+        int("id", &[10, 20]),
+        int("c_id", &[100, 200]),
+        text("updated_at", &["b1", "b2"]),
+    ]);
+    let c = frame(vec![
+        int("id", &[100, 200]),
+        text("updated_at", &["c1", "c2"]),
+    ]);
+
+    let ab = join_dataframes(&a, &b, &keys(&["b_id"]), &keys(&["id"]), JoinType::Left).unwrap();
+    let abc = join_dataframes(&ab, &c, &keys(&["c_id"]), &keys(&["id"]), JoinType::Left).unwrap();
+
+    assert_eq!(
+        column_names(&abc),
+        vec![
+            "id",
+            "b_id",
+            "updated_at",
+            "c_id",
+            "updated_at_right",
+            "updated_at_right_1"
+        ]
+    );
+    let from_c: Vec<Option<&str>> = abc
+        .df
+        .column("updated_at_right_1")
+        .unwrap()
+        .str()
+        .unwrap()
+        .into_iter()
+        .collect();
+    assert_eq!(from_c, vec![Some("c1"), Some("c2")]);
+}
+
+/// The right table already holds `v_right`, so its `v` cannot take that name.
+#[test]
+fn a_right_column_suffixed_onto_a_name_the_right_table_has_gets_a_number() {
+    let left = frame(vec![int("id", &[1]), text("v", &["l"])]);
+    let right = frame(vec![
+        int("id", &[1]),
+        text("v", &["r"]),
+        text("v_right", &["rr"]),
+    ]);
+
+    let out = join_dataframes(
+        &left,
+        &right,
+        &keys(&["id"]),
+        &keys(&["id"]),
+        JoinType::Inner,
+    )
+    .unwrap();
+
+    assert_eq!(column_names(&out), vec!["id", "v", "v_right_1", "v_right"]);
+}

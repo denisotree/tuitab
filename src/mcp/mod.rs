@@ -132,16 +132,33 @@ fn call_tool(server: &mut Server, id: Value, params: &Value) -> Value {
 
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-    match tools::call(server, name, &arguments) {
-        Ok(payload) => rpc::success(id, rpc::tool_success(payload)),
+    // A panic in one call must not end the process: the client would lose every
+    // tool until it reconnects.  The panic hook has already reported it on stderr.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tools::call(server, name, &arguments)
+    }));
+
+    match outcome {
+        Ok(Ok(payload)) => rpc::success(id, rpc::tool_success(payload)),
         // An unknown tool breaks the protocol contract; a tool that ran and
         // failed is a result the model should see and react to.
-        Err(tools::CallError::UnknownTool(n)) => rpc::error(
+        Ok(Err(tools::CallError::UnknownTool(n))) => rpc::error(
             Some(id),
             rpc::INVALID_PARAMS,
             format!("Unknown tool: {}", n),
         ),
-        Err(tools::CallError::Failed(message)) => rpc::success(id, rpc::tool_error(message)),
+        Ok(Err(tools::CallError::Failed(message))) => rpc::success(id, rpc::tool_error(message)),
+        Err(panic) => {
+            let why = panic
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| panic.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "no message".to_string());
+            rpc::success(
+                id,
+                rpc::tool_error(format!("tuitab crashed on this call (a bug): {}", why)),
+            )
+        }
     }
 }
 

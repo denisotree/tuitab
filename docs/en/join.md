@@ -61,7 +61,8 @@ pre-selected. Adjust and press `Enter` to run the join.
 A new sheet is pushed onto the stack titled `left JOIN right` (`left ANTI JOIN
 right`, `left SEMI JOIN right`, `left DIFF right`). Press `Esc` / `q`
 to pop back to the original table. Non-key columns that exist in both tables get
-a `_right` suffix so nothing is overwritten.
+a `_right` suffix so nothing is overwritten; when that name is taken too —
+a second join with the same column — it becomes `_right_1`, `_right_2`….
 
 ## Worked example
 
