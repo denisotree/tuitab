@@ -738,6 +738,23 @@ fn compute_keeps_a_text_column_as_written() {
     assert_eq!(cell(&result, 2, "head"), json!("nan"));
 }
 
+/// Polars appends its query plan and advice about its own API to an error; the
+/// model needs only the first sentence.
+#[test]
+fn an_operation_error_comes_without_the_polars_query_plan() {
+    let mut server = Server::new();
+    let message = call_expecting_failure(
+        &mut server,
+        "tuitab_query",
+        json!({"source": {"path": "test_data/sample.csv"}, "ops": [
+            {"group_by": {"by": ["department"],
+                          "agg": [{"col": "salary", "fn": "sum"}, {"col": "salary", "fn": "sum"}]}}
+        ]}),
+    );
+    assert!(message.contains("salary:sum"), "{message}");
+    assert!(!message.contains("Resolved plan"), "{message}");
+}
+
 // ── join ────────────────────────────────────────────────────────────────────
 
 #[test]

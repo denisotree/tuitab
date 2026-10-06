@@ -523,7 +523,8 @@ pub fn apply_all_reporting_seeds(
         if let Some(seed) = drawn {
             seeds.0.push((i, seed));
         }
-        df = apply(df, op, drawn).map_err(|e| format!("ops[{}]: {}", i, e))?;
+        df = apply(df, op, drawn)
+            .map_err(|e| format!("ops[{}]: {}", i, without_polars_hints(&e)))?;
     }
     Ok((df, seeds))
 }
@@ -613,6 +614,16 @@ fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFram
                 .map_err(|e| e.to_string())
         }
     }
+}
+
+/// A Polars error without the parts meant for Polars users: the dump of the query
+/// plan, and advice about Polars' own API (`suffix`) that tuitab does not expose.
+fn without_polars_hints(message: &str) -> &str {
+    ["\n\nResolved plan until failure", "\n\nYou may want to try"]
+        .iter()
+        .filter_map(|marker| message.find(marker))
+        .min()
+        .map_or(message, |end| &message[..end])
 }
 
 /// Collapse `row_order` into the frame, so the next operation sees the rows it
