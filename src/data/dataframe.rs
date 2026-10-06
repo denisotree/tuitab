@@ -1511,31 +1511,36 @@ impl DataFrame {
             .map(|(i, c)| (c.name.as_str(), i))
             .collect();
 
-        let total_rows = self.df.height();
-        let mut new_col = Vec::with_capacity(total_rows);
+        use crate::data::expression::Value;
+        let values: Vec<Value> = (0..self.df.height())
+            .map(|physical_idx| expr.eval(physical_idx, &col_lookup, self))
+            .collect();
 
-        for physical_idx in 0..total_rows {
-            let val = expr.eval(physical_idx, &col_lookup, self);
-            match val {
-                crate::data::expression::Value::Number(n) => {
-                    if n.is_nan() {
-                        new_col.push("—".to_string());
-                    } else if n.fract() == 0.0 {
-                        new_col.push(format!("{}", n as i64));
-                    } else {
-                        new_col.push(format!("{:.2}", n));
-                    }
-                }
-                v => new_col.push(v.to_string()),
-            }
-        }
-
-        let new_series = Series::new(name.into(), &new_col);
-
-        // Try casting to Float64 if all values are numbers (slow path consistency)
-        let final_series = new_series
-            .cast(&polars::prelude::DataType::Float64)
-            .unwrap_or(new_series);
+        // A float column only when every value is a number.  Casting the text of
+        // any result to float instead — the cast never fails, it nulls what does
+        // not parse — turned every string `concat` or `substring` made into null.
+        let final_series = if values
+            .iter()
+            .all(|v| matches!(v, Value::Number(_) | Value::Null))
+        {
+            let numbers: Vec<Option<f64>> = values
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) if !n.is_nan() => Some(*n),
+                    _ => None,
+                })
+                .collect();
+            Series::new(name.into(), numbers)
+        } else {
+            let texts: Vec<Option<String>> = values
+                .iter()
+                .map(|v| match v {
+                    Value::Null => None,
+                    v => Some(v.to_string()),
+                })
+                .collect();
+            Series::new(name.into(), texts)
+        };
 
         self.df = self
             .df

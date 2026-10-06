@@ -554,8 +554,8 @@ impl Expr {
                     "split" => {
                         // Returns first part temporarily (to keep Value simple)
                         if evaluated_args.len() == 2 {
-                            if let (Value::String(s), Value::String(delim)) =
-                                (&evaluated_args[0], &evaluated_args[1])
+                            if let (Some(s), Value::String(delim)) =
+                                (text_of(&evaluated_args[0]), &evaluated_args[1])
                             {
                                 return Value::String(
                                     s.split(delim).next().unwrap_or("").to_string(),
@@ -566,9 +566,11 @@ impl Expr {
                     }
                     "substring" => {
                         if evaluated_args.len() == 3 {
-                            if let (Value::String(s), Value::Number(start), Value::Number(len)) =
-                                (&evaluated_args[0], &evaluated_args[1], &evaluated_args[2])
-                            {
+                            if let (Some(s), Value::Number(start), Value::Number(len)) = (
+                                text_of(&evaluated_args[0]),
+                                &evaluated_args[1],
+                                &evaluated_args[2],
+                            ) {
                                 let st = *start as usize;
                                 let ln = *len as usize;
                                 let chars: String = s.chars().skip(st).take(ln).collect();
@@ -579,10 +581,10 @@ impl Expr {
                     }
                     "len" => {
                         if evaluated_args.len() == 1 {
-                            match &evaluated_args[0] {
-                                Value::String(s) => return Value::Number(s.chars().count() as f64),
-                                _ => return Value::Null,
-                            }
+                            return match text_of(&evaluated_args[0]) {
+                                Some(s) => Value::Number(s.chars().count() as f64),
+                                None => Value::Null,
+                            };
                         }
                         Value::Null
                     }
@@ -709,6 +711,15 @@ impl Expr {
                 }
             }
         }
+    }
+}
+
+/// A value as the string functions see it.  A cell is typed by how it looks —
+/// `2026-01-01` arrives as a date — so a function over text takes any value.
+fn text_of(v: &Value) -> Option<String> {
+    match v {
+        Value::Null => None,
+        v => Some(v.to_string()),
     }
 }
 
