@@ -461,6 +461,24 @@ pub fn load_from_stdin_with_doc(
     wrap_polars_df(pdf).map(|df| (df, None))
 }
 
+/// The column type a Polars dtype is shown as.
+pub(crate) fn column_type_of(dtype: &DataType) -> ColumnType {
+    match dtype {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => ColumnType::Integer,
+        DataType::Float32 | DataType::Float64 => ColumnType::Float,
+        DataType::Date => ColumnType::Date,
+        DataType::Datetime(_, _) => ColumnType::Datetime,
+        _ => ColumnType::String,
+    }
+}
+
 pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
     let col_count = pdf.width();
     let mut columns = Vec::with_capacity(col_count);
@@ -469,20 +487,7 @@ pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFram
         let name = series.name().to_string();
         let mut col_meta = ColumnMeta::new(name);
 
-        col_meta.col_type = match series.dtype() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => ColumnType::Integer,
-            DataType::Float32 | DataType::Float64 => ColumnType::Float,
-            DataType::Date => ColumnType::Date,
-            DataType::Datetime(_, _) => ColumnType::Datetime,
-            _ => ColumnType::String,
-        };
+        col_meta.col_type = column_type_of(series.dtype());
 
         columns.push(col_meta);
     }

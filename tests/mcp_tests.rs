@@ -756,6 +756,37 @@ fn an_operation_error_comes_without_the_polars_query_plan() {
     assert!(!message.contains("Resolved plan"), "{message}");
 }
 
+/// Row-by-row results keep their kind: a date is a date, a comparison a boolean.
+#[test]
+fn compute_row_by_row_results_keep_their_type() {
+    let path = tmp("compute_types.csv");
+    std::fs::write(&path, "updated_at\n2026-01-01\n2026-03-05\n").unwrap();
+    let mut server = Server::new();
+    let result = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": {"path": path}, "ops": [
+            {"compute": {"name": "d", "expr": "date(updated_at)"}},
+            {"compute": {"name": "late", "expr": "month(updated_at) > 2"}},
+            {"compute": {"name": "t", "expr": "now()"}}
+        ]}),
+    );
+    let type_of = |name: &str| {
+        result["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap()["type"]
+            .clone()
+    };
+    assert_eq!(type_of("d"), json!("date"));
+    assert_eq!(cell(&result, 0, "d"), json!("2026-01-01"));
+    assert_eq!(cell(&result, 0, "late"), json!(false));
+    assert_eq!(cell(&result, 1, "late"), json!(true));
+    assert_eq!(type_of("t"), json!("datetime"));
+}
+
 // ── join ────────────────────────────────────────────────────────────────────
 
 #[test]
