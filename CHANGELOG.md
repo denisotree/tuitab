@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-07
+
+### Fixed
+
+- **`concat`, `substring`, `date_format` and the other functions Polars has no
+  form for return their values again.** A computed column that tuitab's own
+  interpreter filled was cast to a number, which emptied every string and kept
+  only two decimals of every number. Its dates and comparisons now come out as
+  dates and booleans.
+- **A text column stays as written in an expression.** `concat(sku, "-", size)`
+  turned `007` into `7` and `nan` into `NaN`. Where an operation needs a number
+  or a date, text that reads as one is still used as one: `sku * 2`,
+  `code == 7`, `year(updated_at)`, and a text `true`/`false` as a condition.
+- **Text compared with a date compares as a date.** It used to be empty, so a
+  filter dropped the row.
+- **`contains()` on an empty cell is empty** instead of matching the word
+  `Null`.
+- **Date arithmetic past the calendar and `date_format` with a pattern it cannot
+  use no longer crash the TUI.** They give an empty value.
+- **`diff` says which `<column>_right` already exists** instead of passing on
+  Polars' advice about a parameter tuitab does not have.
+- **MCP errors end at the reason**, without the Polars query plan after it.
+
+### Changed
+
+- `+` of two text columns joins them in every expression, as it already did
+  when Polars ran it; an empty string in a text column is an empty string, not
+  NULL.
+- `len()` gives an integer.
+
 ## [0.10.1] - 2026-10-06
 
 ### Fixed
@@ -1214,7 +1244,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/denisotree/tuitab/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/denisotree/tuitab/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/denisotree/tuitab/compare/v0.9.7...v0.10.0
 [0.9.7]: https://github.com/denisotree/tuitab/compare/v0.9.6...v0.9.7
