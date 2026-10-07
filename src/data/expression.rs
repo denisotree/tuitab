@@ -25,10 +25,12 @@ impl Value {
         }
     }
 
-    /// Return the boolean value, or `None` if this is not `Value::Boolean`.
+    /// The boolean value.  Text `true`/`false` counts, as text that reads as a number
+    /// counts for [`Value::as_f64`]: a text column of them is still a condition.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Boolean(b) => Some(*b),
+            Value::String(s) => s.parse().ok(),
             _ => None,
         }
     }
@@ -402,27 +404,27 @@ impl Expr {
                 match op {
                     Op::Add => {
                         if let (Value::Date(d), Value::Number(days)) = (&l, &r) {
-                            return Value::Date(*d + chrono::Duration::days(*days as i64));
+                            return add_days(*d, *days);
                         }
                         if let (Value::Number(days), Value::Date(d)) = (&l, &r) {
-                            return Value::Date(*d + chrono::Duration::days(*days as i64));
+                            return add_days(*d, *days);
                         }
                         if let (Value::Datetime(dt), Value::Number(secs)) = (&l, &r) {
-                            return Value::Datetime(*dt + chrono::Duration::seconds(*secs as i64));
+                            return add_seconds(*dt, *secs);
                         }
                         if let (Value::Number(secs), Value::Datetime(dt)) = (&l, &r) {
-                            return Value::Datetime(*dt + chrono::Duration::seconds(*secs as i64));
+                            return add_seconds(*dt, *secs);
                         }
                     }
                     Op::Sub => {
                         if let (Value::Date(d), Value::Number(days)) = (&l, &r) {
-                            return Value::Date(*d - chrono::Duration::days(*days as i64));
+                            return add_days(*d, -*days);
                         }
                         if let (Value::Date(d1), Value::Date(d2)) = (&l, &r) {
                             return Value::Number((*d1 - *d2).num_days() as f64);
                         }
                         if let (Value::Datetime(dt), Value::Number(secs)) = (&l, &r) {
-                            return Value::Datetime(*dt - chrono::Duration::seconds(*secs as i64));
+                            return add_seconds(*dt, -*secs);
                         }
                         if let (Value::Datetime(dt1), Value::Datetime(dt2)) = (&l, &r) {
                             return Value::Number((*dt1 - *dt2).num_seconds() as f64);
@@ -518,6 +520,8 @@ impl Expr {
                         Value::Null => Value::Null,
                         other => Value::String(other.to_string()),
                     },
+                    // A missing value matches nothing; as text it was `Null`.
+                    "contains" if evaluated_args[0] == Value::Null => Value::Null,
                     "contains" if evaluated_args.len() == 2 => {
                         match regex::Regex::new(&evaluated_args[1].to_string()) {
                             Ok(re) => Value::Boolean(re.is_match(&evaluated_args[0].to_string())),
@@ -646,15 +650,18 @@ impl Expr {
                             if let (Value::String(fmt), v) =
                                 (&evaluated_args[1], &evaluated_args[0])
                             {
-                                match v {
-                                    Value::Date(d) => {
-                                        return Value::String(d.format(fmt).to_string())
-                                    }
-                                    Value::Datetime(dt) => {
-                                        return Value::String(dt.format(fmt).to_string())
-                                    }
+                                // `to_string` panics on a pattern chrono cannot format.
+                                use std::fmt::Write;
+                                let mut out = String::new();
+                                let written = match v {
+                                    Value::Date(d) => write!(out, "{}", d.format(fmt)),
+                                    Value::Datetime(dt) => write!(out, "{}", dt.format(fmt)),
                                     _ => return Value::Null,
-                                }
+                                };
+                                return match written {
+                                    Ok(()) => Value::String(out),
+                                    Err(_) => Value::Null,
+                                };
                             }
                         }
                         Value::Null
@@ -726,6 +733,20 @@ fn infer(text: &str) -> Value {
     } else {
         Value::String(text.to_string())
     }
+}
+
+/// `date + days`, or NULL past the calendar's range, where chrono panics.
+fn add_days(d: NaiveDate, days: f64) -> Value {
+    chrono::TimeDelta::try_days(days as i64)
+        .and_then(|delta| d.checked_add_signed(delta))
+        .map_or(Value::Null, Value::Date)
+}
+
+/// `datetime + seconds`, or NULL past the calendar's range, where chrono panics.
+fn add_seconds(dt: NaiveDateTime, secs: f64) -> Value {
+    chrono::TimeDelta::try_seconds(secs as i64)
+        .and_then(|delta| dt.checked_add_signed(delta))
+        .map_or(Value::Null, Value::Datetime)
 }
 
 /// Text that reads as a date or a datetime, as one; any other value unchanged.  A
@@ -1580,5 +1601,54 @@ mod tests {
         assert_eq!(at("d > '2026-01-01'"), Value::Boolean(true));
         assert_eq!(at("d == '2026-01-15'"), Value::Boolean(true));
         assert_eq!(at("d < 'not a date'"), Value::Null);
+    }
+
+    /// A text column of `true`/`false` (SQLite TEXT, JSON strings, a CSV column with
+    /// other values mixed in) still works as a condition.
+    #[test]
+    fn text_true_and_false_still_work_as_conditions() {
+        let df = mock_df(vec![strings(&["true", "false", "maybe"])], vec!["active"]);
+        let lookup: HashMap<&str, usize> = [("active", 0)].into_iter().collect();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("if(active, 1, 0)", 0), Value::Number(1.0));
+        assert_eq!(at("if(active, 1, 0)", 1), Value::Number(0.0));
+        assert_eq!(at("not active", 1), Value::Boolean(true));
+        assert_eq!(at("active and 1 > 0", 0), Value::Boolean(true));
+        assert_eq!(at("not active", 2), Value::Null);
+    }
+
+    /// A missing value matches no pattern: read as text it was `Null`, which `^N` found.
+    #[test]
+    fn contains_on_a_missing_value_is_null() {
+        let name = Series::new("name".into(), [Some("Nina"), None]);
+        let mut df = crate::data::dataframe::DataFrame::empty();
+        df.df = polars::prelude::DataFrame::new_infer_height(vec![name.into()]).unwrap();
+        let lookup: HashMap<&str, usize> = [("name", 0)].into_iter().collect();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("contains(name, '^N')", 0), Value::Boolean(true));
+        assert_eq!(at("contains(name, '^N')", 1), Value::Null);
+    }
+
+    /// Past the calendar's range there is no answer.  chrono panics there, and the
+    /// TUI has no boundary to catch it: the whole app went down.
+    #[test]
+    fn date_arithmetic_out_of_range_is_null() {
+        let (df, lookup) = codes();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("when + 1000000000", 0), Value::Null);
+        assert_eq!(at("when - 1000000000", 0), Value::Null);
+        assert_eq!(at("when + 100000000000000000000", 1), Value::Null);
+    }
+
+    /// A pattern chrono cannot format has no answer; `to_string` panicked on it.
+    #[test]
+    fn date_format_with_a_bad_pattern_is_null() {
+        let (df, lookup) = codes();
+        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
+
+        assert_eq!(at("date_format(when, '%Q')", 0), Value::Null);
     }
 }

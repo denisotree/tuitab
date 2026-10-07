@@ -201,7 +201,7 @@ pub fn serve(write: bool) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// No input is known to panic any more, so the boundary is tested with one made up.
+    /// A panic takes a bug to trigger, so the boundary is tested with one made up.
     #[test]
     fn a_panicking_tool_becomes_an_error_result() {
         let outcome =
