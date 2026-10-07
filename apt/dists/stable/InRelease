@@ -1,0 +1,46 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64 arm64
+Codename: stable
+Components: main
+Date: Wed, 07 Oct 2026 09:06:12 +0000
+Label: tuitab
+Origin: tuitab
+Suite: stable
+MD5Sum:
+ 727ddcff7051f86ff2dff929f9066434             3537 main/binary-amd64/Packages
+ 21af047a3a782c26231cab30a785e48b             1192 main/binary-amd64/Packages.gz
+ 20024727c01ede3831d53a16ed46bf5f             3537 main/binary-arm64/Packages
+ 68475fc5f8d767aa84cd766827f45f3c             1198 main/binary-arm64/Packages.gz
+SHA1:
+ 30d4c718ac08ccf99593650caa248c056a03f354             3537 main/binary-amd64/Packages
+ d8865f1005a5748d1f9566eab1c31f9309fc33bc             1192 main/binary-amd64/Packages.gz
+ a07a79aa52a69e342987f07001ce040048ca14f0             3537 main/binary-arm64/Packages
+ 8d49a91fd0907c519eba109ff307fbc3bead9bc3             1198 main/binary-arm64/Packages.gz
+SHA256:
+ edccc9bfd1aa893d0e0b5070ecf5b1c2824e632ff7edb8e525bd02b61aecb814             3537 main/binary-amd64/Packages
+ 64d8fa58a42f35bfe32dccc1c9fba9a5b58b5bdb0de20e8ed3629d90cfb6261b             1192 main/binary-amd64/Packages.gz
+ 5249a7a3ef919d2cb19331faf70b0b5dfaac202824929fd7017b9aed33d6dfcc             3537 main/binary-arm64/Packages
+ a4ae54ac879f247fc3457e0f5f2191677037087e9a51e13d2aab73137790d208             1198 main/binary-arm64/Packages.gz
+SHA512:
+ aa1d2de620b6666a4198f3f35946ab9521aa2969a2a071369541b1b78a1530ee45f96495cf8f33b62dbb5e2aa695e2aff80ca56dc88b24e193deb20ec26da12a             3537 main/binary-amd64/Packages
+ dafc2a49e203ef1fee3bba813e122941e5c8858cdff1b6108cc3b6b053c98ecf026be3855746cae52fe1a33748820b00b9a33e721b408c8612e23fa310690daf             1192 main/binary-amd64/Packages.gz
+ 9b81b60f371b46b3c157a45cec93d7b53bc0dd0d63e8d6bd3862c543b2a3a70e6b88bb011b48ab754305979fe91dcbba366ca217b690371147f862c58c0e23bc             3537 main/binary-arm64/Packages
+ c1d997cbf23c8c8a33e3371c0904da63e6aba0a02973389e8aea3ccbd0526f97c4abe84ff297af5d008e33d852750b8a6f9f76b5baeb81feee5c5edca543f1a8             1198 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEE8aENSetkCg98Lvn9PIRxVWJE7zkFAmrGC4QACgkQPIRxVWJE
+7zna7A/8CtxjHsazoi55lSoNM+Fwe++pw0PjKrJy3DYf4kxnVDDQVBMkFes+1na7
+wDcnmHCcnLwbTBXdgx0TnLpgFQsCGSfU5fnYDldYtweIhEQj1AclWDmo2WuYt0tI
+ciEW+df5orjLJpHYUWfgQCcuEr0ERs/xFy8Ph+THjC5z45WtM0NNa8FgfSnGKpg9
+z5EKrLWjSruvqS+6qG0DrevaBDNSI4zfSbeDc/pQstGa1f3KIew4zYFM7Pi695pS
+Wcwf577RkMtmd6ow3bkVuXhHr1K6lorIeqLuCyzI2EEX/fp5zoVDdfhc0HZ9MrwZ
+f7HS5zh+jADGSti2rqoHMDBuSe4z3CPvlF81savGGUqjpwPoMv36wroQrsDmBUuW
+N0/FaRhwWTXuEN/xqrOns/mkEcRXQLISW6UB0yTZTp11gXPg1Kmv36t3/TUg4DdQ
+KC0lDQiunZ3umdSsdeLvcZMiYhPobI3UJDX0lXv3M4hno2KG7rKYZzCCL8iO9KyL
+9uyhuIQP7wp5reMzr5gcSjFnyN5oHE0Faf8SnXwdPES5Tj2+u+u+7IpfED2YoTS0
+Nj+ozKIfh6CqJafI3iAJ7OjNahlcG1cHJt1iZEYbMLGvSzV8F/JQUmNxOzB6h5sT
+3uHyPe/EoWnzjElahPLEOLQLkU52IYFuAdNlY9+HbStZheeg6oE=
+=Z/0w
+-----END PGP SIGNATURE-----
