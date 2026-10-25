@@ -74,7 +74,18 @@ jobs:
           # quick-xml 0.41, so the fix is one dependency bump inside polars; no released
           # polars has it yet. tuitab never makes a cloud request, so the code is linked
           # but never called. Drop these two the moment polars ships object_store 0.14.
+          #
+          # RUSTSEC-2026-0367/0368/0369: zip's extract() preserving SUID bits and
+          # following symlinks out of the destination. The zip that tuitab runs with is
+          # 9.x (calamine, rust_xlsxwriter), which has the fix; what is left is zip 6, a
+          # build dependency of libduckdb-sys 1.10505 that unpacks DuckDB's own vendored
+          # sources at compile time — never a user's archive. Dropping it means duckdb
+          # 1.20000 (DuckDB 2.0), a storage-format change of its own. Drop these three
+          # with that upgrade.
           cargo audit \
             --ignore RUSTSEC-2025-0141 \
             --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2026-0367 \
+            --ignore RUSTSEC-2026-0368 \
+            --ignore RUSTSEC-2026-0369

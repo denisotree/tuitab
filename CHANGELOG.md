@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-25
+
+### Fixed
+
+- **`cargo binstall tuitab` installs the pre-built binary instead of compiling**
+  (#57). The `ttab` and `ttb` aliases are behind an `aliases` feature that is on
+  by default, so `cargo install` still builds all three, and binstall takes the
+  release archive — which carries `tuitab` alone — skipping the aliases with a
+  warning.
+- **SQLite and DuckDB files open whatever they are called** (#58). An Audacity
+  project (`.aup3`), a database with no extension, one saved as `.csv`: the
+  file's own header decides, on the command line, in the directory browser and
+  in the MCP server. `-t sqlite` is no longer needed.
+- **Saving into an existing database adds a table to it**, whatever the file is
+  named; it is never overwritten with a CSV or JSON.
+- **`R` re-reads what the sheet is.** A table or view opened from a database, a
+  workbook sheet and a workbook's sheet list used to come back as the table list
+  or as the first sheet; a file opened from the directory browser answered "no
+  source path". On a drill-down, on document search results and on a node
+  reached with `gp`, `R` now says to go back to the sheet they came from,
+  instead of putting the whole file under their title.
+- **A failed reload of a large file keeps the sheet** and its undo history; it
+  used to leave the sheet empty.
+- **`-t md` with a glob pattern unions the pages**, fields that only some of
+  them have included, as it already did without `-t`.
+- **Started without a terminal, tuitab says so** and exits instead of panicking.
+
+### Added
+
+- `-t`/`--type` takes every format the MCP server reads — `-t csv export.dat`,
+  `-t parquet`, `-t sqlite` — not only JSON, YAML and TOML, and `R` keeps it.
+- The MCP server names the table that query output was written into, and says
+  so when a target named like a file (`report.csv`) turns out to be a database.
+
+### Changed
+
+- `--help` and the stdin error say which formats stdin reads: csv, tsv, txt,
+  json, jsonl, yaml and toml.
+
+### Security
+
+- calamine 0.37 and rust_xlsxwriter 0.101 bring zip 9.1 for RUSTSEC-2026-0367,
+  RUSTSEC-2026-0368 and RUSTSEC-2026-0369.
+- rustls 0.23.46, rustls-webpki 0.103.16, webpki-roots 1.0.11 and quinn-proto
+  0.11.19 for RUSTSEC-2026-0338 to -0342, -0346 to -0349, -0381 and -0382.
+
 ## [0.10.2] - 2026-10-07
 
 ### Fixed
@@ -1244,7 +1290,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/denisotree/tuitab/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/denisotree/tuitab/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/denisotree/tuitab/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/denisotree/tuitab/compare/v0.9.7...v0.10.0
