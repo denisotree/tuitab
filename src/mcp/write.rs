@@ -120,7 +120,7 @@ pub fn plan(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     // `tuitab_write_apply` ends up running something nobody is looking at any more.
     let displaced = server.pending.take().map(|p| p.id);
     let src_arg = super::tools::source_arg(args)?;
-    if !db_write::is_db_ext(&src_arg.path) {
+    if !db_write::is_db_path(&src_arg.path) {
         return Err(CallError::Failed(
             "tuitab_write changes a table in a database. Give a .sqlite or .duckdb source."
                 .to_string(),

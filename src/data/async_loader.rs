@@ -17,12 +17,12 @@ pub enum LoadEvent {
 pub fn load_in_background(
     path: PathBuf,
     delimiter: Option<u8>,
-    forced: Option<crate::data::doc::Format>,
+    forced: Option<String>,
 ) -> mpsc::Receiver<LoadEvent> {
     let (tx, rx) = mpsc::channel();
 
     thread::spawn(move || {
-        let result = open_target(&path, delimiter, forced);
+        let result = open_target(&path, delimiter, forced.as_deref());
         let _ = tx.send(LoadEvent::Complete(result));
     });
 

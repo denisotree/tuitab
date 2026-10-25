@@ -30,8 +30,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub delimiter: Option<char>,
 
-    /// Data format (e.g. csv, json, jsonl, yaml, toml). Required when reading from
-    /// stdin; for a file it overrides the extension, so `-t yaml deploy.conf` works.
+    /// Data format (csv, tsv, txt, parquet, arrow, xlsx, sqlite, duckdb, json, jsonl,
+    /// yaml, toml, md). Required when reading from stdin, which takes csv, tsv, txt, json,
+    /// jsonl, yaml and toml; for a file it overrides the extension and content detection,
+    /// so `-t yaml deploy.conf` and `-t csv export.dat` work.
     #[arg(short = 't', long = "type")]
     pub data_type: Option<String>,
 
@@ -111,13 +113,7 @@ pub fn run() -> Result<()> {
         // A path that is not there is no longer an error: `App::new_as` opens it blank
         // so a new file can be built from nothing.  It is also the one that refuses the
         // cases that cannot work.
-        let forced = cli
-            .data_type
-            .as_deref()
-            .and_then(data::doc::Format::from_name);
-        // `--type` only forces the structured formats; csv/tsv/txt keep falling through
-        // to extension-based loading, which is what they did before.
-        app::App::new_as(&path, cli.delimiter, forced)?
+        app::App::new_as(&path, cli.delimiter, cli.data_type.as_deref())?
     };
 
     #[cfg(unix)]
@@ -160,7 +156,12 @@ pub fn run() -> Result<()> {
         }
     }
 
-    let mut terminal = ratatui::init();
+    // Not `ratatui::init`, which panics: run from cron, a CI step or a shell escape there
+    // is no terminal to draw on, and that deserves a sentence rather than a crash report.
+    let mut terminal = ratatui::try_init().map_err(|e| {
+        let _ = ratatui::try_restore();
+        color_eyre::eyre::eyre!("tuitab needs a terminal to show its interface: {}", e)
+    })?;
     let result = app.run(&mut terminal);
     ratatui::restore();
 

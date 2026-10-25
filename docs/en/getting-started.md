@@ -11,7 +11,9 @@ cargo install tuitab
 ```
 
 This installs three identical commands — `tuitab` and the shorter aliases `ttab`
-and `ttb`. Other options (Homebrew, AUR, Debian, pre-built binaries) are in the
+and `ttb`. `cargo binstall tuitab` skips the build and fetches the pre-built
+`tuitab` from the release, without the aliases. Other options (Homebrew, AUR,
+Debian, pre-built binaries) are in the
 [main README](https://github.com/denisotree/tuitab/blob/master/README.md#installation).
 
 ## Open a file
@@ -36,8 +38,8 @@ tuitab app.db
 | Arrow / Feather | `.arrow`, `.feather`, `.ipc` | Read and written |
 | Excel | `.xlsx`, `.xls` | Multi-sheet workbooks open as a sheet list |
 | Markdown | `.md`, `.markdown` | A page is one row: frontmatter fields are columns, the text is `body`, the path is `file` |
-| SQLite | `.sqlite`, `.sqlite3`, `.db` | Tables open as a table list |
-| DuckDB | `.duckdb`, `.ddb`, `.db` | Which engine a `.db` is comes from the file's own header, not its name |
+| SQLite | `.sqlite`, `.sqlite3`, `.db`, or any name | Tables open as a table list; recognised by the file header, so `.aup3`, `.gnucash` or no extension at all work too |
+| DuckDB | `.duckdb`, `.ddb`, `.db`, or any name | Which engine a file is comes from its own header, not its name |
 
 For workbooks and databases, tuitab first shows an overview (sheets or tables);
 press `Enter` on a row to open it, `Esc` / `q` to go back. Tables can be edited
@@ -52,14 +54,17 @@ re-serialises the tree. Converting between them is just a different extension on
 
 ### Force a format
 
-`-t` is required for stdin, and for a file it overrides the extension:
+`-t` is required for stdin, which reads csv, tsv, txt, json, jsonl, yaml and toml.
+For a file it overrides both the extension and the contents:
 
 ```sh
 tuitab -t yaml deploy.conf     # a YAML file that is not called .yaml
+tuitab -t csv export.dat       # a CSV file under a name nothing recognises
 ```
 
 An unknown extension is decided by the contents, so `deploy.conf` usually opens
-correctly with no flag at all.
+correctly with no flag at all, and a SQLite or DuckDB file opens as a database
+whatever it is called — `-t sqlite` is not needed.
 
 ### Open a database that does not exist yet
 

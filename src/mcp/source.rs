@@ -214,8 +214,14 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // A database with no container is a listing, not data.  Refusing here rather than
     // in each tool covers `query`, `describe` and the right-hand side of `join` at once,
     // and stops a fall-through that handed back raw CREATE statements as rows while the
-    // instructions said there was no SQL anywhere.
-    if crate::data::io::db_write::is_db_name(&ext) {
+    // instructions said there was no SQL anywhere.  A declared format decides; without
+    // one, the file's own header — a database named `db` or `.aup3` is just as much a
+    // listing — and then its extension.
+    let is_db = match source.format {
+        Some(_) => crate::data::io::db_write::is_db_name(&ext),
+        None => crate::data::io::db_write::is_db_path(&source.path),
+    };
+    if is_db {
         let n = io::db_containers(&source.path)
             .map(|c| c.len())
             .unwrap_or(0);
@@ -270,7 +276,7 @@ pub fn load_db_table(
 }
 
 fn load_container(path: &Path, ext: &str, container: &str) -> Result<DataFrame, String> {
-    if crate::data::io::db_write::is_db_ext(path) {
+    if crate::data::io::db_write::is_db_path(path) {
         return load_db_table(path, container).map(|(df, _)| df);
     }
     match ext {
@@ -294,7 +300,7 @@ fn load_container(path: &Path, ext: &str, container: &str) -> Result<DataFrame, 
 /// Databases answer with their tables *and* views, each carrying what the catalogue
 /// knows; a spreadsheet has nothing beyond a name to say.
 pub fn containers(path: &Path, ext: &str) -> Option<Vec<io::ContainerInfo>> {
-    if crate::data::io::db_write::is_db_ext(path) {
+    if crate::data::io::db_write::is_db_path(path) {
         return io::db_containers(path).ok().filter(|c| !c.is_empty());
     }
     match ext {

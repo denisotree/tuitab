@@ -1434,16 +1434,26 @@ pub fn create_table(kind: DbKind, path: &Path, table: &str, df: &DataFrame) -> R
 /// `SQLite format 3\0` at the start, DuckDB writes `DUCK` eight bytes in.  Sixteen bytes
 /// settle it — no connection, no listing, and the same answer everywhere it is asked.
 /// `None` for a file that is neither, or too short to tell (a database yet to be made).
+///
+/// Only a regular file is opened.  This is asked of every path now, not only of those
+/// named like a database, and reading the head of a pipe (`tuitab <(cmd)`) would eat
+/// bytes the real reader needs — or, with no writer on the other end, never return.
 pub fn kind_of_file(path: &Path) -> Option<DbKind> {
     use std::io::Read;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
     let mut head = [0u8; 16];
     let mut file = std::fs::File::open(path).ok()?;
     if file.read_exact(&mut head).is_err() {
         return None;
     }
+    // `DUCK` alone is four letters a CSV can hold at offset 8 (`animals,DUCK,…`).  DuckDB
+    // follows it with a little-endian u64 version, a small number whose high bytes are
+    // zero — and text never carries NULs there.
     if head.starts_with(b"SQLite format 3\0") {
         Some(DbKind::Sqlite)
-    } else if &head[8..12] == b"DUCK" {
+    } else if &head[8..12] == b"DUCK" && head[14..16] == [0, 0] {
         Some(DbKind::DuckDb)
     } else {
         None
@@ -1470,13 +1480,19 @@ pub fn kind_for_path(path: &Path) -> DbKind {
 
 // ── Execution ─────────────────────────────────────────────────────────────────────
 
-/// File extensions that mean "a database", not "a file to export into".
-pub fn is_db_ext(path: &Path) -> bool {
-    is_db_name(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default(),
-    )
+/// Whether `path` is a database: what the file's own header says, and for a file that
+/// does not exist yet (or is too short to tell), what its extension claims.
+///
+/// The header comes first because applications store SQLite under names of their own —
+/// `.aup3`, `.mmb`, `.gnucash`, or no extension at all — and a save that trusted the
+/// name would export over the database instead of writing into it.
+pub fn is_db_path(path: &Path) -> bool {
+    kind_of_file(path).is_some()
+        || is_db_name(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default(),
+        )
 }
 
 /// The same question asked of a format name rather than a path, for the callers that

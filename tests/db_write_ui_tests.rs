@@ -1408,3 +1408,144 @@ fn a_hand_assigned_type_survives_a_save_and_does_not_replan() {
         app.status_message
     );
 }
+
+/// Issue #58: once a database without an extension opens, its table must save back
+/// into it.  The extension-only check sent this path to the CSV exporter, which would
+/// have truncated the database.
+#[test]
+fn a_table_from_a_database_without_an_extension_saves_back_into_it() {
+    let path = fixture("noext-db");
+    let mut app = open_table(&path);
+    edit(&mut app, "ANN");
+    save_key(&mut app);
+    key(&mut app, KeyCode::Enter); // accept the path
+    assert_eq!(
+        app.mode,
+        AppMode::SqlConfirm,
+        "must take the database path, not the CSV exporter"
+    );
+    key(&mut app, KeyCode::Enter); // run it
+    assert_eq!(names(&path), ["ANN", "bob", "cara"]);
+    assert_eq!(
+        tuitab::data::io::db_write::kind_of_file(&path),
+        Some(tuitab::data::io::db_write::DbKind::Sqlite)
+    );
+}
+
+/// `--type` describes the file the sheet was opened from.  Once the sheet becomes a
+/// table in a database it made, `R` must not read that database as CSV.
+#[test]
+fn a_table_created_from_a_typed_sheet_forgets_the_type() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("db-write-ui-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("typed.dat");
+    std::fs::write(&source, "a,b\n1,2\n").unwrap();
+    let dest = dir.join("typed-out.sqlite");
+    let _ = std::fs::remove_file(&dest);
+
+    let mut app = App::new_as(&source, None, Some("csv")).unwrap();
+    save_key(&mut app);
+    app.save.input =
+        tuitab::ui::text_input::TextInput::with_value(dest.to_string_lossy().into_owned());
+    key(&mut app, KeyCode::Enter); // accept the path
+    assert_eq!(app.mode, AppMode::TableNameInput, "{:?}", app.save.error);
+    key(&mut app, KeyCode::Enter); // accept the name
+    assert_eq!(app.mode, AppMode::Normal, "{:?}", app.save.error);
+    assert_eq!(
+        app.stack.active().source_path.as_deref(),
+        Some(dest.as_path())
+    );
+    assert_eq!(app.stack.active().forced_type, None);
+}
+
+/// A drill-down saved into a new database becomes that database's table, so `R` reads
+/// the table rather than refusing the view it used to be.
+#[test]
+fn reloading_a_table_created_by_saving_rereads_it() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("db-write-ui-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("created.csv");
+    std::fs::write(&source, "a,b\n1,2\n1,3\n").unwrap();
+    let dest = dir.join("created-out.sqlite");
+    let _ = std::fs::remove_file(&dest);
+
+    let mut app = App::new_as(&source, None, None).unwrap();
+    // Frequency over `a`, then Enter on its only value — see the drill-down test above.
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    app.stack.active_mut().table_state.select(Some(0));
+    key(&mut app, KeyCode::Enter);
+    assert!(
+        app.stack.active().title.starts_with("Filter:"),
+        "{}",
+        app.stack.active().title
+    );
+
+    save_key(&mut app);
+    app.save.input =
+        tuitab::ui::text_input::TextInput::with_value(dest.to_string_lossy().into_owned());
+    key(&mut app, KeyCode::Enter); // accept the path
+    assert_eq!(app.mode, AppMode::TableNameInput, "{:?}", app.save.error);
+    key(&mut app, KeyCode::Enter); // accept the name
+    assert_eq!(app.mode, AppMode::Normal, "{:?}", app.save.error);
+
+    app.handle_action(tuitab::types::Action::ReloadFile);
+    assert!(
+        app.status_message.starts_with("Reloaded"),
+        "{}",
+        app.status_message
+    );
+    assert_eq!(column_names(&app), ["a", "b"]);
+    assert_eq!(app.stack.active().dataframe.visible_row_count(), 2);
+}
+
+/// Search results saved into a new database are that database's table too — the hits
+/// they were stop being what `R` and Enter go by.
+#[test]
+fn reloading_search_results_saved_as_a_table_rereads_the_table() {
+    use tuitab::types::Action;
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("db-write-ui-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("hits.json");
+    std::fs::write(
+        &source,
+        r#"[{"id":1,"meta":{"owner":"alice"}},{"id":2,"meta":{"owner":"bob"}}]"#,
+    )
+    .unwrap();
+    let dest = dir.join("hits-out.sqlite");
+    let _ = std::fs::remove_file(&dest);
+
+    let mut app = App::new_as(&source, None, None).unwrap();
+    app.handle_action(Action::StartDocSearch);
+    for c in "alice".chars() {
+        app.handle_action(Action::SearchInput(c));
+    }
+    app.handle_action(Action::ApplyDocSearch);
+    assert!(
+        app.stack.active().doc_hits.is_some(),
+        "{}",
+        app.status_message
+    );
+
+    save_key(&mut app);
+    app.save.input =
+        tuitab::ui::text_input::TextInput::with_value(dest.to_string_lossy().into_owned());
+    key(&mut app, KeyCode::Enter); // accept the path
+    assert_eq!(app.mode, AppMode::TableNameInput, "{:?}", app.save.error);
+    key(&mut app, KeyCode::Enter); // accept the name
+    assert_eq!(app.mode, AppMode::Normal, "{:?}", app.save.error);
+
+    app.handle_action(Action::ReloadFile);
+    assert!(
+        app.status_message.starts_with("Reloaded"),
+        "{}",
+        app.status_message
+    );
+    assert!(app.stack.active().doc_hits.is_none());
+}

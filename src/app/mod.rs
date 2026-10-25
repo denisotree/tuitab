@@ -243,11 +243,7 @@ impl App {
     /// agree on its columns and the file that does not is named, while markdown pages
     /// are records and are unioned.  Only `tuitab 'data/*.csv'` arrives here — unquoted,
     /// the shell expands first and `from_file_list` shows the listing instead.
-    fn from_pattern(
-        pattern: &Path,
-        delimiter: Option<char>,
-        forced: Option<crate::data::doc::Format>,
-    ) -> Result<Self> {
+    fn from_pattern(pattern: &Path, delimiter: Option<char>, forced: Option<&str>) -> Result<Self> {
         let text = pattern.to_string_lossy().into_owned();
         let delim_byte = delimiter.map(|c| c as u8);
         let ext = pattern
@@ -255,8 +251,10 @@ impl App {
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_lowercase();
-        // `--type` names a structured format, and those are tables, not bags of records.
-        let records = forced.is_none() && matches!(ext.as_str(), "md" | "markdown");
+        // A pattern of markdown pages — by extension or by `--type md` — is records and is
+        // unioned, as in the MCP server; any other format is a table.
+        let kind = forced.map(str::to_lowercase).unwrap_or_else(|| ext.clone());
+        let records = matches!(kind.as_str(), "md" | "markdown");
 
         // ponytail: a pattern loads on the main thread, so no spinner. The async branch
         // in `new_as` takes a single path and returns a single `Opened`; teaching it to
@@ -300,7 +298,7 @@ impl App {
     pub fn new_as(
         path: &Path,
         delimiter: Option<char>,
-        forced_format: Option<crate::data::doc::Format>,
+        forced_format: Option<&str>,
     ) -> Result<Self> {
         if !path.exists() {
             // Asked only here: `is_pattern` is a test for `* ? [ ]`, and `report[1].csv`
@@ -344,12 +342,16 @@ impl App {
             // opens it exactly as the branch below would, and `poll_async_load` copies
             // the result onto the sheet whole — the tree and the container path
             // included, which is what it used to drop (#43).
-            let rx =
-                async_loader::load_in_background(path.to_path_buf(), delim_byte, forced_format);
+            let rx = async_loader::load_in_background(
+                path.to_path_buf(),
+                delim_byte,
+                forced_format.map(str::to_string),
+            );
             let placeholder = DataFrame::empty();
             let mut root_sheet = Sheet::new(filename.clone(), placeholder);
             root_sheet.source_path = Some(path.to_path_buf());
             root_sheet.source_delimiter = delim_byte;
+            root_sheet.forced_type = forced_format.map(str::to_string);
             Ok(Self::init(
                 SheetStack::new(root_sheet),
                 AppMode::Loading,
@@ -371,6 +373,7 @@ impl App {
             root_sheet.xlsx_db_path = opened.xlsx_db_path;
             root_sheet.source_path = Some(path.to_path_buf());
             root_sheet.source_delimiter = delim_byte;
+            root_sheet.forced_type = forced_format.map(str::to_string);
             let status_message = if root_sheet.xlsx_db_path.is_some() {
                 format!("Loaded '{}' — {} sheets", filename, row_count)
             } else if root_sheet.sqlite_db_path.is_some() || root_sheet.duckdb_db_path.is_some() {
@@ -497,6 +500,9 @@ impl App {
                         || opened.duckdb_db_path.is_some()
                         || opened.xlsx_db_path.is_some();
                     let s = self.stack.active_mut();
+                    // A reload's old frames address rows the new data does not have.
+                    s.undo_stack.clear();
+                    s.redo_stack.clear();
                     s.dataframe = opened.df;
                     s.doc = opened.doc;
                     // The container path is what makes the listing openable — a sheet
@@ -541,9 +547,13 @@ impl App {
     }
 
     fn reload_file(&mut self) {
-        let (source_path, source_delimiter) = {
+        let (source_path, source_delimiter, forced_type) = {
             let s = self.stack.active();
-            (s.source_path.clone(), s.source_delimiter)
+            (
+                s.source_path.clone(),
+                s.source_delimiter,
+                s.forced_type.clone(),
+            )
         };
 
         let Some(path) = source_path else {
@@ -564,6 +574,34 @@ impl App {
                 "Cannot reload inside a node — go back to the top sheet first".to_string();
             return;
         }
+
+        // A drill-down or a search result carries the file it came from so it can be
+        // saved, not because it is that file.
+        if self.stack.active().derived_view || self.stack.active().doc_hits.is_some() {
+            self.status_message =
+                "Cannot reload this view — go back to the sheet it came from first".to_string();
+            return;
+        }
+
+        // A table or view opened from a database keeps the whole file in `source_path` for
+        // the save dialog; what it is, is the one object.  Read the way Enter read it —
+        // in place, whatever the file weighs.
+        let s = self.stack.active();
+        let db_object = s.table_source.is_some()
+            || (s.container.is_some()
+                && (s.sqlite_source_path.is_some() || s.duckdb_source_path.is_some()));
+        if db_object {
+            self.status_message = match self.reload_db_sheet() {
+                Ok(()) => format!(
+                    "Reloaded — {} rows",
+                    self.stack.active().dataframe.visible_row_count()
+                ),
+                Err(e) => format!("Reload failed: {}", e),
+            };
+            return;
+        }
+        // Likewise a workbook sheet: re-read that sheet, not the workbook's first.
+        let workbook_sheet = s.container.clone().filter(|_| s.xlsx_source_path.is_some());
 
         let meta = std::fs::metadata(&path);
         let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
@@ -596,18 +634,18 @@ impl App {
                 }
                 Err(e) => self.status_message = format!("Reload failed: {}", e),
             }
-        } else if file_size > 10 * 1024 * 1024 {
-            {
-                let s = self.stack.active_mut();
-                s.undo_stack.clear();
-                s.redo_stack.clear();
-                s.dataframe = DataFrame::empty();
-                s.source_path = Some(path.clone());
-                s.source_delimiter = source_delimiter;
-            }
+        } else if workbook_sheet.is_none() && file_size > 10 * 1024 * 1024 {
+            // The sheet stays as it is until the loader answers; `poll_async_load` swaps
+            // the rows in, and clears the undo history, only on success.
             // Reload re-reads what the sheet already is, and a sheet built from a
             // forced format keeps its tree — reopening by extension would drop it.
-            let forced = self.stack.active().doc.as_ref().map(|d| d.format());
+            let forced = forced_type.or_else(|| {
+                self.stack
+                    .active()
+                    .doc
+                    .as_ref()
+                    .map(|d| d.format().name().to_string())
+            });
             self.load_receiver = Some(async_loader::load_in_background(
                 path,
                 source_delimiter,
@@ -616,8 +654,29 @@ impl App {
             self.mode = AppMode::Loading;
             self.status_message = "Reloading...".to_string();
         } else {
-            match crate::data::io::load_file_with_doc(&path, source_delimiter) {
-                Ok((df, doc)) => {
+            // Tables and views returned above, so what is left is a workbook sheet, re-read
+            // by name, or a file, reopened the way it was opened: a workbook or database
+            // as its listing, `--type` as given.
+            let loaded = match &workbook_sheet {
+                Some(name) => crate::data::io::load_excel_sheet_by_name(&path, name).map(|df| {
+                    crate::data::io::Opened {
+                        df,
+                        ..Default::default()
+                    }
+                }),
+                None => {
+                    crate::data::io::open_target(&path, source_delimiter, forced_type.as_deref())
+                }
+            };
+            match loaded {
+                Ok(opened) => {
+                    let crate::data::io::Opened {
+                        df,
+                        doc,
+                        sqlite_db_path,
+                        duckdb_db_path,
+                        xlsx_db_path,
+                    } = opened;
                     let row_count = df.visible_row_count();
                     let s = self.stack.active_mut();
                     s.undo_stack.clear();
@@ -627,6 +686,18 @@ impl App {
                     // row paths pointing into a document that no longer matches the
                     // table, and a later save would write the pre-reload contents.
                     s.doc = doc;
+                    // As the background loader does: the container path is what makes a
+                    // listing openable with Enter.
+                    let is_container = sqlite_db_path.is_some()
+                        || duckdb_db_path.is_some()
+                        || xlsx_db_path.is_some();
+                    s.sqlite_db_path = sqlite_db_path;
+                    s.duckdb_db_path = duckdb_db_path;
+                    s.xlsx_db_path = xlsx_db_path;
+                    // A listing is not a file among siblings, so it offers none.
+                    if is_container {
+                        s.dir_source_path = None;
+                    }
                     s.dataframe.calc_widths(40, 1000);
                     s.reapply_sort();
                     let vis = s.dataframe.visible_row_count();
@@ -1869,14 +1940,23 @@ impl App {
                 }
             // An explicit "open as" overrides the listing's own idea of what it can
             // handle — saying "this is YAML" is the whole point of the escape hatch.
-            } else if supported || forced.is_some() {
-                match crate::data::io::open_target(&target_path, None, forced) {
+            // So does a database header: the listing judges by extension, and a SQLite
+            // file named `db` or `.aup3` is still one.
+            } else if supported
+                || forced.is_some()
+                || crate::data::io::db_write::is_db_path(&target_path)
+            {
+                match crate::data::io::open_target(&target_path, None, forced.map(|f| f.name())) {
                     Ok(opened) => {
                         let mut new_sheet = crate::sheet::Sheet::new(
                             target_path.to_string_lossy().into_owned(),
                             opened.df,
                         );
                         new_sheet.doc = opened.doc;
+                        // A file is a file wherever it was opened from: `R` re-reads it
+                        // as it was opened, and `J` knows which sibling it is.
+                        new_sheet.source_path = Some(target_path.clone());
+                        new_sheet.forced_type = forced.map(|f| f.name().to_string());
                         new_sheet.sqlite_db_path = opened.sqlite_db_path;
                         new_sheet.duckdb_db_path = opened.duckdb_db_path;
                         new_sheet.xlsx_db_path = opened.xlsx_db_path;
@@ -1937,6 +2017,7 @@ impl App {
                 // extension and fails every time.
                 new_sheet.source_path = Some(db_path.clone());
                 new_sheet.table_source = source;
+                new_sheet.container = Some(table_name.clone());
                 self.stack.push(new_sheet);
                 self.status_message = format!("Opened table '{}' ({} rows)", table_name, row_count);
             }
@@ -1954,16 +2035,7 @@ impl App {
         // SQLite: current sheet is a table (sqlite_source_path) or the overview (sqlite_db_path)
         let sqlite_path = s.sqlite_source_path.as_ref().or(s.sqlite_db_path.as_ref());
         if let Some(path) = sqlite_path {
-            let current_table = if s.sqlite_source_path.is_some() {
-                s.title
-                    .rsplit(" :: ")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            } else {
-                String::new()
-            };
+            let current_table = s.container.clone().unwrap_or_default();
             if let Ok(names) = crate::data::io::sqlite_table_names(path) {
                 for name in names {
                     if name != current_table {
@@ -1979,16 +2051,7 @@ impl App {
         // DuckDB: same pattern
         let duckdb_path = s.duckdb_source_path.as_ref().or(s.duckdb_db_path.as_ref());
         if let Some(path) = duckdb_path {
-            let current_table = if s.duckdb_source_path.is_some() {
-                s.title
-                    .rsplit(" :: ")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            } else {
-                String::new()
-            };
+            let current_table = s.container.clone().unwrap_or_default();
             if let Ok(names) = crate::data::io::duckdb_table_names(path) {
                 for name in names {
                     if name != current_table {
@@ -2004,16 +2067,7 @@ impl App {
         // xlsx: current sheet is a sheet (xlsx_source_path) or the overview (xlsx_db_path)
         let xlsx_path = s.xlsx_source_path.as_ref().or(s.xlsx_db_path.as_ref());
         if let Some(path) = xlsx_path {
-            let current_sheet = if s.xlsx_source_path.is_some() {
-                s.title
-                    .rsplit(" :: ")
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string()
-            } else {
-                String::new()
-            };
+            let current_sheet = s.container.clone().unwrap_or_default();
             if let Ok(names) = crate::data::io::excel_sheet_names(path) {
                 for name in names {
                     if name != current_sheet {
@@ -2232,6 +2286,7 @@ impl App {
                 // See open_sqlite_table_row: the save dialog needs a real path.
                 new_sheet.source_path = Some(db_path.clone());
                 new_sheet.table_source = source;
+                new_sheet.container = Some(table_name.clone());
                 self.stack.push(new_sheet);
                 self.status_message = format!("Opened table '{}' ({} rows)", table_name, row_count);
             }
@@ -2273,6 +2328,7 @@ impl App {
                     new_df,
                 );
                 new_sheet.xlsx_source_path = Some(xlsx_path.clone());
+                new_sheet.container = Some(sheet_name.clone());
                 // See open_sqlite_table_row: the save dialog needs a real path.
                 new_sheet.source_path = Some(xlsx_path.clone());
                 self.stack.push(new_sheet);
@@ -3190,7 +3246,7 @@ mod async_open_tests {
         }
         std::fs::write(&path, out).unwrap();
 
-        let mut app = App::new_as(&path, None, Some(crate::data::doc::Format::Jsonl)).unwrap();
+        let mut app = App::new_as(&path, None, Some("jsonl")).unwrap();
         assert_eq!(app.mode, AppMode::Loading);
         settle(&mut app);
 
@@ -3207,5 +3263,138 @@ mod async_open_tests {
             vec!["a".to_string(), "b".to_string()],
             "--type was dropped and the file was read as plain text"
         );
+    }
+
+    /// Issue #58: an Audacity project is a multi-gigabyte SQLite file with no `.db` in its
+    /// name, so it is the background loader that has to recognise it.
+    #[test]
+    fn a_large_database_without_an_extension_loads_in_the_background_as_a_listing() {
+        let path = dir().join("big-noext");
+        let _ = std::fs::remove_file(&path);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE b (x BLOB); INSERT INTO b VALUES (zeroblob(11 * 1024 * 1024));",
+            )
+            .unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > 10 * 1024 * 1024);
+
+        let mut app = App::new_as(&path, None, None).unwrap();
+        assert_eq!(app.mode, AppMode::Loading);
+        settle(&mut app);
+        assert_eq!(
+            app.stack.active().sqlite_db_path.as_deref(),
+            Some(path.as_path())
+        );
+    }
+
+    /// A table is re-read from its database whatever the file weighs — the size check
+    /// that sends a big file to the background loader would bring back the listing.
+    #[test]
+    fn reloading_a_table_of_a_large_database_stays_the_table() {
+        let path = dir().join("big-table.sqlite");
+        let _ = std::fs::remove_file(&path);
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE b (x BLOB); INSERT INTO b VALUES (zeroblob(11 * 1024 * 1024));",
+            )
+            .unwrap();
+
+        let mut app = App::new_as(&path, None, None).unwrap();
+        settle(&mut app);
+        app.open_sqlite_table_row();
+        app.reload_file();
+        assert_eq!(
+            app.mode,
+            AppMode::Normal,
+            "a table is re-read in place, not in the background"
+        );
+        assert!(
+            app.status_message.starts_with("Reloaded"),
+            "{}",
+            app.status_message
+        );
+        let cols: Vec<&str> = app
+            .stack
+            .active()
+            .dataframe
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(cols, ["x"]);
+    }
+
+    /// A reload that fails must leave the sheet as it was — the big-file path used to
+    /// empty it, and the undo history with it, before the loader had said anything.
+    #[test]
+    fn a_failed_background_reload_keeps_the_sheet() {
+        let path = dir().join("reload-fail.jsonl");
+        let mut out = String::new();
+        while out.len() < 11 * 1024 * 1024 {
+            out.push_str("{\"a\": 1, \"b\": \"two\"}\n");
+        }
+        std::fs::write(&path, &out).unwrap();
+        let mut app = App::new_as(&path, None, None).unwrap();
+        settle(&mut app);
+        let rows = app.stack.active().dataframe.visible_row_count();
+        app.stack.active_mut().push_undo();
+
+        std::fs::write(&path, "not json {{{\n".repeat(900_000)).unwrap();
+        app.reload_file();
+        settle(&mut app);
+        assert!(
+            app.status_message.starts_with("Load error"),
+            "{}",
+            app.status_message
+        );
+        assert_eq!(app.stack.active().dataframe.visible_row_count(), rows);
+        assert_eq!(
+            app.stack.active().undo_stack.len(),
+            1,
+            "the undo history was dropped"
+        );
+    }
+
+    /// The big-file reload carries `--type` too.
+    #[test]
+    fn a_background_reload_keeps_an_explicit_type() {
+        let path = dir().join("big-reload.dat");
+        let mut out = String::new();
+        while out.len() < 11 * 1024 * 1024 {
+            out.push_str("{\"a\": 1, \"b\": \"two\"}\n");
+        }
+        std::fs::write(&path, out).unwrap();
+        let mut app = App::new_as(&path, None, Some("jsonl")).unwrap();
+        settle(&mut app);
+        app.reload_file();
+        settle(&mut app);
+        let cols: Vec<&str> = app
+            .stack
+            .active()
+            .dataframe
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(cols, ["a", "b"], "{}", app.status_message);
+    }
+
+    /// `R` re-reads what the sheet is, and a sheet opened with `--type csv` is CSV —
+    /// reopening `.dat` by its extension finds no reader at all.
+    #[test]
+    fn reloading_keeps_an_explicit_tabular_type() {
+        let path = dir().join("reload.dat");
+        std::fs::write(&path, "a,b\n1,2\n").unwrap();
+        let mut app = App::new_as(&path, None, Some("csv")).unwrap();
+        std::fs::write(&path, "a,b\n1,2\n3,4\n").unwrap();
+        app.reload_file();
+        assert!(
+            app.status_message.starts_with("Reloaded"),
+            "{}",
+            app.status_message
+        );
+        assert_eq!(app.stack.active().dataframe.visible_row_count(), 2);
     }
 }

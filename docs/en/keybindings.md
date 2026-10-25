@@ -134,7 +134,7 @@ marked with `zs`.
 | Key | Action |
 |-----|--------|
 | `Ctrl+S` | Save / export / convert (CSV, TSV, Parquet, Arrow/Feather, JSON, JSONL, YAML, TOML, Excel, SQLite, or DuckDB) |
-| `R` | Reload the file from disk |
+| `R` | Reload what the sheet shows from disk — the file, table or workbook sheet; on a drill-down or search results, go back to the sheet they came from first |
 | `U` / `Shift+U` | Undo (up to 50 steps) |
 | `Ctrl+R` | Redo |
 | `?` | Toggle the help overlay |
@@ -173,7 +173,8 @@ save path, …):
 These formats open as a table over the real document, not as a flattened copy. The
 format comes from the extension, from `--type`, or — for an unrecognised extension —
 from the contents: `deploy.conf` holding TOML opens as TOML. A file with no extension at
-all still defaults to CSV, and is only re-read as JSON when it starts with `[` or `{`.
+all still defaults to CSV — unless its header says it is a SQLite or DuckDB
+database — and is only re-read as JSON when it starts with `[` or `{`.
 
 | Key | Action |
 |-----|--------|

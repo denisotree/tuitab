@@ -108,14 +108,16 @@ impl Default for Opened {
 /// is where the two used to disagree.
 ///
 /// `forced` wins over all of it: `--type yaml notes.db` means parse it as YAML, not open
-/// a database.
-pub fn open_target(
-    path: &Path,
-    delimiter: Option<u8>,
-    forced: Option<crate::data::doc::Format>,
-) -> Result<Opened> {
-    if forced.is_some() {
-        let (df, doc) = load_file_as(path, delimiter, forced)?;
+/// a database.  It is the format's name as the user gave it, any case — a document
+/// format, a database, or any tabular name `load_tabular` knows, the same set the MCP
+/// server's `format` takes.
+pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> Result<Opened> {
+    let forced = forced.map(str::to_lowercase);
+    if let Some(fmt) = forced
+        .as_deref()
+        .and_then(crate::data::doc::Format::from_name)
+    {
+        let (df, doc) = load_file_as(path, delimiter, Some(fmt))?;
         return Ok(Opened {
             df,
             doc,
@@ -123,7 +125,11 @@ pub fn open_target(
         });
     }
 
-    if db_write::is_db_ext(path) {
+    let is_db = match forced.as_deref() {
+        Some(name) => db_write::is_db_name(name),
+        None => db_write::is_db_path(path),
+    };
+    if is_db {
         // Not the extension: `.db` names no engine.  `kind_for_path` reads the header,
         // the same answer the writer uses.
         return Ok(match db_write::kind_for_path(path) {
@@ -140,11 +146,12 @@ pub fn open_target(
         });
     }
 
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = forced.clone().unwrap_or_else(|| {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+    });
     // One sheet is just a table; the overview would be a list of length one standing
     // between the user and their data.
     if matches!(ext.as_str(), "xlsx" | "xls" | "xlsm" | "xlsb") {
@@ -159,7 +166,15 @@ pub fn open_target(
         }
     }
 
-    let (df, doc) = load_file_as(path, delimiter, None)?;
+    // A named format is read as exactly that, with no sniffing: the user has said what
+    // the file is, which is the whole point of `--type csv export.dat`.
+    let (df, doc) = if forced.is_some() {
+        let df = load_tabular(path, delimiter, &ext)
+            .map_err(|e| eyre!("Could not read {} as {}: {}", path.display(), ext, e))?;
+        (df, None)
+    } else {
+        load_file_as(path, delimiter, None)?
+    };
     Ok(Opened {
         df,
         doc,
@@ -276,6 +291,13 @@ pub fn load_file_as(
     delimiter: Option<u8>,
     forced: Option<crate::data::doc::Format>,
 ) -> Result<(DataFrame, Option<doc_io::DocState>)> {
+    // The header before the name, and before the sniffer below: a database stored as
+    // `db` or `.aup3` would otherwise be read in full by `read_to_string`, then parsed
+    // as CSV.
+    if forced.is_none() && db_write::kind_of_file(path).is_some() {
+        return load_tabular(path, delimiter, "db").map(|df| (df, None));
+    }
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -361,6 +383,13 @@ pub fn save_file_as(
     shape: doc_io::Shape,
     sheet_name: &str,
 ) -> Result<()> {
+    // First, before any writer the name would pick: an existing database gets a table
+    // added, never a CSV or JSON written over it.  The engine comes from the file when
+    // there is one — the new table has to speak that database's dialect.
+    if db_write::is_db_path(path) {
+        return db_write::create_table(db_write::kind_for_path(path), path, sheet_name, df);
+    }
+
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -380,11 +409,6 @@ pub fn save_file_as(
         "tsv" => save_csv(df, path, b'\t'),
         "parquet" => parquet::save_parquet(df, path),
         "arrow" | "feather" | "ipc" => arrow::save_arrow(df, path),
-        // The engine comes from the file when there is one — adding a table to an
-        // existing database has to speak that database's dialect, whatever it is called.
-        "db" | "sqlite" | "sqlite3" | "duckdb" | "ddb" => {
-            db_write::create_table(db_write::kind_for_path(path), path, sheet_name, df)
-        }
         "xlsx" | "xls" => excel::save_xlsx(df, path),
         _ => Err(eyre!("Unsupported save format: .{}", ext)),
     }
@@ -454,7 +478,13 @@ pub fn load_from_stdin_with_doc(
             .map_parse_options(|o| o.with_separator(b'\t'))
             .try_into_reader_with_file_path(Some(temp_path))?
             .finish()?,
-        _ => return Err(eyre!("Unsupported stdin data type: {}", data_type)),
+        _ => {
+            return Err(eyre!(
+                "Unsupported stdin data type: {}. stdin takes csv, tsv, txt, json, jsonl, \
+                 yaml or toml.",
+                data_type
+            ))
+        }
     };
 
     drop(temp_file);

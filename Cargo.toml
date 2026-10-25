@@ -20,8 +20,12 @@ exclude = [
 ]
 
 [features]
-default = ["bundled-duckdb"]
+default = ["bundled-duckdb", "aliases"]
 bundled-duckdb = ["duckdb/bundled"]
+# Builds `ttab` and `ttb`.  On by default, so `cargo install` is unchanged; it exists so
+# cargo-binstall, which wants every non-optional binary inside the release archive,
+# accepts an archive that carries `tuitab` alone.
+aliases = []
 
 [[bin]]
 name = "tuitab"
@@ -30,10 +34,12 @@ path = "src/main.rs"
 [[bin]]
 name = "ttab"
 path = "src/bin/ttab.rs"
+required-features = ["aliases"]
 
 [[bin]]
 name = "ttb"
 path = "src/bin/ttb.rs"
+required-features = ["aliases"]
 
 [dependencies]
 ratatui = "0.30"

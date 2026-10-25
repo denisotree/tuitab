@@ -111,6 +111,9 @@ Press `Ctrl+S` and enter a path. The format follows the extension:
 | `.db` / `.sqlite` / `.sqlite3` | SQLite |
 | `.duckdb` / `.ddb` | DuckDB |
 
+A file that already is a SQLite or DuckDB database stays one whatever it is called:
+saving into it writes a table, not a new file.
+
 Converting between structured formats is just a different extension: open
 `config.toml`, save as `config.yaml`. Saving a plain table (CSV, Parquet, a
 pivot) to JSON/YAML/TOML asks which shape to produce and remembers the answer for

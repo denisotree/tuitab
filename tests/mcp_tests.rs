@@ -1230,12 +1230,14 @@ fn a_numeric_filter_over_a_database_compares_numerically() {
 fn output_table_names_the_table_and_can_sit_beside_others() {
     let mut server = writable_server();
     let db = db_fixture("output.sqlite");
-    call(
+    let res = call(
         &mut server,
         "tuitab_query",
         json!({"source": "test_data/sample.csv", "ops": [],
                "output": {"path": db.to_string_lossy(), "table": "imported"}}),
     );
+    assert_eq!(res["table"], "imported");
+    assert!(res.get("note").is_none(), "{}", res);
 
     let listing = call(
         &mut server,
@@ -2342,4 +2344,134 @@ fn chained_joins_on_tables_with_a_shared_column_can_be_aggregated() {
         ]}),
     );
     assert_eq!(cell(&result, 0, "count"), json!(2));
+}
+
+/// A SQLite file under some other application's extension, with a `users` table.
+fn sqlite_file(name: &str) -> PathBuf {
+    let path = tmp(name);
+    let _ = std::fs::remove_file(&path);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE users (id INTEGER, name TEXT);
+             INSERT INTO users VALUES (1, 'ann'), (2, 'bob');",
+        )
+        .unwrap();
+    path
+}
+
+fn sqlite_tables(path: &std::path::Path) -> Vec<String> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .unwrap();
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+    rows.map(|r| r.unwrap()).collect()
+}
+
+/// Issue #58: the database branch of an output write fell through to the writer the
+/// extension picks, so a database called `.csv` would have been replaced by a CSV.
+#[test]
+fn query_output_into_an_existing_database_named_csv_adds_a_table() {
+    let mut server = Server::new();
+    let db = sqlite_file("disguised.csv");
+    let res = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": "test_data/sample.csv", "ops": [],
+               "output": {"path": db.to_string_lossy(), "table": "added"}}),
+    );
+    // The caller named a .csv; it has to hear that the rows became a table instead.
+    assert_eq!(res["table"], "added");
+    assert!(
+        res["note"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("added to it as table 'added'"),
+        "{}",
+        res
+    );
+    assert_eq!(
+        tuitab::data::io::db_write::kind_of_file(&db),
+        Some(tuitab::data::io::db_write::DbKind::Sqlite),
+        "the database was overwritten"
+    );
+    assert_eq!(sqlite_tables(&db), vec!["added", "users"]);
+}
+
+#[test]
+fn inspect_lists_the_tables_of_a_database_without_an_extension() {
+    let mut server = Server::new();
+    let db = sqlite_file("noext-db");
+    let listing = call(
+        &mut server,
+        "tuitab_inspect",
+        json!({"source": {"path": db.to_string_lossy()}}),
+    );
+    let tables: Vec<&str> = listing["containers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(tables, vec!["users"]);
+}
+
+#[test]
+fn a_database_under_a_foreign_extension_reads_by_container() {
+    let mut server = Server::new();
+    let db = sqlite_file("project.aup3");
+    let table = call(
+        &mut server,
+        "tuitab_inspect",
+        json!({"source": {"path": db.to_string_lossy(), "container": "users"}}),
+    );
+    assert_eq!(table["row_count"], json!(2));
+}
+
+#[test]
+fn a_declared_sqlite_format_and_a_container_agree() {
+    // Used to answer "'.sqlite' files hold a single table — drop 'container'", while the
+    // same call without a container asked for one.
+    let mut server = Server::new();
+    let db = sqlite_file("declared.aup3");
+    let table = call(
+        &mut server,
+        "tuitab_inspect",
+        json!({"source": {"path": db.to_string_lossy(), "format": "sqlite",
+                          "container": "users"}}),
+    );
+    assert_eq!(table["row_count"], json!(2));
+}
+
+#[test]
+fn querying_a_database_without_an_extension_and_no_container_asks_for_one() {
+    let mut server = Server::new();
+    let db = sqlite_file("noext-query");
+    let message = call_expecting_failure(
+        &mut server,
+        "tuitab_query",
+        json!({"source": db.to_string_lossy(), "ops": []}),
+    );
+    assert!(message.contains("pass 'container'"), "{}", message);
+}
+
+/// A declared `format` is what the file is read as — `.db` on a CSV export included.
+#[test]
+fn a_declared_format_wins_over_a_db_extension() {
+    let mut server = Server::new();
+    let path = tmp("export.db");
+    std::fs::write(&path, "a,b\n1,2\n").unwrap();
+    let result = call(
+        &mut server,
+        "tuitab_inspect",
+        json!({"source": {"path": path.to_string_lossy(), "format": "csv"}}),
+    );
+    let cols: Vec<&str> = result["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(cols, vec!["a", "b"]);
 }

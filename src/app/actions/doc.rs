@@ -267,6 +267,8 @@ impl App {
                 let mut sheet = crate::sheet::Sheet::new(title, df);
                 sheet.source_path = source;
                 sheet.doc = Some(state);
+                // Even anchored at the root it shares the tree with the sheets below.
+                sheet.derived_view = true;
                 place_cursor(&mut sheet, cursor_key.as_ref());
                 self.stack.push(sheet);
                 self.status_message.clear();

@@ -571,3 +571,42 @@ fn diff_refuses_when_only_the_right_table_has_the_right_hand_name() {
     assert!(err.starts_with("cannot diff:"), "{err}");
     assert!(err.contains("\"v_right\""), "{err}");
 }
+
+/// A file opened from the directory browser knows which file it is, so `J` offers its
+/// siblings and not the file itself.
+#[test]
+fn join_from_a_browser_file_does_not_offer_the_file_itself() {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("join-tests")
+        .join("browse-siblings");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(base.join("a.csv"), "k\n1\n").unwrap();
+    std::fs::write(base.join("b.csv"), "k\n2\n").unwrap();
+
+    let mut app = tuitab::app::App::new_as(&base, None, None).unwrap();
+    let listing = &app.stack.active().dataframe;
+    let row = (0..listing.visible_row_count())
+        .find(|&r| {
+            tuitab::data::dataframe::DataFrame::anyvalue_to_string_fmt(&listing.get_val(r, 0))
+                == "a.csv"
+        })
+        .unwrap();
+    app.stack.active_mut().table_state.select(Some(row));
+    app.open_directory_row();
+    app.handle_action(tuitab::types::Action::OpenJoin);
+
+    let offered: Vec<String> = app
+        .join
+        .context_items
+        .iter()
+        .filter_map(|item| match item {
+            tuitab::types::JoinContextItem::DirectoryFile { file_path } => file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(offered, ["b.csv"]);
+}

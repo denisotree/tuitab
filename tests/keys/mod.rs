@@ -29,6 +29,7 @@ pub fn key(app: &mut App, code: KeyCode) {
 ///
 /// Written as the user would describe it: `press(&mut app, "z[")`. Each `char`
 /// is a separate key press, so chords work the way they do in the terminal.
+#[allow(dead_code)] // not every test file in this suite types characters
 pub fn press(app: &mut App, keys: &str) {
     for c in keys.chars() {
         key(app, KeyCode::Char(c));

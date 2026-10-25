@@ -35,7 +35,8 @@ cat data.csv | tuitab -t csv      # read from a pipe
 
 - **Tabular and structured formats** — CSV/TSV (auto-delimiter), JSON, JSONL/NDJSON,
   YAML, TOML, Parquet, Arrow/Feather, Excel (xlsx/xls), SQLite, DuckDB, and Markdown
-  with frontmatter. Browse a whole directory, or pipe data in over stdin.
+  with frontmatter. Databases are recognised by their header, whatever the file is
+  called. Browse a whole directory, or pipe data in over stdin.
 - **Nested data, edited in place** — JSON/YAML/TOML open as a table over the real
   document: `Enter` dives into a nested object or list, `(` expands a nested column
   into one column per key, `m` switches between record and key/value layouts, and edits
@@ -151,6 +152,14 @@ cargo install tuitab
 
 Installs three commands: `tuitab`, plus the shorter aliases `ttab` and `ttb`.
 
+To skip the build, [cargo-binstall](https://github.com/cargo-bins/cargo-binstall)
+fetches the pre-built binary from the release instead — `tuitab` only, without the
+aliases:
+
+```sh
+cargo binstall tuitab
+```
+
 ### Homebrew (macOS / Linux)
 
 ```sh
@@ -201,12 +210,13 @@ To skip that and link a **system** DuckDB instead:
 ```sh
 brew install duckdb                # macOS
 sudo apt install libduckdb-dev     # Debian / Ubuntu
-cargo build --release --no-default-features
+cargo build --release --no-default-features --features aliases
 ```
 
 | Feature | Default | Description |
 |---------|:-------:|-------------|
 | `bundled-duckdb` | ✓ | Compile DuckDB from source; no system `libduckdb` needed |
+| `aliases` | ✓ | Build the `ttab` and `ttb` aliases |
 
 </details>
 
@@ -242,9 +252,12 @@ Arguments:
 
 Options:
   -d, --delimiter <CHAR>   Column delimiter (auto-detected if omitted)
-  -t, --type <FORMAT>      Data format (csv, tsv, txt, json, jsonl, yaml, toml).
-                           Required for stdin; for a file it overrides the
-                           extension, so `-t yaml deploy.conf` works
+  -t, --type <FORMAT>      Data format (csv, tsv, txt, parquet, arrow, xlsx,
+                           sqlite, duckdb, json, jsonl, yaml, toml, md).
+                           Required for stdin, which takes csv, tsv, txt,
+                           json, jsonl, yaml and toml; for a file it overrides
+                           the extension and content detection, so
+                           `-t yaml deploy.conf` and `-t csv export.dat` work
       --mcp                Run as an MCP server on stdio (see below)
       --mcp-write          Let that server change what already exists — rows,
                            a whole table, a file. Off by default; every such

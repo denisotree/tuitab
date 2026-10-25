@@ -573,7 +573,7 @@ fn inspect(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     // A database container is loaded through the path that keeps its declared types —
     // the ones a model actually needs, since every value arrives as text and the
     // inferred type is a guess made over that text.
-    let is_db = crate::data::io::db_write::is_db_ext(&src.path);
+    let is_db = crate::data::io::db_write::is_db_path(&src.path);
     let (df, table_source) = match (&src.container, is_db) {
         (Some(container), true) => source::load_db_table(&src.path, container)?,
         _ => (source::load(server, &src)?, None),
@@ -864,7 +864,7 @@ fn write_result(
         return Err(CallError::Failed(format!("output.table: {}", why)));
     }
 
-    if db_write::is_db_ext(path) {
+    if db_write::is_db_path(path) {
         let kind = db_write::kind_for_path(path);
 
         // Writing into the file the pipeline just read is not an export, it is an edit
@@ -971,7 +971,28 @@ fn write_result(
     // and fixed decimals in it say so.  A database is written for the next query: the
     // columns are typed, NULL stays NULL, and telling the caller otherwise makes a
     // perfectly good table look unfit to query.
-    if !db_write::is_db_ext(path) {
+    if db_write::is_db_path(path) {
+        written["table"] = json!(table);
+        // Named like a file, the target was a database all along: the caller asked for a
+        // file and has to be told it got a table instead.
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default();
+        if !db_write::is_db_name(ext) {
+            let engine = match db_write::kind_for_path(path) {
+                db_write::DbKind::Sqlite => "SQLite",
+                db_write::DbKind::DuckDb => "DuckDB",
+            };
+            written["note"] = json!(format!(
+                "{} is a {} database by its contents, so the rows were added to it as \
+                 table '{}' instead of replacing the file.",
+                path.display(),
+                engine,
+                table
+            ));
+        }
+    } else {
         written["note"] = json!(
             "Values in the file are formatted for reading (currency symbols, fixed decimals)."
         );

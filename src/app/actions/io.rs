@@ -184,6 +184,13 @@ impl App {
         let sheet = self.stack.active_mut();
         sheet.table_source = Some(src);
         sheet.source_path = Some(path.to_path_buf());
+        // `--type` described the file the rows came from, not the database they now live in.
+        sheet.forced_type = None;
+        // A drill-down or a page of search hits saved into a new database is that
+        // database's table now.
+        sheet.derived_view = false;
+        sheet.doc_hits = None;
+        sheet.container = Some(table.to_string());
         sheet.title = format!("{} :: {}", path.display(), table);
         // The same two fields a drilled-into table gets, so the JOIN picker offers this
         // database's other tables without the file having to be reopened first.
@@ -263,7 +270,7 @@ impl App {
                 // A sheet that came from a database table is saved by changing that
                 // table, not by dumping the rows into a new file — unless the user
                 // pointed the save somewhere else entirely, which is an export.
-                if self.stack.active().table_source.is_some() && db_write::is_db_ext(&path) {
+                if self.stack.active().table_source.is_some() && db_write::is_db_path(&path) {
                     return self.save_into_database(path);
                 }
                 // Two kinds of sheet come out of a database with no `table_source`, and
@@ -271,7 +278,7 @@ impl App {
                 // `DROP TABLE` the very thing they were read from.  A view survives that
                 // by accident (the DROP fails); a WITHOUT ROWID table does not, and the
                 // overview would write the database's own table listing back into it.
-                if db_write::is_db_ext(&path) {
+                if db_write::is_db_path(&path) {
                     let sheet = self.stack.active();
                     let overview = sheet
                         .sqlite_db_path
@@ -300,7 +307,7 @@ impl App {
                 // A sheet with no table behind it *makes* one, and a table needs a name.
                 // Both branches must come before the document-shape question below, or a
                 // .sqlite target would fall through to the plain exporter.
-                if db_write::is_db_ext(&path) {
+                if db_write::is_db_path(&path) {
                     if let Some(table) = self.save.table_name.clone() {
                         return self.create_into_database(path, table);
                     }
@@ -595,15 +602,25 @@ impl App {
     }
 
     /// Re-read the active sheet's table from its database, keeping the view where it is.
-    fn reload_db_sheet(&mut self) -> color_eyre::Result<()> {
+    ///
+    /// A view, a `WITHOUT ROWID` table or a DuckDB table with its own `rowid` column has
+    /// no `table_source` — it reads but cannot be addressed row by row — so for those the
+    /// database and the name come from where the sheet was opened.
+    pub(crate) fn reload_db_sheet(&mut self) -> color_eyre::Result<()> {
         use crate::data::io::db_write::DbKind;
-        let src = match self.stack.active().table_source.clone() {
-            Some(src) => src,
-            None => return Ok(()),
+        let s = self.stack.active();
+        let (kind, db_path, table) = match (&s.table_source, &s.container) {
+            (Some(src), _) => (src.kind, src.db_path.clone(), src.table.clone()),
+            (None, Some(name)) => match (&s.sqlite_source_path, &s.duckdb_source_path) {
+                (Some(p), _) => (DbKind::Sqlite, p.clone(), name.clone()),
+                (None, Some(p)) => (DbKind::DuckDb, p.clone(), name.clone()),
+                (None, None) => return Ok(()),
+            },
+            (None, None) => return Ok(()),
         };
-        let (df, reloaded) = match src.kind {
-            DbKind::Sqlite => crate::data::io::load_sqlite_table_full(&src.db_path, &src.table)?,
-            DbKind::DuckDb => crate::data::io::load_duckdb_table_full(&src.db_path, &src.table)?,
+        let (df, reloaded) = match kind {
+            DbKind::Sqlite => crate::data::io::load_sqlite_table_full(&db_path, &table)?,
+            DbKind::DuckDb => crate::data::io::load_duckdb_table_full(&db_path, &table)?,
         };
 
         let sheet = self.stack.active_mut();

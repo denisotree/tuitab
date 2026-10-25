@@ -296,12 +296,8 @@ fn an_explicit_type_applies_to_every_file_a_pattern_matches() {
     write("cli-typed/b.conf", "{\"a\":3,\"b\":\"z\"}\n");
 
     let pattern = format!("{}/*.conf", base.display());
-    let app = App::new_as(
-        Path::new(&pattern),
-        None,
-        Some(tuitab::data::doc::Format::Jsonl),
-    )
-    .expect("--type reaches every matched file");
+    let app = App::new_as(Path::new(&pattern), None, Some("jsonl"))
+        .expect("--type reaches every matched file");
     let sheet = app.stack.active();
     assert_eq!(sheet.dataframe.visible_row_count(), 3);
     let names: Vec<&str> = sheet
@@ -311,4 +307,19 @@ fn an_explicit_type_applies_to_every_file_a_pattern_matches() {
         .map(|c| c.name.as_str())
         .collect();
     assert_eq!(names, vec!["a", "b"]);
+}
+
+/// `-t md` says the pattern is pages, and pages are records: they need not share fields,
+/// the same as without `-t` and as the MCP server's `format: md`.
+#[test]
+fn a_typed_md_pattern_unions_pages_with_different_fields() {
+    // A page left over from an earlier run would change the count.
+    let _ = std::fs::remove_dir_all(dir().join("typed-md"));
+    write("typed-md/a.md", "---\ntitle: A\n---\nbody a\n");
+    write("typed-md/b.md", "---\ntitle: B\ntags: x\n---\nbody b\n");
+    let pattern = dir().join("typed-md").join("*.md");
+    let app = App::new_as(&pattern, None, Some("md")).unwrap();
+    let df = &app.stack.active().dataframe;
+    assert_eq!(df.visible_row_count(), 2);
+    assert!(df.column_index("title").is_ok() && df.column_index("tags").is_ok());
 }

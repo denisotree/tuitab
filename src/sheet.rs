@@ -135,6 +135,17 @@ pub struct Sheet {
     pub xlsx_source_path: Option<std::path::PathBuf>,
     /// CSV/TSV delimiter byte used when loading this sheet.
     pub source_delimiter: Option<u8>,
+    /// The `--type` (or the browser's "open as") this sheet was opened with as a file, so
+    /// `R` re-reads it the same way.  A table or sheet opened from a listing has none: it
+    /// came from the file's own format.
+    pub forced_type: Option<String>,
+    /// A view built out of another sheet — a drill-down, a node reached by path — rather
+    /// than what its file holds.  `R` refuses it: re-reading `source_path` would put the
+    /// whole file under a title that says otherwise.
+    pub derived_view: bool,
+    /// The table, view or sheet inside its file this sheet was opened as.  Kept by name
+    /// rather than read back out of the title: a SQLite or DuckDB name may hold ` :: `.
+    pub container: Option<String>,
     /// The database table behind this sheet, when it was drilled into from one and can
     /// still be written back to.  Carries the table name, the declared column types and
     /// the values as loaded; see [`crate::data::io::db_write`].
@@ -191,6 +202,9 @@ impl Sheet {
             duckdb_db_path: None,
             source_path: None,
             source_delimiter: None,
+            forced_type: None,
+            derived_view: false,
+            container: None,
             explicit_row_paths: None,
             sqlite_source_path: None,
             duckdb_source_path: None,
@@ -321,6 +335,7 @@ impl Sheet {
         self.sqlite_source_path = parent.sqlite_source_path.clone();
         self.duckdb_source_path = parent.duckdb_source_path.clone();
         self.source_path = parent.source_path.clone();
+        self.derived_view = true;
     }
 
     /// Put the rows back in the sheet's sort order after its data was replaced.
