@@ -864,9 +864,9 @@ fn write_result(
         return Err(CallError::Failed(format!("output.table: {}", why)));
     }
 
-    if db_write::is_db_path(path) {
-        let kind = db_write::kind_for_path(path);
-
+    // Asked once: the answer is the same after the write, and asking reads the header.
+    let db = db_write::is_db_path(path).then(|| db_write::kind_for_path(path));
+    if let Some(kind) = db {
         // Writing into the file the pipeline just read is not an export, it is an edit
         // of the source — and this path has no plan to show and no drift check.
         if db_write::same_file(source, path) {
@@ -971,7 +971,7 @@ fn write_result(
     // and fixed decimals in it say so.  A database is written for the next query: the
     // columns are typed, NULL stays NULL, and telling the caller otherwise makes a
     // perfectly good table look unfit to query.
-    if db_write::is_db_path(path) {
+    if let Some(kind) = db {
         written["table"] = json!(table);
         // Named like a file, the target was a database all along: the caller asked for a
         // file and has to be told it got a table instead.
@@ -980,15 +980,11 @@ fn write_result(
             .and_then(|e| e.to_str())
             .unwrap_or_default();
         if !db_write::is_db_name(ext) {
-            let engine = match db_write::kind_for_path(path) {
-                db_write::DbKind::Sqlite => "SQLite",
-                db_write::DbKind::DuckDb => "DuckDB",
-            };
             written["note"] = json!(format!(
                 "{} is a {} database by its contents, so the rows were added to it as \
                  table '{}' instead of replacing the file.",
                 path.display(),
-                engine,
+                kind.name(),
                 table
             ));
         }

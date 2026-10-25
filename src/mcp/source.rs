@@ -217,11 +217,7 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // instructions said there was no SQL anywhere.  A declared format decides; without
     // one, the file's own header — a database named `db` or `.aup3` is just as much a
     // listing — and then its extension.
-    let is_db = match source.format {
-        Some(_) => crate::data::io::db_write::is_db_name(&ext),
-        None => crate::data::io::db_write::is_db_path(&source.path),
-    };
-    if is_db {
+    if crate::data::io::db_write::is_db(&source.path, source.format.as_deref()) {
         let n = io::db_containers(&source.path)
             .map(|c| c.len())
             .unwrap_or(0);

@@ -1474,16 +1474,7 @@ fn reloading_a_table_created_by_saving_rereads_it() {
     let _ = std::fs::remove_file(&dest);
 
     let mut app = App::new_as(&source, None, None).unwrap();
-    // Frequency over `a`, then Enter on its only value — see the drill-down test above.
-    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
-    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
-    app.stack.active_mut().table_state.select(Some(0));
-    key(&mut app, KeyCode::Enter);
-    assert!(
-        app.stack.active().title.starts_with("Filter:"),
-        "{}",
-        app.stack.active().title
-    );
+    keys::drill(&mut app); // frequency over `a`, Enter on its only value
 
     save_key(&mut app);
     app.save.input =

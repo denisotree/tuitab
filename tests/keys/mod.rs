@@ -61,3 +61,19 @@ pub fn columns(app: &App) -> Vec<String> {
         .map(|c| c.name.clone())
         .collect()
 }
+
+/// A drill-down: a frequency table over the cursor column, then Enter on its first row.
+/// The frequency table defers one frame through the Calculating overlay, hence the
+/// action twice.
+#[allow(dead_code)] // not every test file in this suite drills down
+pub fn drill(app: &mut App) {
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    app.stack.active_mut().table_state.select(Some(0));
+    key(app, KeyCode::Enter);
+    assert!(
+        app.stack.active().title.starts_with("Filter:"),
+        "{}",
+        app.stack.active().title
+    );
+}

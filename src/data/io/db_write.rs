@@ -1504,6 +1504,13 @@ pub fn is_db_name(ext: &str) -> bool {
     )
 }
 
+/// Whether `path` is a database when its format may have been declared: a declared
+/// format decides by its name — `--type csv` on a database means read it as CSV — and
+/// without one, the file itself does.
+pub fn is_db(path: &Path, declared: Option<&str>) -> bool {
+    declared.map_or_else(|| is_db_path(path), is_db_name)
+}
+
 /// Whether two paths name the same file, resolving symlinks and `..` where possible.
 pub fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {

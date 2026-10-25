@@ -4,7 +4,7 @@
 mod keys;
 
 use crossterm::event::KeyCode;
-use keys::key;
+use keys::{columns as cols, drill, key};
 use std::path::PathBuf;
 use tuitab::app::App;
 use tuitab::types::Action;
@@ -18,16 +18,6 @@ fn dir() -> PathBuf {
         .join("reload-tests");
     std::fs::create_dir_all(&d).unwrap();
     d
-}
-
-fn cols(app: &App) -> Vec<String> {
-    app.stack
-        .active()
-        .dataframe
-        .columns
-        .iter()
-        .map(|c| c.name.clone())
-        .collect()
 }
 
 fn rows(app: &App) -> usize {
@@ -47,20 +37,6 @@ fn sqlite(name: &str, sql: &str) -> PathBuf {
         .execute_batch(sql)
         .unwrap();
     p
-}
-
-/// Frequency over the cursor column, then Enter on its first row.  The frequency table
-/// defers one frame through the Calculating overlay, hence the action twice.
-fn drill(app: &mut App) {
-    app.handle_action(Action::OpenFrequencyTable);
-    app.handle_action(Action::OpenFrequencyTable);
-    app.stack.active_mut().table_state.select(Some(0));
-    key(app, KeyCode::Enter);
-    assert!(
-        app.stack.active().title.starts_with("Filter:"),
-        "{}",
-        app.stack.active().title
-    );
 }
 
 /// The derived-view refusal exactly — "Cannot reload inside a node" and "no source

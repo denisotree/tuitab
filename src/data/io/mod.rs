@@ -125,11 +125,7 @@ pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> 
         });
     }
 
-    let is_db = match forced.as_deref() {
-        Some(name) => db_write::is_db_name(name),
-        None => db_write::is_db_path(path),
-    };
-    if is_db {
+    if db_write::is_db(path, forced.as_deref()) {
         // Not the extension: `.db` names no engine.  `kind_for_path` reads the header,
         // the same answer the writer uses.
         return Ok(match db_write::kind_for_path(path) {

@@ -601,22 +601,12 @@ impl App {
         }
     }
 
-    /// Re-read the active sheet's table from its database, keeping the view where it is.
-    ///
-    /// A view, a `WITHOUT ROWID` table or a DuckDB table with its own `rowid` column has
-    /// no `table_source` — it reads but cannot be addressed row by row — so for those the
-    /// database and the name come from where the sheet was opened.
+    /// Re-read the active sheet's table or view from its database, keeping the view where
+    /// it is.  See [`crate::sheet::Sheet::db_object`] for which sheets have one.
     pub(crate) fn reload_db_sheet(&mut self) -> color_eyre::Result<()> {
         use crate::data::io::db_write::DbKind;
-        let s = self.stack.active();
-        let (kind, db_path, table) = match (&s.table_source, &s.container) {
-            (Some(src), _) => (src.kind, src.db_path.clone(), src.table.clone()),
-            (None, Some(name)) => match (&s.sqlite_source_path, &s.duckdb_source_path) {
-                (Some(p), _) => (DbKind::Sqlite, p.clone(), name.clone()),
-                (None, Some(p)) => (DbKind::DuckDb, p.clone(), name.clone()),
-                (None, None) => return Ok(()),
-            },
-            (None, None) => return Ok(()),
+        let Some((kind, db_path, table)) = self.stack.active().db_object() else {
+            return Ok(());
         };
         let (df, reloaded) = match kind {
             DbKind::Sqlite => crate::data::io::load_sqlite_table_full(&db_path, &table)?,

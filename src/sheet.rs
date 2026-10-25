@@ -12,6 +12,7 @@
 
 use crate::data::dataframe::DataFrame;
 use crate::data::doc::Node;
+use crate::data::io::db_write::DbKind;
 use crate::data::io::doc_io::DocState;
 use crate::data::swap;
 use crate::types::SheetType;
@@ -347,6 +348,54 @@ impl Sheet {
         let keys = self.resolved_sort_keys();
         if !keys.is_empty() {
             let _ = self.dataframe.sort_by_keys(&keys);
+        }
+    }
+
+    /// Put freshly read contents in place of the old: the rows, the tree and the container
+    /// paths together, the cursor on `row` (or the last row).  The undo history goes —
+    /// its frames address rows the new data does not have.  The sort order and the search
+    /// stay: both resolve by column name.
+    pub fn replace_with(&mut self, opened: crate::data::io::Opened, row: usize) {
+        let is_container = opened.sqlite_db_path.is_some()
+            || opened.duckdb_db_path.is_some()
+            || opened.xlsx_db_path.is_some();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.dataframe = opened.df;
+        // The tree too: keeping the old one would leave row paths pointing into a document
+        // that no longer matches the table, and a later save would write the old contents.
+        self.doc = opened.doc;
+        // The container path is what makes a listing openable — a sheet that arrives
+        // without it looks right and does nothing on `Enter`.
+        self.sqlite_db_path = opened.sqlite_db_path;
+        self.duckdb_db_path = opened.duckdb_db_path;
+        self.xlsx_db_path = opened.xlsx_db_path;
+        // A listing is not a file among siblings, so it offers none.
+        if is_container {
+            self.dir_source_path = None;
+        }
+        self.dataframe.calc_widths(40, 1000);
+        self.reapply_sort();
+        let vis = self.dataframe.visible_row_count();
+        self.scroll_state = ScrollbarState::new(vis.saturating_sub(1));
+        let row = row.min(vis.saturating_sub(1));
+        self.table_state.select(Some(row));
+        self.top_row = row;
+    }
+
+    /// The database object this sheet was opened as — engine, file and name — when it is
+    /// a table or view read out of a database rather than a file.  A view, a `WITHOUT
+    /// ROWID` table or a DuckDB table with its own `rowid` column has no `table_source`;
+    /// for those the file and the name come from where the sheet was opened.
+    pub fn db_object(&self) -> Option<(DbKind, PathBuf, String)> {
+        if let Some(src) = &self.table_source {
+            return Some((src.kind, src.db_path.clone(), src.table.clone()));
+        }
+        let name = self.container.clone()?;
+        match (&self.sqlite_source_path, &self.duckdb_source_path) {
+            (Some(p), _) => Some((DbKind::Sqlite, p.clone(), name)),
+            (None, Some(p)) => Some((DbKind::DuckDb, p.clone(), name)),
+            (None, None) => None,
         }
     }
 
