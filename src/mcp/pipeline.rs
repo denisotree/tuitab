@@ -146,7 +146,7 @@ fn known_keys(op: &str) -> Option<&'static [&'static str]> {
 }
 
 /// How close two key names are, for "did you mean" — a plain edit distance, capped.
-fn close_enough(a: &str, b: &str) -> bool {
+pub(crate) fn close_enough(a: &str, b: &str) -> bool {
     // `aggregate` for `agg` is the mistake that prompted this, and no edit distance
     // small enough to be useful reaches across six characters — but one name being the
     // start of the other is as good a signal as they come.

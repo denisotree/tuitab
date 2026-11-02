@@ -23,7 +23,19 @@ pub struct Source {
     pub format: Option<String>,
     /// Show integer epoch columns as datetimes (the default).
     pub detect_epoch: bool,
+    /// Text read as NULL in every column of a CSV.
+    pub null_values: Vec<String>,
 }
+
+/// Every field a `source` object takes.
+const SOURCE_KEYS: &[&str] = &[
+    "path",
+    "container",
+    "delimiter",
+    "format",
+    "detect_epoch",
+    "null_values",
+];
 
 impl Source {
     /// Read a source out of tool arguments.  Accepts either the object form or a
@@ -36,12 +48,31 @@ impl Source {
                 delimiter: None,
                 format: None,
                 detect_epoch: true,
+                null_values: Vec::new(),
             });
         }
 
         let obj = value.as_object().ok_or_else(|| {
             "'source' must be an object with a 'path', or a path string".to_string()
         })?;
+
+        // A misspelt field used to be ignored, and the source read without it.
+        for key in obj.keys() {
+            if SOURCE_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            let suggestion = SOURCE_KEYS
+                .iter()
+                .find(|k| super::pipeline::close_enough(key, k))
+                .map(|k| format!(" (did you mean '{}'?)", k))
+                .unwrap_or_default();
+            return Err(format!(
+                "'source' has no field '{}'{}. It takes: {}",
+                key,
+                suggestion,
+                SOURCE_KEYS.join(", ")
+            ));
+        }
 
         let path = obj
             .get("path")
@@ -82,6 +113,19 @@ impl Source {
                     return Err(format!("'detect_epoch' is true or false, got {}", other))
                 }
             },
+            null_values: match obj.get("null_values") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|v| v.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or("'null_values' is a list of text, as [\"undefined\", \"-\"]")?,
+                Some(_) => {
+                    return Err(
+                        "'null_values' is a list of text, as [\"undefined\", \"-\"]".to_string()
+                    )
+                }
+            },
         })
     }
 
@@ -90,6 +134,7 @@ impl Source {
         io::LoadOpts {
             delimiter: self.delimiter,
             detect_epoch: self.detect_epoch,
+            null_values: self.null_values.clone(),
         }
     }
 

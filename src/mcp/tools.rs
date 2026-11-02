@@ -243,6 +243,11 @@ pub fn definitions(write: bool) -> Vec<Value> {
                          "sqlite", "sqlite3", "db", "duckdb", "ddb", "xlsx", "xls",
                          "parquet", "arrow"]
             },
+            "null_values": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Text read as NULL in every column of a CSV, e.g. [\"undefined\", \"-\"]. Without it, undefined, null, NULL, NaN, None, N/A and n/a are already NULL in a column whose other values are all numbers."
+            },
             "detect_epoch": {
                 "type": "boolean",
                 "description": "Show an integer column named like a time (time, ts, timestamp, *_at, …) whose every value is an epoch in s, ms, us or ns as a UTC datetime. On by default; tuitab_inspect marks such a column with a note. false keeps the integers."

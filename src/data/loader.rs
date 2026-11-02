@@ -7,15 +7,24 @@ use std::path::Path;
 /// Load a CSV or TSV file into a DataFrame.
 /// Delimiter is auto-detected from the first line if not supplied.
 pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
-    let delim = delimiter.unwrap_or_else(|| detect_delimiter(path));
+    load_csv_opts(path, &crate::data::io::LoadOpts::with_delimiter(delimiter))
+}
 
-    let lf = LazyCsvReader::new(
+pub fn load_csv_opts(path: &Path, opts: &crate::data::io::LoadOpts) -> Result<DataFrame> {
+    let delim = opts.delimiter.unwrap_or_else(|| detect_delimiter(path));
+
+    let mut reader = LazyCsvReader::new(
         PlRefPath::try_from_path(path).map_err(|e| color_eyre::eyre::eyre!("{}", e))?,
     )
     .with_separator(delim)
     .with_has_header(true)
-    .with_infer_schema_length(None)
-    .finish()?;
+    .with_infer_schema_length(None);
+    if !opts.null_values.is_empty() {
+        reader = reader.with_null_values(Some(NullValues::AllColumns(
+            opts.null_values.iter().map(|v| v.as_str().into()).collect(),
+        )));
+    }
+    let lf = reader.finish()?;
 
     let pdf = lf.collect()?;
     crate::data::io::wrap_polars_df(pdf)

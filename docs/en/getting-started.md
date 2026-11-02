@@ -83,6 +83,15 @@ When auto-detection guesses wrong (or you have a `;`-separated file):
 tuitab data.csv -d ';'
 ```
 
+### Missing values in a CSV
+
+An empty cell is NULL. So are `undefined`, `null`, `NULL`, `NaN`, `None`, `N/A`
+and `n/a` — but only in a column whose other values are all numbers, where they
+are a gap rather than data (a Grafana export writes `undefined` for a missing
+point). A text column keeps them as written, so a name `None` stays `None`. `NA`
+is left alone everywhere: it is Namibia's country code. The MCP server's source
+takes `null_values` for anything else.
+
 ## Browse several files
 
 Pass more than one path and tuitab opens a **file list** instead of a single

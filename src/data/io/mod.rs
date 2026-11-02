@@ -299,6 +299,8 @@ pub fn load_pattern(
 pub struct LoadOpts {
     pub delimiter: Option<u8>,
     pub detect_epoch: bool,
+    /// Text read as NULL in every column of a CSV, before its types are worked out.
+    pub null_values: Vec<String>,
 }
 
 impl Default for LoadOpts {
@@ -306,6 +308,7 @@ impl Default for LoadOpts {
         Self {
             delimiter: None,
             detect_epoch: true,
+            null_values: Vec::new(),
         }
     }
 }
@@ -332,7 +335,6 @@ pub fn load_file_as_opts(
     opts: &LoadOpts,
     forced: Option<crate::data::doc::Format>,
 ) -> Result<(DataFrame, Option<doc_io::DocState>)> {
-    let delimiter = opts.delimiter;
     // The header before the name, and before the sniffer below: a database stored as
     // `db` or `.aup3` would otherwise be read in full by `read_to_string`, then parsed
     // as CSV.
@@ -384,7 +386,6 @@ pub fn load_file_as_opts(
         }
     }
 
-    let _ = delimiter;
     load_tabular(path, opts, &ext).map(|df| (df, None))
 }
 
@@ -395,7 +396,10 @@ pub fn load_file_as_opts(
 /// their table is rebuilt from the tree after every edit and a column would change type
 /// under the user.
 pub(crate) fn load_tabular(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
-    let mut df = load_tabular_raw(path, opts.delimiter, ext)?;
+    let mut df = load_tabular_raw(path, opts, ext)?;
+    if matches!(ext, "csv" | "tsv") {
+        numeric_despite_tokens(&mut df);
+    }
     if opts.detect_epoch
         && matches!(
             ext,
@@ -471,9 +475,52 @@ pub fn with_epoch_restored(df: &DataFrame) -> std::borrow::Cow<'_, DataFrame> {
     std::borrow::Cow::Owned(out)
 }
 
-fn load_tabular_raw(path: &Path, delimiter: Option<u8>, ext: &str) -> Result<DataFrame> {
+/// What a CSV writes for "no value" without saying so: `undefined` from a Grafana
+/// export, `null`, `NaN`, `None`, `N/A`.  Not `NA` — it is Namibia's country code.
+const NULL_TOKENS: &[&str] = &["undefined", "null", "NULL", "NaN", "None", "N/A", "n/a"];
+
+/// A text column that would be numeric but for [`NULL_TOKENS`] becomes numeric, the
+/// tokens NULL.  A column whose other values are text keeps every value as written: a
+/// name `None` stays `None`.
+fn numeric_despite_tokens(df: &mut DataFrame) {
+    for idx in 0..df.columns.len() {
+        if df.columns[idx].col_type != ColumnType::String {
+            continue;
+        }
+        let series = df.df.columns()[idx].as_materialized_series().clone();
+        let Ok(ca) = series.str() else { continue };
+        if !ca
+            .into_iter()
+            .flatten()
+            .any(|v| NULL_TOKENS.contains(&v.trim()))
+        {
+            continue;
+        }
+        let cleaned: StringChunked = ca
+            .into_iter()
+            .map(|v| {
+                v.map(str::trim)
+                    .filter(|v| !v.is_empty() && !NULL_TOKENS.contains(v))
+            })
+            .collect();
+        let cleaned = cleaned.with_name(series.name().clone()).into_series();
+        if cleaned.null_count() == cleaned.len() {
+            continue;
+        }
+        let typed = crate::data::json_cols::type_from_text(&cleaned, false);
+        if typed.dtype() == &DataType::String {
+            continue;
+        }
+        let name = df.columns[idx].name.clone();
+        if df.df.replace(&name, typed.clone().into()).is_ok() {
+            df.columns[idx].col_type = column_type_of(typed.dtype());
+        }
+    }
+}
+
+fn load_tabular_raw(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
     match ext {
-        "csv" | "tsv" => crate::data::loader::load_csv(path, delimiter),
+        "csv" | "tsv" => crate::data::loader::load_csv_opts(path, opts),
         "txt" => txt::load_txt(path),
         "parquet" => parquet::load_parquet(path),
         "arrow" | "feather" | "ipc" => arrow::load_arrow(path),

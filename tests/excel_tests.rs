@@ -60,9 +60,11 @@ fn numeric_cells_come_back_as_numbers() {
 
 #[test]
 fn a_column_with_one_word_in_it_stays_text() {
-    let df = round_trip("mixed", "qty\n1\n2\nn/a\n");
+    // A real word: `n/a` is now a gap in a CSV's number column, read as NULL before
+    // the workbook is written.
+    let df = round_trip("mixed", "qty\n1\n2\nmany\n");
     assert_eq!(df.columns[0].col_type, ColumnType::String);
-    assert_eq!(df.format_display(2, 0), "n/a");
+    assert_eq!(df.format_display(2, 0), "many");
 }
 
 #[test]
