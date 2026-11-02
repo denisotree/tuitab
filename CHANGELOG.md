@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A filter on a date or datetime column matches the moment it names.** The
+  column was compared as text, which carries the unit's fraction (`11:10:00.000`),
+  so `eq "2026-08-24 11:10:00"` never matched.
 - **Saving no longer rounds numbers to the screen's precision.** A float column
   went to a CSV with two decimals (1.23456 became 1.23), and to Parquet, Arrow and
   xlsx as text.
@@ -62,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call with the wrong number of arguments — which could crash — is refused.
 - A true/false column was treated as text, so it could not be summed.
 - A `frequency` over several columns counted a group keyed by a NULL as 0.
+- The MCP server no longer prints Polars' `is_in` deprecation warning on stderr.
 - A misspelt field in an MCP `source` was ignored; it is now refused with the
   one it was close to.
 
@@ -72,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- `substring`, `concat`, `split` and `date` run vectorised over text and
+  dates: a log template over 35 million rows takes seconds, not twelve minutes.
 - Tables in load order share one row order instead of two vectors of eight
   bytes a row each, and JSON, JSONL and YAML no longer keep a second copy of the
   file's text.
