@@ -1081,6 +1081,42 @@ impl App {
         self.mode = AppMode::Normal;
     }
 
+    /// `gW`: the unpinned columns become rows of (variable, value), the pinned ones
+    /// repeated on each — the shared `unpivot`, the reverse of `W`, onto a new sheet.
+    fn unpivot_sheet(&mut self) {
+        self.mode = AppMode::Normal;
+        let df = &self.stack.active().dataframe;
+        let index: Vec<String> = df
+            .columns
+            .iter()
+            .filter(|c| c.pinned)
+            .map(|c| c.name.clone())
+            .collect();
+        if index.is_empty() {
+            self.status_message =
+                "Pin the columns that identify a row (they stay), then gW turns the rest into rows"
+                    .to_string();
+            return;
+        }
+        let spec = crate::data::unpivot::Spec {
+            index: index.clone(),
+            columns: None,
+            name: "variable".to_string(),
+            value: "value".to_string(),
+            drop_nulls: false,
+        };
+        match crate::data::unpivot::unpivot(df, &spec) {
+            Ok(long) => {
+                let rows = long.visible_row_count();
+                let sheet =
+                    crate::sheet::Sheet::new(format!("Unpivot by {}", index.join(", ")), long);
+                self.stack.push(sheet);
+                self.status_message = format!("Unpivoted: {} rows", rows);
+            }
+            Err(e) => self.status_message = e,
+        }
+    }
+
     fn create_pct_column(&mut self) {
         self.add_window(crate::data::window::WindowFn::PctOfTotal, Vec::new());
     }

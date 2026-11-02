@@ -227,6 +227,14 @@ impl App {
                 self.expand_json_column();
                 None
             }
+            Action::Unpivot if self.stack.active().doc.is_some() => {
+                self.reject_on_doc_sheet("Unpivoting");
+                None
+            }
+            Action::Unpivot => {
+                self.unpivot_sheet();
+                None
+            }
             Action::OpenPartitionSelect if self.stack.active().doc.is_some() => {
                 self.reject_on_doc_sheet("Adding a partitioned % column");
                 None

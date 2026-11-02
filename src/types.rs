@@ -382,6 +382,7 @@ pub enum Action {
     DecreasePrecision,
     CreatePctColumn,
     ExpandJsonColumn,
+    Unpivot,
     OpenPartitionSelect,
     ApplyPartitionedPct,
     PartitionSelectUp,

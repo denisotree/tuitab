@@ -115,6 +115,7 @@ printf '%s\n' \
 | `aggregate` | Общий итог — одна строка, без группировки |
 | `frequency` | Распределение по частоте, с колонками `Count` и `Pct` |
 | `pivot` | Строки по `index`, колонки по `on`, ячейки по `formula` |
+| `unpivot` | Обратное: `{"index": ["Time"], "columns": "*", "name": "country", "value": "rps", "drop_nulls": true}` превращает каждую указанную колонку (`"*"` — все вне `index`) в строки (`name`, `value`), повторяя `index` на каждой. `name`/`value` по умолчанию `variable`/`value`; текст рядом с числами — ошибка |
 | `join` | С другим файлом, `how`: inner / left / right / outer / anti / semi / diff. anti и semi оставляют столбцы этой таблицы и считают NULL-ключи равными. diff сравнивает таблицы как `git diff`: первый столбец `_diff` содержит `=` `~` `-` `+`, а `<col>_right` — значения другой таблицы в строках `~`. Ключи должны быть уникальны с обеих сторон |
 | `dedup` | По одной строке на ключ. `keep`: first, last, min, max, random |
 | `duplicates` | Только строки, чей ключ повторяется |

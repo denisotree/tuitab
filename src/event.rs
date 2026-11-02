@@ -289,6 +289,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('_') => Action::AdjustAllColumnWidths, // g_ → adjust all column widths
             KeyCode::Char('F') => Action::OpenMultiFrequencyTable, // gF → multi frequency table
             KeyCode::Char('b') => Action::OpenGroupBy,     // gb → group by pinned columns
+            KeyCode::Char('W') => Action::Unpivot,         // gW → unpivot the unpinned columns
             KeyCode::Char('D') | KeyCode::Char('d') | KeyCode::Char('U') => {
                 Action::DeduplicateByPinned
             }

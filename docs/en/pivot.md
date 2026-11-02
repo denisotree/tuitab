@@ -56,6 +56,13 @@ opened as a new sheet. Press `Esc` / `q` to pop back.
 > Pin **more than one** column to nest the row index (e.g. pin `region` *and*
 > `category`, then pivot another column).
 
+## The other way: unpivot
+
+A wide table — a column per country, per endpoint — goes long with `gW`: pin the
+columns that identify a row (`Time`), press `gW`, and every other column becomes
+rows of (`variable`, `value`) on a new sheet, the pinned columns repeated on each.
+Over MCP it is the `unpivot` operation.
+
 ## See also
 
 - [Charts](charts.md) — the grouped bar chart is the visual cousin of a pivot.

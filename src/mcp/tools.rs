@@ -106,6 +106,10 @@ OPERATIONS for tuitab_query
       this for 'how many of each' / 'most common'; use group_by when you want \
       specific aggregates and your own ordering.
   {\"pivot\": {\"index\":[\"region\"],\"on\":\"quarter\",\"formula\":\"sum(amount)\"}}
+  {\"unpivot\": {\"index\":[\"Time\"],\"columns\":\"*\",\"name\":\"country\",\"value\":\"rps\",\"drop_nulls\":true}}
+      Wide to long, the reverse of pivot: each listed column (\"*\" = all but \
+      index) becomes rows of (name, value). name/value default to variable/value; \
+      text beside numbers is refused.
   {\"join\": {\"source\":{\"path\":\"prices.csv\"},\"left_on\":[\"id\"],\"how\":\"left\"}}
       how: inner, left, right, outer, anti, semi, diff. 'right_on' defaults to 'left_on'. \
       anti keeps the rows with no match in the other table, semi the rows with one; \

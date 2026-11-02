@@ -113,6 +113,7 @@ result of the last.
 | `aggregate` | A grand total — one row, no grouping |
 | `frequency` | Distribution ranked by count, with `Count` and `Pct` |
 | `pivot` | Rows by `index`, columns by `on`, cells by `formula` |
+| `unpivot` | The reverse: `{"index": ["Time"], "columns": "*", "name": "country", "value": "rps", "drop_nulls": true}` turns each listed column (`"*"` — every one outside `index`) into rows of (`name`, `value`), `index` repeated on each. `name`/`value` default to `variable`/`value`; text beside numbers is refused |
 | `join` | Against a second file, `how`: inner / left / right / outer / anti / semi / diff. anti and semi keep this table's columns and treat NULL keys as equal. diff compares the tables like `git diff`: a leading `_diff` column holds `=` `~` `-` `+`, and `<col>_right` carries the other table's values on `~` rows. Keys must be unique on both sides |
 | `dedup` | One row per key. `keep`: first, last, min, max, random |
 | `duplicates` | Only the rows whose key repeats |

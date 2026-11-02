@@ -91,6 +91,8 @@ pub enum Op {
         col: String,
         prefix: String,
     },
+    /// Wide to long.
+    Unpivot(crate::data::unpivot::Spec),
 }
 
 pub struct SortKey {
@@ -141,6 +143,7 @@ fn known_keys(op: &str) -> Option<&'static [&'static str]> {
         "join" => &["source", "path", "left_on", "right_on", "how"],
         "sort" => &["col", "desc", "by"],
         "expand_json" => &["col", "prefix"],
+        "unpivot" => &["index", "columns", "name", "value", "drop_nulls"],
         _ => return None,
     })
 }
@@ -291,6 +294,33 @@ fn parse_op(value: &Value) -> Result<Op, String> {
             };
             Ok(Op::ExpandJson { col, prefix })
         }
+        "unpivot" => Ok(Op::Unpivot(crate::data::unpivot::Spec {
+            index: match body.get("index") {
+                Some(v) => string_array(v, "index")?,
+                None => {
+                    return Err("'unpivot' needs 'index', the columns that identify a row".into())
+                }
+            },
+            columns: match body.get("columns") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(s)) if s == "*" => None,
+                Some(v) => Some(string_array(v, "columns")?),
+            },
+            name: body
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("variable")
+                .to_string(),
+            value: body
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or("value")
+                .to_string(),
+            drop_nulls: body
+                .get("drop_nulls")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })),
         "limit" => body
             .as_u64()
             .or_else(|| body.get("n").and_then(Value::as_u64))
@@ -299,7 +329,7 @@ fn parse_op(value: &Value) -> Result<Op, String> {
         other => Err(format!(
             "Unknown operation '{}'. Available: filter, select, sort, compute, \
              group_by, aggregate, frequency, pivot, join, dedup, duplicates, \
-             sample, window, transpose, limit, expand_json",
+             sample, window, transpose, limit, expand_json, unpivot",
             other
         )),
     }
@@ -653,6 +683,7 @@ fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFram
         }
         Op::Window(spec) => crate::data::window::add_window_column(&df, spec),
         Op::ExpandJson { col, prefix } => crate::data::json_cols::expand_json(&df, col, prefix),
+        Op::Unpivot(spec) => crate::data::unpivot::unpivot(&df, spec),
         Op::Sample { n, seed } => {
             let seed = seed.or(drawn_seed).unwrap_or(0);
             df.row_order = Arc::new(crate::data::dedup::sample_rows(&df, *n, seed));

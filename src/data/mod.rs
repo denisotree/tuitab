@@ -43,6 +43,7 @@ pub mod sort;
 pub mod swap;
 pub mod transpose;
 pub mod typed_value;
+pub mod unpivot;
 pub mod view;
 pub mod window;
 

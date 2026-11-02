@@ -24,6 +24,7 @@ All keys below are for **Normal mode** unless noted. Many commands act on the
 |-----|--------|
 | `[` | Sort ascending by the cursor column |
 | `]` | Sort descending by the cursor column |
+| `gW` | Unpivot, the reverse of `W`: the unpinned columns become rows of (`variable`, `value`), the pinned ones repeated on each, onto a new sheet |
 | `gb` | Group by the pinned columns, computing the aggregates marked with `+` |
 | `zJ` | One column per top-level key of the JSON in this column, named `<column>_<key>` (the `expand_json` operation) |
 | `zw` | Add a window column: rank, running total, lag/lead, group share. A running total asks which column orders the rows — the table itself is not re-sorted — then a direction, then the partitions |
