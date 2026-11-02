@@ -421,6 +421,11 @@ pub fn definitions(write: bool) -> Vec<Value> {
                  Benjamini–Hochberg), in the order given. Distributions: t_cdf(x, df), t_inv(p, df), \
                  chi2_cdf(x, df), chi2_inv(p, df), poisson_cdf(k, mean), binom_cdf(k, n, p) — cdf is \
                  P(X ≤ x); an upper-tail p-value is 1 - cdf.\n\
+                 Rank tests, as scipy.stats 1.18: mannwhitney(a, b, alternative[, method]) and \
+                 ks2(a, b, alternative[, method]) return the p-value; mannwhitney_u(a, b) and \
+                 ks2_d(a, b, alternative) the statistic. alternative is two_sided, less or greater; \
+                 method is auto, exact or asymptotic (ks2: asymp). a and b are lists — for samples \
+                 from a file, bind them with 'lists'.\n\
                  Finance, spreadsheet signatures and signs (money paid out is negative): \
                  pmt(rate, nper, pv[, fv[, type]]), fv(rate, nper, pmt[, pv[, type]]), \
                  pv(rate, nper, pmt[, fv[, type]]), npv(rate, flows…) with the first flow one \
@@ -440,7 +445,20 @@ pub fn definitions(write: bool) -> Vec<Value> {
                             "required": ["expr"]
                         }
                     },
-                    "expr": {"type": "string", "description": "A single expression, instead of 'steps'."}
+                    "expr": {"type": "string", "description": "A single expression, instead of 'steps'."},
+                    "lists": {
+                        "type": "object",
+                        "description": "Names bound to a numeric column of a query's result, for the steps to use as lists — samples nobody has to type in. Each is {\"source\": ..., \"ops\": [...], \"col\": \"name\"} with the source and operations tuitab_query takes; NULLs are left out. Example: {\"incident\": {\"source\": \"cpu.csv\", \"ops\": [{\"filter\": ...}], \"col\": \"value\"}}",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "source": {},
+                                "ops": {"type": "array"},
+                                "col": {"type": "string"}
+                            },
+                            "required": ["source", "col"]
+                        }
+                    }
                 }
             },
             "annotations": {"readOnlyHint": true, "openWorldHint": false}
@@ -545,7 +563,7 @@ pub fn call(server: &mut Server, name: &str, args: &Value) -> Result<Value, Call
         "tuitab_query" => query(server, args),
         "tuitab_describe" => describe_tool(server, args),
         "tuitab_jq" => jq(args),
-        "tuitab_calc" => super::calc::run(args).map_err(CallError::Failed),
+        "tuitab_calc" => calc_tool(server, args),
         // Named but unavailable: a model that learned the name elsewhere deserves the
         // reason rather than a bafflement about an unknown tool.
         "tuitab_write" | "tuitab_write_apply" if !server.write => Err(CallError::Failed(format!(
@@ -1166,6 +1184,82 @@ fn describe_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> 
     rename_metric(&mut profile, "stdev", "stdev_pop");
 
     render::table(&profile, describe::METRICS.len()).map_err(CallError::Failed)
+}
+
+/// `tuitab_calc`, with any `lists` — a name bound to a numeric column of a query's
+/// result — computed first, so a test can compare samples no one typed in.
+fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
+    let mut lists = Vec::new();
+    if let Some(spec) = args.get("lists") {
+        let obj = spec.as_object().ok_or_else(|| {
+            CallError::Failed("'lists' maps a name to {\"source\", \"ops\", \"col\"}".to_string())
+        })?;
+        for (name, entry) in obj {
+            let fail = |why: String| CallError::Failed(format!("lists.{}: {}", name, why));
+            let src = source::Source::from_json(
+                entry
+                    .get("source")
+                    .ok_or_else(|| fail("needs a 'source'".into()))?,
+            )
+            .map_err(&fail)?;
+            let ops = match entry.get("ops") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(ops) => pipeline::parse_ops(ops).map_err(&fail)?,
+            };
+            let col = entry
+                .get("col")
+                .and_then(Value::as_str)
+                .ok_or_else(|| fail("needs 'col', the column to take".into()))?;
+            let scanned = if server.eager_only {
+                None
+            } else {
+                super::lazy::scan(&src).map_err(&fail)?
+            };
+            let df = match scanned {
+                Some(scanned) => {
+                    let budget = server
+                        .memory_budget
+                        .unwrap_or_else(super::lazy::default_budget);
+                    match run_streamed(&scanned, &ops, usize::MAX, true, budget).map_err(&fail)? {
+                        Answer::Table(df, _) => df,
+                        Answer::Shown(_) => {
+                            unreachable!("a whole run is never shown from its head")
+                        }
+                    }
+                }
+                None => pipeline::apply_all(source::load(server, &src)?, &ops).map_err(&fail)?,
+            };
+            lists.push((name.clone(), numbers_of(&df, col).map_err(&fail)?));
+        }
+    }
+    super::calc::run_with(args, lists).map_err(CallError::Failed)
+}
+
+/// A numeric column's values, NULLs left out.
+fn numbers_of(df: &crate::data::dataframe::DataFrame, col: &str) -> Result<Vec<f64>, String> {
+    use crate::types::ColumnType;
+    let idx = df.column_index(col)?;
+    if !matches!(
+        df.columns[idx].col_type,
+        ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency
+    ) {
+        return Err(format!(
+            "'{}' is {}, and a list for a test is numbers",
+            col,
+            df.columns[idx].col_type.name()
+        ));
+    }
+    let visible = df.get_visible_df()?;
+    let floats = visible.columns()[idx]
+        .as_materialized_series()
+        .cast(&polars::prelude::DataType::Float64)
+        .map_err(|e| e.to_string())?;
+    Ok(floats
+        .f64()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn rename_metric(df: &mut crate::data::dataframe::DataFrame, from: &str, to: &str) {

@@ -666,6 +666,10 @@ const FUNCTIONS: &[&str] = &[
     "poisson_cdf",
     "binom_cdf",
     "bh",
+    "mannwhitney",
+    "mannwhitney_u",
+    "ks2",
+    "ks2_d",
 ];
 
 const CONSTANTS: &[&str] = &["pi", "e"];
@@ -765,6 +769,17 @@ impl Env<'_> {
                     _ => pow(a, b)?,
                 }))
             }
+        }
+    }
+
+    /// A sample for a rank test: a list of numbers.
+    fn sample(&self, node: &Node, func: &str) -> Res<Vec<f64>> {
+        match self.eval(node)? {
+            Val::List(items) => Ok(items.into_iter().map(Num::f64).collect()),
+            _ => Err(format!(
+                "{}() compares two lists of numbers, as [1, 2, 3]",
+                func
+            )),
         }
     }
 
@@ -1022,6 +1037,47 @@ impl Env<'_> {
                 n(Num::float(p)?)
             }
             "holm" | "bh" => Ok(Val::List(adjust_p_values(name, &self.numbers(args)?)?)),
+            "mannwhitney" | "mannwhitney_u" | "ks2" | "ks2_d" => {
+                use super::special::{Alternative, Method};
+                let statistic = name.ends_with("_u") || name.ends_with("_d");
+                match name {
+                    "mannwhitney_u" => arity(2, 2)?,
+                    "ks2_d" => arity(3, 3)?,
+                    _ => arity(3, 4)?,
+                }
+                let a = self.sample(&args[0], name)?;
+                let b = self.sample(&args[1], name)?;
+                let alternative = match args.get(2) {
+                    None => Alternative::TwoSided,
+                    Some(node) => {
+                        match word(node, name, "alternative", &["two_sided", "less", "greater"])? {
+                            "less" => Alternative::Less,
+                            "greater" => Alternative::Greater,
+                            _ => Alternative::TwoSided,
+                        }
+                    }
+                };
+                let asymptotic = if name.starts_with("ks2") {
+                    "asymp"
+                } else {
+                    "asymptotic"
+                };
+                let method = match args.get(3) {
+                    None => Method::Auto,
+                    Some(node) => match word(node, name, "method", &["auto", "exact", asymptotic])?
+                    {
+                        "exact" => Method::Exact,
+                        "auto" => Method::Auto,
+                        _ => Method::Asymptotic,
+                    },
+                };
+                let (stat, p) = if name.starts_with("ks2") {
+                    super::special::ks_2samp(&a, &b, alternative, method)?
+                } else {
+                    super::special::mannwhitney(&a, &b, alternative, method)?
+                };
+                n(Num::float(if statistic { stat } else { p })?)
+            }
             "erf" | "erfc" | "norm_cdf" => {
                 arity(1, 1)?;
                 let f: fn(f64) -> f64 = match name {
@@ -1355,6 +1411,12 @@ fn is_identifier(name: &str) -> bool {
 
 /// Run a `tuitab_calc` call: `{"steps": [{"name", "expr"}, …]}`, or `{"expr": …}` for one.
 pub fn run(args: &Value) -> Result<Value, String> {
+    run_with(args, Vec::new())
+}
+
+/// [`run`] with named lists already bound — samples a query produced, handed in by
+/// the server as `lists`.
+pub fn run_with(args: &Value, lists: Vec<(String, Vec<f64>)>) -> Result<Value, String> {
     let steps: Vec<(Option<String>, String)> = if let Some(expr) = args.get("expr") {
         let expr = expr.as_str().ok_or("'expr' must be a string")?.to_string();
         vec![(None, expr)]
@@ -1391,6 +1453,35 @@ pub fn run(args: &Value) -> Result<Value, String> {
     }
 
     let mut names: HashMap<String, Val> = HashMap::new();
+    for (name, values) in lists {
+        let fail = |why: String| format!("lists.{}: {}", name, why);
+        if !is_identifier(&name) {
+            return Err(fail(
+                "a list name is letters, digits and '_', not starting with a digit".into(),
+            ));
+        }
+        if FUNCTIONS.contains(&name.as_str())
+            || CONSTANTS.contains(&name.as_str())
+            || ["and", "or", "not", "true", "false"].contains(&name.as_str())
+        {
+            return Err(fail(format!(
+                "'{}' is a built-in name; choose another",
+                name
+            )));
+        }
+        let items = values
+            .into_iter()
+            .map(|v| {
+                if v.fract() == 0.0 && v.abs() < 9e15 {
+                    Ok(int(v as i64))
+                } else {
+                    Num::float(v)
+                }
+            })
+            .collect::<Res<Vec<Num>>>()
+            .map_err(fail)?;
+        names.insert(name, Val::List(items));
+    }
     let mut results = Vec::new();
     let mut last = Value::Null;
     for (i, (name, expr)) in steps.iter().enumerate() {
@@ -1415,7 +1506,10 @@ pub fn run(args: &Value) -> Result<Value, String> {
                 )));
             }
             if names.contains_key(name) {
-                return Err(fail(format!("a step named '{}' already exists", name)));
+                return Err(fail(format!(
+                    "a step or list named '{}' already exists",
+                    name
+                )));
             }
         }
 
@@ -1432,4 +1526,18 @@ pub fn run(args: &Value) -> Result<Value, String> {
     }
 
     Ok(json!({"steps": results, "result": last}))
+}
+
+/// A bare word naming an option — `less`, `exact` — read before anything is evaluated,
+/// since it names no value.
+fn word<'a>(node: &'a Node, func: &str, what: &str, allowed: &[&str]) -> Res<&'a str> {
+    match node {
+        Node::Name(w) if allowed.contains(&w.as_str()) => Ok(w.as_str()),
+        _ => Err(format!(
+            "{}()'s {} is one of: {}",
+            func,
+            what,
+            allowed.join(", ")
+        )),
+    }
 }

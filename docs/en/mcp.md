@@ -270,6 +270,19 @@ strings, so no digit is lost in JSON, each with a `precision`:
 | Statistics | `sum`, `product`, `count`, `mean`/`avg`, `median`, `variance` and `stdev` (sample), `var_p` and `stdev_p` (population), `percentile(list, p)` with `p` from 0 to 1 (as `PERCENTILE.INC`) — each takes numbers, lists, or both. `norm_cdf(z)`, `norm_inv(p)`, `erf`, `erfc` for the standard normal distribution: p-values and critical values. `holm(p-values)` and `bh(p-values)` return the list adjusted for multiple comparisons (Holm–Bonferroni and Benjamini–Hochberg), in the order given |
 | Distributions | `t_cdf(x, df)`, `t_inv(p, df)` (Student's t), `chi2_cdf(x, df)`, `chi2_inv(p, df)`, `poisson_cdf(k, mean)`, `binom_cdf(k, n, p)`. A CDF is P(X ≤ x); an upper-tail p-value is `1 - …_cdf(…)`, which cannot go below about 10⁻¹⁵ |
 | Finance | `pmt(rate, nper, pv[, fv[, type]])`, `fv(rate, nper, pmt[, pv[, type]])`, `pv(rate, nper, pmt[, fv[, type]])`, `npv(rate, flows…)`, `irr(flows[, guess])` — spreadsheet signatures and signs: money paid out is negative |
+| Rank tests | `mannwhitney(a, b, alternative[, method])` (Mann–Whitney U) and `ks2(a, b, alternative[, method])` (two-sample Kolmogorov–Smirnov) return the p-value; `mannwhitney_u(a, b)` and `ks2_d(a, b, alternative)` the statistic. `alternative` is `two_sided`, `less` or `greater`; `method` is `auto`, `exact` or `asymptotic` (`asymp` for `ks2`). They follow `scipy.stats` 1.18 — the same statistic, the same choice of method, the same p-values; an asymptotic two-sided `ks2` p-value below about 10⁻¹⁵ reads 0 |
+
+Samples rarely fit in an expression. `lists` binds a name to a numeric column of a
+query's result — the same `source` and `ops` as `tuitab_query` — and every step can
+use it as a list:
+
+```json
+{"lists": {
+   "incident": {"source": "cpu.csv", "ops": [{"filter": {"col": "Time", "op": "between", "value": ["2026-09-02 16:40", "2026-09-02 19:00"]}}], "col": "value"},
+   "usual":    {"source": "cpu.csv", "ops": [{"filter": {"col": "hour", "op": "in", "value": [16, 17, 18]}}], "col": "value"}
+ },
+ "expr": "mannwhitney(incident, usual, greater)"}
+```
 
 A mistake names the step and says what is wrong: `b (a + c): unknown name 'c' —
 earlier steps: a`, `division by zero`, `'=' is not an operator here: compare with

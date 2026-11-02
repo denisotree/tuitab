@@ -299,3 +299,468 @@ fn bisect(mut lo: f64, mut hi: f64, left_of_root: impl Fn(f64) -> Res<bool>) -> 
     }
     Ok(lo + (hi - lo) / 2.0)
 }
+
+// ── Rank tests: Mann–Whitney U and two-sample Kolmogorov–Smirnov ─────────────────────
+//
+// Both follow scipy.stats 1.18 (`mannwhitneyu`, `ks_2samp`) step for step — the same
+// statistic, the same choice of method, the same exact and asymptotic p-values — so an
+// answer here can be checked against the reference everyone else uses.
+
+/// Which side the alternative hypothesis is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Alternative {
+    TwoSided,
+    Less,
+    Greater,
+}
+
+/// How the p-value is computed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Method {
+    Auto,
+    Exact,
+    Asymptotic,
+}
+
+/// `C(n, k)` in floating point.
+fn binom(n: f64, k: f64) -> f64 {
+    if k < 0.0 || k > n {
+        return 0.0;
+    }
+    let k = k.min(n - k);
+    let mut out = 1.0;
+    let mut i = 0.0;
+    while i < k {
+        out = out * (n - i) / (i + 1.0);
+        i += 1.0;
+    }
+    out
+}
+
+/// Average ranks (1-based) of `values`, and the sizes of each group of ties.
+fn average_ranks(values: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let mut order: Vec<usize> = (0..values.len()).collect();
+    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
+    let mut ranks = vec![0.0; values.len()];
+    let mut ties = Vec::new();
+    let mut i = 0;
+    while i < order.len() {
+        let mut j = i;
+        while j + 1 < order.len() && values[order[j + 1]] == values[order[i]] {
+            j += 1;
+        }
+        let rank = (i + j) as f64 / 2.0 + 1.0;
+        for &k in &order[i..=j] {
+            ranks[k] = rank;
+        }
+        ties.push((j - i + 1) as f64);
+        i = j + 1;
+    }
+    (ranks, ties)
+}
+
+/// P(U = 0..=maxu) under the null for samples of `n1 <= n2`, by the recurrence scipy
+/// uses (`_MWU.build_u_freqs_array`).
+fn mwu_pmf(n1: usize, n2: usize, maxu: usize) -> Vec<f64> {
+    let mut sigma = vec![0.0f64; maxu + 1];
+    for d in 1..=n1 {
+        let mut a = d;
+        while a <= maxu {
+            sigma[a] += d as f64;
+            a += d;
+        }
+    }
+    for d in (n2 + 1)..=(n2 + n1) {
+        let mut a = d;
+        while a <= maxu {
+            sigma[a] -= d as f64;
+            a += d;
+        }
+    }
+    let mut configurations = vec![0.0f64; maxu + 1];
+    configurations[0] = 1.0;
+    for u in 1..=maxu {
+        let mut total = 0.0;
+        for (i, c) in configurations[..u].iter().enumerate() {
+            total += c * sigma[u - i];
+        }
+        configurations[u] = total / u as f64;
+    }
+    let all = binom((n1 + n2) as f64, n1 as f64);
+    configurations.into_iter().map(|c| c / all).collect()
+}
+
+/// P(U >= k) under the null, from the side of the distribution nearer zero.
+fn mwu_sf(n1: usize, n2: usize, k: i64) -> f64 {
+    let (n1, n2) = (n1.min(n2), n1.max(n2));
+    let top = (n1 * n2) as i64;
+    if k <= 0 {
+        return 1.0;
+    }
+    if k > top {
+        return 0.0;
+    }
+    let kc = top - k;
+    if k < kc {
+        let pmf = mwu_pmf(n1, n2, k as usize);
+        let below: f64 = pmf[..k as usize].iter().sum();
+        1.0 - below
+    } else {
+        let pmf = mwu_pmf(n1, n2, kc as usize);
+        pmf.iter().sum()
+    }
+}
+
+fn norm_sf(z: f64) -> f64 {
+    0.5 * libm::erfc(z / std::f64::consts::SQRT_2)
+}
+
+/// Mann–Whitney U for `x` against `y`: the statistic U for `x`, and the p-value.
+pub fn mannwhitney(
+    x: &[f64],
+    y: &[f64],
+    alternative: Alternative,
+    method: Method,
+) -> Res<(f64, f64)> {
+    if x.is_empty() || y.is_empty() {
+        return Err("mannwhitney() needs two samples with at least one value each".into());
+    }
+    let (n1, n2) = (x.len(), y.len());
+    let pooled: Vec<f64> = x.iter().chain(y).copied().collect();
+    let (ranks, ties) = average_ranks(&pooled);
+    let r1: f64 = ranks[..n1].iter().sum();
+    let u1 = r1 - (n1 * (n1 + 1)) as f64 / 2.0;
+    let u2 = (n1 * n2) as f64 - u1;
+    let has_ties = ties.iter().any(|&t| t > 1.0);
+    let method = match method {
+        Method::Auto if n1 > 8 && n2 > 8 => Method::Asymptotic,
+        Method::Auto if has_ties => Method::Asymptotic,
+        Method::Auto => Method::Exact,
+        m => m,
+    };
+    let p = match method {
+        Method::Exact => {
+            if n1.saturating_mul(n2) > 2_000_000 {
+                return Err(
+                    "mannwhitney(): the exact distribution of samples this large is out of \
+                     reach; use asymptotic"
+                        .into(),
+                );
+            }
+            let (u, factor) = match alternative {
+                Alternative::Greater => (u1, 1.0),
+                Alternative::Less => (u2, 1.0),
+                Alternative::TwoSided => (u1.max(u2), 2.0),
+            };
+            mwu_sf(n1, n2, u as i64) * factor
+        }
+        _ => {
+            let (n1f, n2f) = (n1 as f64, n2 as f64);
+            let n = n1f + n2f;
+            let tie_term: f64 = ties.iter().map(|t| t * t * t - t).sum();
+            let s = (n1f * n2f / 12.0 * ((n + 1.0) - tie_term / (n * (n - 1.0)))).sqrt();
+            let mut numerator = u1 - n1f * n2f / 2.0;
+            let sign = match alternative {
+                Alternative::Greater => 1.0,
+                Alternative::Less => -1.0,
+                Alternative::TwoSided => {
+                    if numerator > 0.0 {
+                        1.0
+                    } else if numerator < 0.0 {
+                        -1.0
+                    } else {
+                        0.0
+                    }
+                }
+            };
+            numerator -= 0.5 * sign;
+            let z = numerator / s;
+            match alternative {
+                Alternative::Less => 1.0 - norm_sf(z),
+                Alternative::Greater => norm_sf(z),
+                Alternative::TwoSided => 2.0 * norm_sf(z.abs()),
+            }
+        }
+    };
+    Ok((u1, p.clamp(0.0, 1.0)))
+}
+
+/// The two-sample KS statistic for an alternative: `(D, D⁻, D⁺)` folded the way
+/// `ks_2samp` folds them.
+fn ks_statistic(x: &[f64], y: &[f64], alternative: Alternative) -> f64 {
+    let mut a = x.to_vec();
+    let mut b = y.to_vec();
+    a.sort_by(f64::total_cmp);
+    b.sort_by(f64::total_cmp);
+    let (n1, n2) = (a.len() as f64, b.len() as f64);
+    let at_most = |s: &[f64], v: f64| s.partition_point(|&w| w <= v) as f64;
+    let mut min_diff = f64::INFINITY;
+    let mut max_diff = f64::NEG_INFINITY;
+    for &v in a.iter().chain(&b) {
+        let diff = at_most(&a, v) / n1 - at_most(&b, v) / n2;
+        min_diff = min_diff.min(diff);
+        max_diff = max_diff.max(diff);
+    }
+    let min_s = (-min_diff).clamp(0.0, 1.0);
+    match alternative {
+        Alternative::Less => min_s,
+        Alternative::Greater => max_diff,
+        Alternative::TwoSided => {
+            if min_s > max_diff {
+                min_s
+            } else {
+                max_diff
+            }
+        }
+    }
+}
+
+fn gcd(mut a: usize, mut b: usize) -> usize {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Pr(D_{n,n} >= h/n): paths outside both diagonals (scipy `_compute_prob_outside_square`).
+fn prob_outside_square(n: usize, h: usize) -> f64 {
+    let (n, h) = (n as f64, h as f64);
+    let mut p = 0.0;
+    let mut k = (n / h).floor();
+    while k >= 0.0 {
+        let mut p1 = 1.0;
+        let mut j = 0.0;
+        while j < h {
+            p1 = (n - k * h - j) * p1 / (n + k * h + j + 1.0);
+            j += 1.0;
+        }
+        p = p1 * (1.0 - p);
+        k -= 1.0;
+    }
+    2.0 * p
+}
+
+/// The share of lattice paths from (0, 0) to (m, n) that leave the band
+/// |n·x − m·y|/g < h — the two-sided exact p-value for unequal samples.  The column
+/// carried along holds, per point, the share of paths to it that have already left.
+fn outer_prob_inside_method(m: usize, n: usize, g: usize, h: usize) -> f64 {
+    let (m, n) = if m < n { (n, m) } else { (m, n) };
+    let mg = (m / g) as f64;
+    let ng = (n / g) as f64;
+    let hf = h as f64;
+    let mut minj: usize = 0;
+    let mut maxj: usize = ((hf / mg).ceil() as usize).min(n + 1);
+    let mut curlen = maxj - minj;
+    let len_a = (2 * maxj + 2).min(n + 1);
+    let mut a = vec![1.0f64; len_a.max(1)];
+    for v in a.iter_mut().take(maxj).skip(minj) {
+        *v = 0.0;
+    }
+    for i in 1..=m {
+        let (lastminj, lastlen) = (minj, curlen);
+        let lo = ((ng * i as f64 - hf) / mg).floor() as i64 + 1;
+        minj = (lo.max(0) as usize).min(n);
+        maxj = (((ng * i as f64 + hf) / mg).ceil() as usize).min(n + 1);
+        if maxj <= minj {
+            return 1.0;
+        }
+        let mut val = if minj == 0 { 0.0 } else { 1.0 };
+        for jj in 0..(maxj - minj) {
+            let j = jj + minj;
+            let carried = a.get(jj + minj - lastminj).copied().unwrap_or(1.0);
+            val = (carried * i as f64 + val * j as f64) / (i + j) as f64;
+            if jj < a.len() {
+                a[jj] = val;
+            }
+        }
+        curlen = maxj - minj;
+        if lastlen > curlen {
+            for v in a.iter_mut().skip(maxj - minj).take(lastlen - curlen) {
+                *v = 1.0;
+            }
+        }
+    }
+    a[maxj - minj - 1]
+}
+
+/// Lattice paths from (0, 0) to (m, n) that cross the diagonal m·y <= n·x − h·g — the
+/// one-sided exact count (scipy `_count_paths_outside_method`, after Hodges).
+fn count_paths_outside(m: usize, n: usize, g: usize, h: usize) -> f64 {
+    let (m, n) = if m < n { (n, m) } else { (m, n) };
+    let mg = m / g;
+    let ng = n / g;
+    // Python's floor division, as in the reference: (mg - h) may be negative.
+    let lxj = (n as i64 + (mg as i64 - h as i64).div_euclid(mg as i64)).max(0) as usize;
+    let xj: Vec<f64> = (0..lxj).map(|j| (h + mg * j).div_ceil(ng) as f64).collect();
+    if lxj == 0 {
+        return binom((m + n) as f64, n as f64);
+    }
+    let mut b = vec![0.0f64; lxj];
+    b[0] = 1.0;
+    for j in 1..lxj {
+        let mut bj = binom(xj[j] + j as f64, j as f64);
+        for i in 0..j {
+            bj -= binom(xj[j] - xj[i] + (j - i) as f64, (j - i) as f64) * b[i];
+        }
+        b[j] = bj;
+    }
+    (0..lxj)
+        .map(|j| b[j] * binom((m as f64 - xj[j]) + (n - j) as f64, (n - j) as f64))
+        .sum()
+}
+
+/// The exact two-sample p-value, or `None` when the arithmetic would not hold.
+fn ks_exact(n1: usize, n2: usize, d: f64, alternative: Alternative) -> Option<f64> {
+    let g = gcd(n1, n2);
+    let lcm = (n1 / g) as f64 * n2 as f64;
+    let h = (d * lcm).round() as usize;
+    if h == 0 {
+        return Some(1.0);
+    }
+    let p = match alternative {
+        Alternative::TwoSided if n1 == n2 => prob_outside_square(n1, h),
+        Alternative::TwoSided => outer_prob_inside_method(n1, n2, g, h),
+        _ if n1 == n2 => (0..h)
+            .map(|j| (n1 - j) as f64 / (n1 + j + 1) as f64)
+            .product(),
+        _ => {
+            let paths = count_paths_outside(n1, n2, g, h);
+            let all = binom((n1 + n2) as f64, n1 as f64);
+            if !paths.is_finite() || !all.is_finite() || paths > all {
+                return None;
+            }
+            paths / all
+        }
+    };
+    (p.is_finite() && (0.0..=1.0).contains(&p)).then_some(p)
+}
+
+/// P(D_n <= d) for the one-sample KS statistic — Marsaglia, Tsang and Wang (2003),
+/// exact; for a matrix too large to raise, Stephens' approximation to the limit.
+fn kolmogorov_cdf(n: usize, d: f64) -> f64 {
+    let nf = n as f64;
+    if d <= 0.0 {
+        return 0.0;
+    }
+    if d >= 1.0 {
+        return 1.0;
+    }
+    let k = (nf * d) as usize + 1;
+    let m = 2 * k - 1;
+    if m > 600 {
+        let lambda = (nf.sqrt() + 0.12 + 0.11 / nf.sqrt()) * d;
+        let mut sum = 0.0;
+        for j in 1..200 {
+            let term = (-2.0 * (j * j) as f64 * lambda * lambda).exp();
+            sum += if j % 2 == 1 { term } else { -term };
+            if term < 1e-17 {
+                break;
+            }
+        }
+        return 1.0 - 2.0 * sum;
+    }
+    let h = k as f64 - nf * d;
+    let mut hm = vec![0.0f64; m * m];
+    for i in 0..m {
+        for j in 0..m {
+            hm[i * m + j] = if i + 1 >= j { 1.0 } else { 0.0 };
+        }
+    }
+    for i in 0..m {
+        hm[i * m] -= h.powi(i as i32 + 1);
+        hm[(m - 1) * m + i] -= h.powi((m - i) as i32);
+    }
+    if 2.0 * h - 1.0 > 0.0 {
+        hm[(m - 1) * m] += (2.0 * h - 1.0).powi(m as i32);
+    }
+    for i in 0..m {
+        for j in 0..m {
+            if i + 1 > j {
+                for g in 1..=(i + 1 - j) {
+                    hm[i * m + j] /= g as f64;
+                }
+            }
+        }
+    }
+    // Q = H^n, keeping the scale in a decimal exponent.
+    let (q, mut eq) = mat_pow(&hm, n, m);
+    let mut s = q[(k - 1) * m + (k - 1)];
+    for i in 1..=n {
+        s = s * i as f64 / nf;
+        if s < 1e-140 {
+            s *= 1e140;
+            eq -= 140;
+        }
+    }
+    s * 10f64.powi(eq)
+}
+
+/// `a · b` for square matrices of side `m`, row-major.
+fn mat_mul(a: &[f64], b: &[f64], m: usize) -> Vec<f64> {
+    let mut c = vec![0.0f64; m * m];
+    for i in 0..m {
+        for l in 0..m {
+            let ail = a[i * m + l];
+            if ail == 0.0 {
+                continue;
+            }
+            for j in 0..m {
+                c[i * m + j] += ail * b[l * m + j];
+            }
+        }
+    }
+    c
+}
+
+/// `a^n`, scaled down by 10¹⁴⁰ whenever it grows past that, with the exponent kept.
+fn mat_pow(a: &[f64], n: usize, m: usize) -> (Vec<f64>, i32) {
+    if n == 1 {
+        return (a.to_vec(), 0);
+    }
+    let (half, e) = mat_pow(a, n / 2, m);
+    let mut q = mat_mul(&half, &half, m);
+    let mut eq = 2 * e;
+    if n % 2 == 1 {
+        q = mat_mul(a, &q, m);
+    }
+    if q[(m / 2) * m + m / 2] > 1e140 {
+        for v in q.iter_mut() {
+            *v *= 1e-140;
+        }
+        eq += 140;
+    }
+    (q, eq)
+}
+
+/// Two-sample Kolmogorov–Smirnov for `x` against `y`: D and the p-value.
+pub fn ks_2samp(x: &[f64], y: &[f64], alternative: Alternative, method: Method) -> Res<(f64, f64)> {
+    if x.is_empty() || y.is_empty() {
+        return Err("ks2() needs two samples with at least one value each".into());
+    }
+    let (n1, n2) = (x.len(), y.len());
+    let d = ks_statistic(x, y, alternative);
+    let mut method = match method {
+        Method::Auto if n1.max(n2) <= 10_000 => Method::Exact,
+        Method::Auto => Method::Asymptotic,
+        m => m,
+    };
+    let mut p = f64::NAN;
+    if method == Method::Exact {
+        match ks_exact(n1, n2, d, alternative) {
+            Some(exact) => p = exact,
+            None => method = Method::Asymptotic,
+        }
+    }
+    if method == Method::Asymptotic {
+        let (m, n) = (n1.max(n2) as f64, n1.min(n2) as f64);
+        let en = m * n / (m + n);
+        p = match alternative {
+            Alternative::TwoSided => 1.0 - kolmogorov_cdf(en.round() as usize, d),
+            _ => {
+                let z = en.sqrt() * d;
+                (-2.0 * z * z - 2.0 * z * (m + 2.0 * n) / (m * n * (m + n)).sqrt() / 3.0).exp()
+            }
+        };
+    }
+    Ok((d, p.clamp(0.0, 1.0)))
+}

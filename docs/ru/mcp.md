@@ -271,6 +271,19 @@ printf '%s\n' \
 | Статистика | `sum`, `product`, `count`, `mean`/`avg`, `median`, `variance` и `stdev` (выборочные), `var_p` и `stdev_p` (по генеральной совокупности), `percentile(list, p)` с `p` от 0 до 1 (как `PERCENTILE.INC`) — принимают числа, списки или и то и другое. `norm_cdf(z)`, `norm_inv(p)`, `erf`, `erfc` для стандартного нормального распределения: p-value и критические значения. `holm(p-values)` и `bh(p-values)` возвращают список с поправкой на множественные сравнения (Холм–Бонферрони и Бенджамини–Хохберг) в исходном порядке |
 | Распределения | `t_cdf(x, df)`, `t_inv(p, df)` (Стьюдент), `chi2_cdf(x, df)`, `chi2_inv(p, df)`, `poisson_cdf(k, mean)`, `binom_cdf(k, n, p)`. CDF — это P(X ≤ x); p-value верхнего хвоста — `1 - …_cdf(…)`, и ниже примерно 10⁻¹⁵ он не опускается |
 | Финансы | `pmt(rate, nper, pv[, fv[, type]])`, `fv(rate, nper, pmt[, pv[, type]])`, `pv(rate, nper, pmt[, fv[, type]])`, `npv(rate, flows…)`, `irr(flows[, guess])` — сигнатуры и знаки как в электронных таблицах: выплаченные деньги отрицательны |
+| Ранговые тесты | `mannwhitney(a, b, alternative[, method])` (U-критерий Манна–Уитни) и `ks2(a, b, alternative[, method])` (двухвыборочный Колмогоров–Смирнов) возвращают p-value; `mannwhitney_u(a, b)` и `ks2_d(a, b, alternative)` — статистику. `alternative` — `two_sided`, `less` или `greater`; `method` — `auto`, `exact` или `asymptotic` (`asymp` для `ks2`). Они повторяют `scipy.stats` 1.18 — та же статистика, тот же выбор метода, те же p-value; асимптотическое двустороннее p-value `ks2` меньше примерно 10⁻¹⁵ читается как 0 |
+
+Выборки редко помещаются в выражение. `lists` привязывает имя к числовой колонке
+результата запроса — те же `source` и `ops`, что у `tuitab_query`, — и любой шаг
+может использовать его как список:
+
+```json
+{"lists": {
+   "incident": {"source": "cpu.csv", "ops": [{"filter": {"col": "Time", "op": "between", "value": ["2026-09-02 16:40", "2026-09-02 19:00"]}}], "col": "value"},
+   "usual":    {"source": "cpu.csv", "ops": [{"filter": {"col": "hour", "op": "in", "value": [16, 17, 18]}}], "col": "value"}
+ },
+ "expr": "mannwhitney(incident, usual, greater)"}
+```
 
 Ошибка называет шаг и говорит, что не так: `b (a + c): unknown name 'c' — earlier
 steps: a`, `division by zero`, `'=' is not an operator here: compare with '=='`.
