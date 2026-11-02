@@ -107,7 +107,17 @@ impl DataFrame {
     /// still formatted like that column.  As a *type*, though, it is a lie: the
     /// mean of integers comes back fractional.  The frame knows better, so ask
     /// it.
-    pub fn from_parts(pdf: polars::prelude::DataFrame, mut columns: Vec<ColumnMeta>) -> Self {
+    pub fn from_parts(pdf: polars::prelude::DataFrame, columns: Vec<ColumnMeta>) -> Self {
+        Self::from_parts_ordered(pdf, columns, None)
+    }
+
+    /// [`Self::from_parts`], taking an order the caller already has rather than
+    /// building the identity one first.
+    fn from_parts_ordered(
+        pdf: polars::prelude::DataFrame,
+        mut columns: Vec<ColumnMeta>,
+        order: Option<RowOrders>,
+    ) -> Self {
         for (meta, column) in columns.iter_mut().zip(pdf.columns()) {
             if meta.col_type == ColumnType::Integer
                 && matches!(column.dtype(), DataType::Float32 | DataType::Float64)
@@ -116,12 +126,15 @@ impl DataFrame {
             }
         }
 
-        let order: Vec<usize> = (0..pdf.height()).collect();
+        let (row_order, original_order) = order.unwrap_or_else(|| {
+            let identity = identity_order(pdf.height());
+            (identity.clone(), identity)
+        });
         Self {
             df: pdf,
             columns,
-            row_order: Arc::new(order.clone()),
-            original_order: Arc::new(order),
+            row_order,
+            original_order,
             selected_rows: HashSet::new(),
             modified: false,
             aggregates_cache: None,
@@ -164,9 +177,11 @@ impl DataFrame {
         // Through `from_parts` so the projection gets the same type
         // reconciliation every other derived table does — otherwise a column is
         // reported as one type before a projection and another after.
-        let mut out = Self::from_parts(pdf, metas);
-        out.row_order = self.row_order.clone();
-        out.original_order = self.original_order.clone();
+        let mut out = Self::from_parts_ordered(
+            pdf,
+            metas,
+            Some((self.row_order.clone(), self.original_order.clone())),
+        );
         out.selected_rows = self.selected_rows.clone();
         out.modified = self.modified;
         // A projection of a transposed table is still transposed.
@@ -2205,6 +2220,29 @@ fn parse_typed_input(value: &str, col_type: ColumnType) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// A table's display order and its original order.
+type RowOrders = (Arc<Vec<usize>>, Arc<Vec<usize>>);
+
+/// The identity order `0..n`, shared: every table of one height in load order points at
+/// the same vector instead of each allocating two of eight bytes a row.  Kept only while
+/// some table uses it.
+fn identity_order(n: usize) -> Arc<Vec<usize>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock, Weak};
+    static SHARED: OnceLock<Mutex<HashMap<usize, Weak<Vec<usize>>>>> = OnceLock::new();
+    let mut shared = SHARED
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(live) = shared.get(&n).and_then(Weak::upgrade) {
+        return live;
+    }
+    shared.retain(|_, w| w.strong_count() > 0);
+    let order = Arc::new((0..n).collect::<Vec<usize>>());
+    shared.insert(n, Arc::downgrade(&order));
+    order
 }
 
 #[cfg(test)]

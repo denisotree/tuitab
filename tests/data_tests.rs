@@ -105,3 +105,33 @@ fn test_expression_after_rename() {
     assert_eq!(ca.get(0), Some(5.0));
     assert_eq!(ca.get(1), Some(5.0));
 }
+
+/// A table in load order holds one shared identity order — not two vectors of eight
+/// bytes a row each, allocated again for every derived table.
+#[test]
+fn identity_row_order_shares_one_allocation() {
+    let df = load_csv(sample_path(), None).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&df.row_order, &df.original_order));
+
+    let again = DataFrame::from_parts(df.df.clone(), df.columns.clone());
+    assert!(
+        std::sync::Arc::ptr_eq(&df.row_order, &again.row_order),
+        "two tables of one height share the identity"
+    );
+
+    let narrow = df.select_columns(&["name".to_string()]).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&df.row_order, &narrow.row_order));
+}
+
+/// Only a TOML document is written back through its own text; JSON, JSONL and YAML
+/// kept a second full copy of the file for nothing.
+#[test]
+fn only_toml_keeps_its_source_text() {
+    use tuitab::data::doc::{Doc, Format};
+    let jsonl = Doc::from_str("{\"a\":1}\n{\"a\":2}\n", Format::Jsonl).unwrap();
+    assert!(jsonl.source_text.is_none());
+    let json = Doc::from_str("{\"a\":1}", Format::Json).unwrap();
+    assert!(json.source_text.is_none());
+    let toml = Doc::from_str("# c\na = 1\n", Format::Toml).unwrap();
+    assert!(toml.source_text.is_some());
+}

@@ -630,9 +630,8 @@ fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFram
             materialize(df)
         }
         Op::Limit(n) => {
-            let mut order = (*df.row_order).clone();
-            order.truncate(*n);
-            df.row_order = Arc::new(order);
+            let keep = (*n).min(df.row_order.len());
+            df.row_order = Arc::new(df.row_order[..keep].to_vec());
             materialize(df)
         }
         Op::Sort(keys) => {

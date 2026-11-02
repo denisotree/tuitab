@@ -361,7 +361,9 @@ impl Doc {
             format,
             root,
             path: None,
-            source_text: Some(text.to_string()),
+            // Only TOML is written back through its own text (comments and layout);
+            // for every other format this would be a second copy of the whole file.
+            source_text: (format == Format::Toml).then(|| text.to_string()),
             multi_doc,
             revision: 0,
         })
