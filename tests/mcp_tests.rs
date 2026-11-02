@@ -696,6 +696,21 @@ fn compute_adds_a_derived_column() {
 
 /// Functions Polars cannot run are evaluated row by row, and that path used to
 /// cast its result to float — every string came back null.
+/// A misspelt function name used to fill the column with NULLs and report success.
+#[test]
+fn compute_with_a_misspelt_function_fails_instead_of_filling_nulls() {
+    let path = tmp("compute_typo.csv");
+    std::fs::write(&path, "name\nann\n").unwrap();
+    let err = call_expecting_failure(
+        &mut Server::new(),
+        "tuitab_query",
+        json!({"source": {"path": path}, "ops": [
+            {"compute": {"name": "x", "expr": "lenn(name)"}}
+        ]}),
+    );
+    assert!(err.contains("Unknown function 'lenn'"), "{}", err);
+}
+
 #[test]
 fn compute_string_functions_return_text() {
     let path = tmp("compute_text.csv");

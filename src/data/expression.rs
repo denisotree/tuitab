@@ -141,6 +141,33 @@ enum Token {
     Not,
 }
 
+/// Every function the expression language knows, with how many arguments it takes
+/// (fewest, most).  Checked when an expression is parsed: a name missing from here used
+/// to evaluate to a column of NULLs with no error, and a wrong count could panic.
+pub const FUNCTIONS: &[(&str, usize, usize)] = &[
+    ("concat", 1, usize::MAX),
+    ("split", 2, 2),
+    ("substring", 3, 3),
+    ("len", 1, 1),
+    ("contains", 2, 2),
+    ("text", 1, 1),
+    ("if", 3, 3),
+    ("sum", 1, 1),
+    ("count", 1, 1),
+    ("mean", 1, 1),
+    ("min", 1, 1),
+    ("max", 1, 1),
+    ("year", 1, 1),
+    ("month", 1, 1),
+    ("day", 1, 1),
+    ("hour", 1, 1),
+    ("minute", 1, 1),
+    ("date", 1, 1),
+    ("date_format", 2, 2),
+    ("today", 0, 0),
+    ("now", 0, 0),
+];
+
 impl Expr {
     /// Parse an expression string into an AST.
     pub fn parse(input: &str) -> Result<Expr, String> {
@@ -153,7 +180,61 @@ impl Expr {
         if parser.pos < parser.tokens.len() {
             return Err(format!("Unexpected token at position {}", parser.pos));
         }
+        expr.check_functions()?;
         Ok(expr)
+    }
+
+    /// Refuse a function the language does not have, or one called with the wrong
+    /// number of arguments — before anything is evaluated.
+    fn check_functions(&self) -> Result<(), String> {
+        match self {
+            Expr::FunctionCall { name, args } => {
+                let Some(&(_, fewest, most)) = FUNCTIONS.iter().find(|(n, _, _)| n == name) else {
+                    let names: Vec<&str> = FUNCTIONS.iter().map(|(n, _, _)| *n).collect();
+                    return Err(format!(
+                        "Unknown function '{}'. Available: {}",
+                        name,
+                        names.join(", ")
+                    ));
+                };
+                if args.len() < fewest || args.len() > most {
+                    let wanted = if fewest == most {
+                        format!("{}", fewest)
+                    } else if most == usize::MAX {
+                        format!("at least {}", fewest)
+                    } else {
+                        format!("{} to {}", fewest, most)
+                    };
+                    return Err(format!(
+                        "'{}' takes {} argument{}, got {}",
+                        name,
+                        wanted,
+                        if fewest == 1 && most == 1 { "" } else { "s" },
+                        args.len()
+                    ));
+                }
+                args.iter().try_for_each(|a| a.check_functions())
+            }
+            Expr::BinOp { left, right, .. } => {
+                left.check_functions()?;
+                right.check_functions()
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                cond.check_functions()?;
+                then_branch.check_functions()?;
+                else_branch.check_functions()
+            }
+            Expr::InList { left, list } => {
+                left.check_functions()?;
+                list.iter().try_for_each(|e| e.check_functions())
+            }
+            Expr::Not(inner) | Expr::IsNull(inner) => inner.check_functions(),
+            Expr::ColumnRef(_) | Expr::Literal(_) => Ok(()),
+        }
     }
 
     /// Refuse text that arithmetic can only turn into NULL.
@@ -523,11 +604,11 @@ impl Expr {
                     // A missing value matches nothing; as text it was `Null`.
                     "contains" if evaluated_args[0] == Value::Null => Value::Null,
                     "contains" if evaluated_args.len() == 2 => {
-                        match regex::Regex::new(&evaluated_args[1].to_string()) {
-                            Ok(re) => Value::Boolean(re.is_match(&evaluated_args[0].to_string())),
+                        match cached_regex(&evaluated_args[1].to_string()) {
+                            Some(re) => Value::Boolean(re.is_match(&evaluated_args[0].to_string())),
                             // A malformed pattern is Null, not false — a bad
                             // regex is not the same answer as "no match".
-                            Err(_) => Value::Null,
+                            None => Value::Null,
                         }
                     }
                     "concat" => {
@@ -776,6 +857,23 @@ fn values_equal(l: &Value, r: &Value) -> bool {
 }
 
 /// A date (`YYYY-MM-DD`) or a datetime in one of the forms a cell takes.
+/// A pattern compiled once, however many rows ask for it.  The row-by-row path used to
+/// compile the same regex again on every row.  `None` for a pattern that does not
+/// compile.  The patterns come from the expressions in use, so the map stays small.
+fn cached_regex(pattern: &str) -> Option<regex::Regex> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    cache
+        .entry(pattern.to_string())
+        .or_insert_with(|| regex::Regex::new(pattern).ok())
+        .clone()
+}
+
 fn parse_temporal(text: &str) -> Option<Value> {
     if let Ok(d) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
         return Some(Value::Date(d));
@@ -1650,5 +1748,38 @@ mod tests {
         let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
 
         assert_eq!(at("date_format(when, '%Q')", 0), Value::Null);
+    }
+
+    /// A misspelt function used to evaluate to a column of NULLs with no error at all.
+    #[test]
+    fn an_unknown_function_is_named_with_the_available_ones() {
+        let err = Expr::parse("regex_replace(a, \"x\", \"y\")").unwrap_err();
+        assert!(err.contains("Unknown function 'regex_replace'"), "{}", err);
+        assert!(err.contains("contains"), "{}", err);
+    }
+
+    /// `contains()` with no arguments panicked in the row-by-row evaluator.
+    #[test]
+    fn a_function_with_the_wrong_number_of_arguments_is_refused() {
+        for e in [
+            "contains()",
+            "contains(a)",
+            "substring(a)",
+            "len(a, b)",
+            "today(1)",
+        ] {
+            let err = Expr::parse(e).unwrap_err();
+            assert!(err.contains("takes"), "{}: {}", e, err);
+        }
+        for e in ["concat(a)", "concat(a, b, c, d)", "today()", "if(a, 1, 2)"] {
+            assert!(Expr::parse(e).is_ok(), "{}", e);
+        }
+    }
+
+    /// A function name inside a nested expression is checked too.
+    #[test]
+    fn an_unknown_function_deep_inside_is_found() {
+        assert!(Expr::parse("1 + if(a > 1, lenn(b), 0)").is_err());
+        assert!(Expr::parse("x in (1, 2) and not frob(y)").is_err());
     }
 }
