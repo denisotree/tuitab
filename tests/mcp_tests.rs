@@ -1799,6 +1799,28 @@ fn a_duckdb_file_named_db_is_read_as_duckdb() {
     std::fs::remove_file(&path).unwrap();
 }
 
+/// A database the engine refuses — corrupt, or written by a newer DuckDB — used to be
+/// reported as holding no tables, and the error only surfaced once a container was
+/// named.  A DuckDB header with garbage after it is recognised as DuckDB and refused.
+#[test]
+fn a_database_that_will_not_open_says_why_instead_of_holding_nothing() {
+    let mut server = Server::new();
+    let path = tmp("mcp-corrupt.duckdb");
+    let mut bytes = vec![0u8; 8];
+    bytes.extend_from_slice(b"DUCK");
+    bytes.extend_from_slice(&[0u8; 4]);
+    bytes.extend_from_slice(&[0xffu8; 8192]);
+    std::fs::write(&path, bytes).unwrap();
+
+    for tool in ["tuitab_inspect", "tuitab_query"] {
+        let err =
+            call_expecting_failure(&mut server, tool, json!({"source": path.to_string_lossy()}));
+        assert!(!err.contains("holds 0 tables"), "{}: {}", tool, err);
+        assert!(err.contains("Corrupt database file"), "{}: {}", tool, err);
+    }
+    std::fs::remove_file(&path).unwrap();
+}
+
 // ── The write gate on output.path ─────────────────────────────────────────────────
 
 /// The gate is on the table, not the file: a second table can join a database the

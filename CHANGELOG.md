@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The MCP server says why a database will not open** — a corrupt file, or one
+  written by a newer DuckDB — instead of reporting that it holds no tables.
+
 ## [0.10.3] - 2026-10-25
 
 ### Fixed

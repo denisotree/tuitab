@@ -218,9 +218,11 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // one, the file's own header — a database named `db` or `.aup3` is just as much a
     // listing — and then its extension.
     if crate::data::io::db_write::is_db(&source.path, source.format.as_deref()) {
+        // The engine's refusal, not a count of zero: "holds 0 tables" sends the caller
+        // off to name a container in a file that will not open at all.
         let n = io::db_containers(&source.path)
-            .map(|c| c.len())
-            .unwrap_or(0);
+            .map_err(|e| format!("Could not open {}: {}", source.path.display(), e))?
+            .len();
         return Err(format!(
             "'{}' holds {} tables and views; pass 'container' to pick one. \
              tuitab_inspect lists them.",
