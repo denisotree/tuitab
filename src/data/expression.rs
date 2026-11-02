@@ -200,6 +200,33 @@ enum Temporal {
     Datetime,
 }
 
+/// Whether a sub-expression is text on both paths alike — a text column, a string
+/// literal, or a function that returns text — so a text function over it gives the same
+/// characters vectorised as row by row.  (A number turned into text is formatted
+/// differently by the two, so those stay row by row.)
+fn is_text(e: &Expr, schema: Option<&polars::prelude::Schema>) -> bool {
+    match e {
+        Expr::Literal(Value::String(_)) => true,
+        Expr::ColumnRef(name) => matches!(
+            schema.and_then(|s| s.get(name.as_str())),
+            Some(polars::prelude::DataType::String)
+        ),
+        Expr::FunctionCall { name, .. } => matches!(
+            name.as_str(),
+            "regexp_replace" | "regexp_extract" | "concat" | "substring" | "split"
+        ),
+        _ => false,
+    }
+}
+
+/// A whole-number literal at least zero, for `substring`'s start and length.
+fn count_literal(e: &Expr) -> Option<u64> {
+    match e {
+        Expr::Literal(Value::Number(n)) if *n >= 0.0 && n.is_finite() => Some(*n as u64),
+        _ => None,
+    }
+}
+
 fn temporal_kind(e: &Expr, schema: Option<&polars::prelude::Schema>) -> Option<Temporal> {
     use polars::prelude::DataType;
     match e {
@@ -210,6 +237,7 @@ fn temporal_kind(e: &Expr, schema: Option<&polars::prelude::Schema>) -> Option<T
         },
         Expr::FunctionCall { name, args } => match name.as_str() {
             "from_epoch" => Some(Temporal::Datetime),
+            "date" if temporal_kind(args.first()?, schema).is_some() => Some(Temporal::Date),
             "time_bucket" => temporal_kind(args.first()?, schema),
             _ => None,
         },
@@ -695,6 +723,41 @@ impl Expr {
                         .cast(polars::prelude::DataType::String)
                         .str()
                         .extract(polars::lazy::dsl::lit(pattern.as_str().to_string()), group))
+                }
+                "substring" if is_text(&args[0], schema) => {
+                    match (count_literal(&args[1]), count_literal(&args[2])) {
+                        (Some(start), Some(len)) => {
+                            Ok(args[0].to_polars_expr_with(schema)?.str().slice(
+                                polars::lazy::dsl::lit(start as i64),
+                                polars::lazy::dsl::lit(len),
+                            ))
+                        }
+                        _ => Err(
+                            "substring() with a computed start or length runs row by row".into(),
+                        ),
+                    }
+                }
+                "concat" if args.iter().all(|a| is_text(a, schema)) => {
+                    let parts = args
+                        .iter()
+                        .map(|a| {
+                            a.to_polars_expr_with(schema)
+                                .map(|e| e.fill_null(polars::lazy::dsl::lit("")))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(polars::lazy::dsl::concat_str(parts, "", false))
+                }
+                "split" if is_text(&args[0], schema) => match &args[1] {
+                    Expr::Literal(Value::String(delim)) => Ok(args[0]
+                        .to_polars_expr_with(schema)?
+                        .str()
+                        .split(polars::lazy::dsl::lit(delim.clone()))
+                        .list()
+                        .first()),
+                    _ => Err("split() with a computed delimiter runs row by row".into()),
+                },
+                "date" if temporal_kind(&args[0], schema).is_some() => {
+                    Ok(args[0].to_polars_expr_with(schema)?.dt().date())
                 }
                 "json_get" => {
                     let (path, _) = json_path_of(&args[1])?;
@@ -2330,7 +2393,7 @@ mod tests {
             .clone()
             .lazy()
             .select([parsed
-                .to_polars_expr()
+                .to_polars_expr_with(Some(tui_df.df.schema().as_ref()))
                 .expect("must lower to Polars")
                 .alias("m")])
             .collect()
@@ -2542,5 +2605,52 @@ mod tests {
         ] {
             assert!(super::Expr::parse(e).is_err(), "{} should be refused", e);
         }
+    }
+
+    /// The text functions run vectorised on text — a log template over 35 million
+    /// rows took twelve minutes row by row.
+    #[test]
+    fn text_functions_lower_to_polars_and_agree() {
+        let schema =
+            polars::prelude::Schema::from_iter([("s".into(), polars::prelude::DataType::String)]);
+        for e in [
+            "substring(s, 0, 3)",
+            "substring(regexp_replace(s, \"[0-9]+\", \"N\"), 2, 5)",
+            "concat(s, \"-\", s)",
+            "split(s, \" \")",
+        ] {
+            assert!(
+                super::Expr::parse(e)
+                    .unwrap()
+                    .to_polars_expr_with(Some(&schema))
+                    .is_ok(),
+                "{} should lower",
+                e
+            );
+        }
+        agree(
+            "substring(s, 1, 3)",
+            &[Some("abcdef"), Some("ab"), Some(""), None],
+            &[Some("bcd"), Some("b"), Some(""), None],
+        );
+        agree("substring(s, 0, 160)", &[Some("é1ü")], &[Some("é1ü")]);
+        agree(
+            "concat(s, \"-\", s)",
+            &[Some("a"), None],
+            &[Some("a-a"), Some("-")],
+        );
+        agree(
+            "split(s, \" \")",
+            &[Some("Rest error: x"), Some("one"), Some(""), None],
+            &[Some("Rest"), Some("one"), Some(""), None],
+        );
+    }
+
+    #[test]
+    fn date_of_a_datetime_lowers_to_polars() {
+        let (df, lookup) = epochs(&[1787569800000, 1787656200000]);
+        let (fast, slow) = shown_on_both_paths("date(from_epoch(t, \"ms\"))", &df, &lookup);
+        assert_eq!(fast, ["2026-08-24", "2026-08-25"]);
+        assert_eq!(slow, ["2026-08-24", "2026-08-25"]);
     }
 }
