@@ -304,7 +304,7 @@ fn cleaned(name: &str) -> Expr {
     when(
         trimmed
             .clone()
-            .is_in(lit(tokens_series()), false)
+            .is_in(lit(tokens_series()).implode(), false)
             .or(trimmed.clone().eq(lit(""))),
     )
     .then(lit(polars::prelude::Null {}))
@@ -335,7 +335,7 @@ fn token_casts(lf: &LazyFrame, schema: &Schema) -> Result<Vec<(String, DataType)
         exprs.push(
             trimmed
                 .clone()
-                .is_in(lit(tokens_series()), false)
+                .is_in(lit(tokens_series()).implode(), false)
                 .any(true)
                 .alias(format!("t{}", i)),
         );

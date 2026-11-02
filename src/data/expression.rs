@@ -586,7 +586,7 @@ impl Expr {
                 }
                 let s = polars::prelude::Series::from_any_values("".into(), &polars_list, true)
                     .map_err(|e| e.to_string())?;
-                Ok(l.is_in(polars::lazy::dsl::lit(s), false))
+                Ok(l.is_in(polars::lazy::dsl::lit(s).implode(), false))
             }
             Expr::If {
                 cond,
