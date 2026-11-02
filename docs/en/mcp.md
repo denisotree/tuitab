@@ -187,7 +187,11 @@ single `ops` call that fails.
 ```
 
 `row_number`, `rank`, `dense_rank`, `cum_sum`, `lag`, `lead`, the partition's
-`sum` / `avg` / `min` / `max` / `count` repeated on its rows, and `pct_of_total`.
+`sum` / `avg` / `min` / `max` / `count` / `median` / `mad` repeated on its rows, and
+`pct_of_total`. `mad` is the median absolute deviation from the median, unscaled:
+with `median` it gives a robust z-score per group, `(x - median) / (1.4826 * mad)`,
+which a single outlier cannot drag. `mad` is an aggregate for `group_by` and
+`aggregate` too.
 
 `over` restarts the window per group; without it the window is the whole table.
 
@@ -205,7 +209,7 @@ relative order and empty values sort last, so the same question gives the same
 answer twice. `desc` runs the order the other way.
 
 Without `order_by` those four read the frame as it stands, which is whatever
-order the file happened to be written in. The other eight refuse an `order_by`
+order the file happened to be written in. The other ten refuse an `order_by`
 rather than ignoring it — a sum is a sum whatever order it is added in, and a
 rank orders by the value it reads.
 

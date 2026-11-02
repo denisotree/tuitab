@@ -12,6 +12,8 @@ pub enum AggregatorKind {
     Max,
     Median,
     Stdev,
+    /// Median absolute deviation from the median: a spread an outlier cannot move.
+    Mad,
     P5,
     P25,
     P50,
@@ -34,6 +36,7 @@ impl AggregatorKind {
             Self::Max => "max",
             Self::Median => "median",
             Self::Stdev => "stdev",
+            Self::Mad => "mad",
             Self::P5 => "p5",
             Self::P25 => "p25",
             Self::P50 => "p50",
@@ -57,6 +60,7 @@ impl AggregatorKind {
             Self::Max,
             Self::Median,
             Self::Stdev,
+            Self::Mad,
             Self::P5,
             Self::P25,
             Self::P50,
@@ -79,6 +83,7 @@ impl AggregatorKind {
                 | Self::Min
                 | Self::Max
                 | Self::Median
+                | Self::Mad
                 | Self::Random
                 | Self::P5
                 | Self::P25
@@ -130,6 +135,7 @@ impl AggregatorKind {
             Self::Max => Some(c.max()),
             Self::Median => Some(c.median()),
             Self::Stdev => Some(c.std(1)),
+            Self::Mad => Some((c.clone() - c.median()).abs().median()),
             Self::P5 => Some(c.quantile(
                 polars::lazy::dsl::lit(0.05),
                 polars::prelude::QuantileMethod::Linear,
@@ -240,6 +246,19 @@ impl AggregatorKind {
                         .map(|s| s.to_string())
                         .unwrap_or_default()
                 }
+            }
+
+            Self::Mad => {
+                let nums: Vec<f64> = values
+                    .iter()
+                    .filter_map(|s| s.parse::<f64>().ok())
+                    .collect();
+                if nums.is_empty() {
+                    return String::new();
+                }
+                let centre = median_of(nums.clone());
+                let mad = median_of(nums.iter().map(|v| (v - centre).abs()).collect());
+                format_numeric(mad, col_type, precision, currency)
             }
 
             Self::Median => {
@@ -389,5 +408,16 @@ pub fn format_numeric(
         }
     } else {
         format!("{:.*}", p, v)
+    }
+}
+
+/// The median of some numbers; the caller has checked there is at least one.
+fn median_of(mut nums: Vec<f64>) -> f64 {
+    nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = nums.len() / 2;
+    if nums.len().is_multiple_of(2) {
+        (nums[mid - 1] + nums[mid]) / 2.0
+    } else {
+        nums[mid]
     }
 }

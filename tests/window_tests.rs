@@ -272,7 +272,7 @@ fn the_zw_picker_offers_every_window_function() {
     let all = WindowFn::all();
     assert_eq!(
         all.len(),
-        12,
+        14,
         "the picker lists whatever WindowFn::all does"
     );
 

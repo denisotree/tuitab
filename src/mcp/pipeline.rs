@@ -465,7 +465,7 @@ fn parse_aggs(value: Option<&Value>) -> Result<Vec<AggSpec>, String> {
                 .ok_or_else(|| {
                     format!(
                         "Unknown aggregate '{}'. Available: count, distinct, sum, avg, \
-                         min, max, median, stdev, p5, p25, p50, p75, p95",
+                         min, max, median, stdev, mad, p5, p25, p50, p75, p95",
                         name
                     )
                 })?;

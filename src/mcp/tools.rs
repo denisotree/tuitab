@@ -117,7 +117,9 @@ OPERATIONS for tuitab_query
   {\"duplicates\": {\"by\":[\"email\"]}}   keep only rows whose key repeats
   {\"window\": {\"fn\":\"rank\",\"col\":\"salary\",\"over\":[\"department\"],\"desc\":true}}
       fn: row_number, rank, dense_rank, cum_sum, lag, lead, sum, avg, min, \
-      max, count, pct_of_total. 'over' restarts the window per group; without \
+      max, count, pct_of_total, median, mad. A robust z-score per group is \
+      a median and a mad window over the group, then compute \
+      (x - median) / (1.4826 * mad). 'over' restarts the window per group; without \
       it the window is the whole table. 'as' names the new column. \
       IMPORTANT: cum_sum, lag, lead and row_number read the rows in their \
       current order — sort first, or a running total accumulates in load order.
@@ -129,8 +131,9 @@ OPERATIONS for tuitab_query
       parsed once — faster than several json_get. Types follow the JSON \
       (whole numbers, numbers, booleans, text); a nested object or array is \
       its JSON text. prefix defaults to '<col>_'.
-Aggregate functions: count, distinct, sum, avg, min, max, median, stdev, p5, \
-p25, p50, p75, p95.
+Aggregate functions: count, distinct, sum, avg, min, max, median, stdev, mad \
+(median absolute deviation, unscaled — multiply by 1.4826 for a normal sigma), \
+p5, p25, p50, p75, p95.
 To filter groups (SQL's HAVING), put a filter after group_by.
 
 NOT SUPPORTED — do not attempt: subqueries, self-joins, and SQL of any kind. You \

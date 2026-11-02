@@ -52,6 +52,10 @@ pub enum WindowFn {
     Count,
     /// The row's share of its partition's total.
     PctOfTotal,
+    /// The partition's median, repeated on every row of it.
+    Median,
+    /// The partition's median absolute deviation from its median.
+    Mad,
 }
 
 impl WindowFn {
@@ -69,10 +73,12 @@ impl WindowFn {
             "max" => Self::Max,
             "count" => Self::Count,
             "pct_of_total" => Self::PctOfTotal,
+            "median" => Self::Median,
+            "mad" => Self::Mad,
             other => {
                 return Err(format!(
                     "Unknown window function '{}'. Available: row_number, rank, dense_rank, \
-                     cum_sum, lag, lead, sum, avg, min, max, count, pct_of_total",
+                     cum_sum, lag, lead, sum, avg, min, max, count, pct_of_total, median, mad",
                     other
                 ))
             }
@@ -94,6 +100,8 @@ impl WindowFn {
             Self::Max,
             Self::Count,
             Self::PctOfTotal,
+            Self::Median,
+            Self::Mad,
         ]
     }
 
@@ -112,6 +120,8 @@ impl WindowFn {
             Self::Max => "the group's largest on every row",
             Self::Count => "how many rows in the group",
             Self::PctOfTotal => "this row's share of the group",
+            Self::Median => "the group's median on every row",
+            Self::Mad => "the group's median absolute deviation on every row",
         }
     }
 
@@ -129,6 +139,8 @@ impl WindowFn {
             Self::Max => "max",
             Self::Count => "count",
             Self::PctOfTotal => "pct_of_total",
+            Self::Median => "median",
+            Self::Mad => "mad",
         }
     }
 
@@ -166,7 +178,7 @@ impl WindowFn {
     fn needs_numbers(self) -> bool {
         matches!(
             self,
-            Self::CumSum | Self::Sum | Self::Avg | Self::PctOfTotal
+            Self::CumSum | Self::Sum | Self::Avg | Self::PctOfTotal | Self::Median | Self::Mad
         )
     }
 
@@ -334,6 +346,11 @@ pub fn add_window_column(df: &DataFrame, spec: &Spec) -> Result<DataFrame, Strin
         WindowFn::Count => target.clone().count(),
         WindowFn::PctOfTotal => {
             target.clone().cast(DataType::Float64) / target.clone().sum().cast(DataType::Float64)
+        }
+        WindowFn::Median => target.clone().cast(DataType::Float64).median(),
+        WindowFn::Mad => {
+            let x = target.clone().cast(DataType::Float64);
+            (x.clone() - x.median()).abs().median()
         }
     };
 

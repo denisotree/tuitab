@@ -12,7 +12,7 @@ list.
 - **Frequency** — press `F` for value counts of the cursor column. Pin several
   columns and press `gF` for a multi-column frequency.
 - **Footer aggregator** — press `+`, multi-select with `Space` (sum, avg,
-  median, count, distinct, percentiles, min, max, …). Clear with `-`.
+  median, MAD, count, distinct, percentiles, min, max, …). Clear with `-`.
 - **Quick total** — press `Z` to aggregate the visible / selected values into
   the status bar.
 
@@ -36,7 +36,7 @@ list.
 
 - **Window column** — press `zw` on a column: `row_number`, `rank`,
   `dense_rank`, `cum_sum`, `lag`, `lead`, a group's `sum`/`avg`/`min`/`max`/
-  `count` repeated on its rows, or `pct_of_total`. A rank asks which end comes
+  `count`/`median`/`mad` repeated on its rows, or `pct_of_total`. A rank asks which end comes
   first; a running total asks which column orders the rows — the table itself is
   not re-sorted — and both then ask for the partition columns. The new column
   lands next to the one it describes.
