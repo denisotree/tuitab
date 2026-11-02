@@ -697,6 +697,37 @@ fn compute_adds_a_derived_column() {
 /// Functions Polars cannot run are evaluated row by row, and that path used to
 /// cast its result to float — every string came back null.
 #[test]
+fn templates_by_regexp_replace_then_frequency() {
+    let path = tmp("log_templates.csv");
+    std::fs::write(
+        &path,
+        "message\n\
+         timed out after 1000 ms with 12 bytes\n\
+         timed out after 30 ms with 0 bytes\n\
+         user deadbeefcafe0001 not found\n\
+         timed out after 7 ms with 5 bytes\n\
+         user 0123456789abcdef not found\n",
+    )
+    .unwrap();
+    let result = call(
+        &mut Server::new(),
+        "tuitab_query",
+        json!({"source": {"path": path}, "ops": [
+            {"compute": {"name": "tmpl", "expr":
+                "regexp_replace(regexp_replace(message, \"[0-9a-f]{8,}\", \"H\"), \"[0-9]+\", \"N\")"}},
+            {"frequency": {"by": ["tmpl"]}}
+        ]}),
+    );
+    assert_eq!(result["row_count"], json!(2));
+    assert_eq!(
+        cell(&result, 0, "tmpl"),
+        json!("timed out after N ms with N bytes")
+    );
+    assert_eq!(cell(&result, 0, "Count"), json!(3));
+    assert_eq!(cell(&result, 1, "tmpl"), json!("user H not found"));
+}
+
+#[test]
 fn compute_round_abs_on_a_csv() {
     let path = tmp("compute_math.csv");
     std::fs::write(&path, "v\n3\n18\n-6\n").unwrap();

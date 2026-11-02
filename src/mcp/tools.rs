@@ -81,7 +81,9 @@ OPERATIONS for tuitab_query
       on its own key, so the first ordering is not preserved.
   {\"compute\": {\"name\":\"margin\",\"expr\":\"revenue - cost\"}}
       Expression syntax: arithmetic, comparisons, and/or/not, if(cond, a, b), \
-      concat, substring, len, contains(col, regex), year/month/day, \
+      concat, substring, len, contains(col, regex), \
+      regexp_replace(col, regex, replacement), regexp_extract(col, regex, group), \
+      year/month/day, \
       date_format, abs, round(x, places), floor, ceil, sqrt, exp, ln, \
       log10, log(x, base), and 'x in (a, b)'. 'or' binds loosest, then 'and', then \
       'not'.

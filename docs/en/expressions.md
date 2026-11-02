@@ -91,6 +91,17 @@ not (status == "closed")
 | `substring(s, start, len)` | Substring (0-based start) |
 | `len(s)` | Length of the string |
 | `contains(s, regex)` | True when `s` matches the regular expression |
+| `regexp_replace(s, regex, replacement)` | Every match replaced; `$1`, `${name}` or `\1` insert a group, `$$` a literal `$` |
+| `regexp_extract(s, regex)` / `regexp_extract(s, regex, group)` | The first match, or one group of it (0 is the whole match); NULL when nothing matches |
+
+The pattern (and the replacement) must be text in quotes, not a column — it is
+checked, and compiled once, when the expression is read. Flags go inside the
+pattern: `(?i)` for case-insensitive.
+
+```text
+regexp_replace(regexp_replace(message, "[0-9a-f]{8,}", "H"), "[0-9]+", "N")   # a log line's template
+regexp_extract(message, "(?i)https?://([A-Za-z0-9.-]+)", 1)                   # the host in a URL
+```
 
 ### Math
 

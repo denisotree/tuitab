@@ -175,7 +175,56 @@ pub const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("ln", 1, 1),
     ("log10", 1, 1),
     ("log", 2, 2),
+    ("regexp_replace", 3, 3),
+    ("regexp_extract", 2, 3),
 ];
+
+/// The pattern argument of a regex function: a text literal that compiles.
+fn regex_literal(name: &str, arg: &Expr) -> Result<regex::Regex, String> {
+    let Expr::Literal(Value::String(pattern)) = arg else {
+        return Err(format!(
+            "{}() needs the pattern as a text literal in quotes",
+            name
+        ));
+    };
+    regex::Regex::new(pattern).map_err(|e| format!("{}(): bad pattern: {}", name, e))
+}
+
+/// `regexp_replace`'s replacement with `\1` turned into `${1}`, the form the regex
+/// engine (and Polars, which uses it) reads; `$1` and `${name}` pass through.
+fn replacement_of(name: &str, arg: &Expr) -> Result<String, String> {
+    let Expr::Literal(Value::String(rep)) = arg else {
+        return Err(format!(
+            "{}() needs the replacement as a text literal in quotes",
+            name
+        ));
+    };
+    static BACKREF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let backref = BACKREF.get_or_init(|| regex::Regex::new(r"\\(\d+)").unwrap());
+    Ok(backref.replace_all(rep, "$${$1}").into_owned())
+}
+
+/// `regexp_extract`'s group: a whole-number literal the pattern actually has.
+fn group_of(args: &[Expr], re: &regex::Regex) -> Result<usize, String> {
+    let group = match args.get(2) {
+        None => 0,
+        Some(Expr::Literal(Value::Number(n))) if n.fract() == 0.0 && *n >= 0.0 => *n as usize,
+        Some(_) => {
+            return Err(
+                "regexp_extract()'s group is a whole number literal, 0 for the whole match"
+                    .to_string(),
+            )
+        }
+    };
+    if group >= re.captures_len() {
+        return Err(format!(
+            "regexp_extract(): the pattern has {} group(s), so there is no group {}",
+            re.captures_len() - 1,
+            group
+        ));
+    }
+    Ok(group)
+}
 
 /// `round()`'s places: a whole-number literal, as in `tuitab_calc`.
 fn round_places(args: &[Expr]) -> Result<i32, String> {
@@ -248,6 +297,17 @@ impl Expr {
                         if fewest == 1 && most == 1 { "" } else { "s" },
                         args.len()
                     ));
+                }
+                match name.as_str() {
+                    "regexp_replace" => {
+                        regex_literal(name, &args[1])?;
+                        replacement_of(name, &args[2])?;
+                    }
+                    "regexp_extract" => {
+                        let re = regex_literal(name, &args[1])?;
+                        group_of(args, &re)?;
+                    }
+                    _ => {}
                 }
                 args.iter().try_for_each(|a| a.check_functions())
             }
@@ -484,6 +544,28 @@ impl Expr {
                             x.log(polars::lazy::dsl::lit(e)) / base.log(polars::lazy::dsl::lit(e))
                         }
                     }))
+                }
+                "regexp_replace" => {
+                    let pattern = regex_literal(name, &args[1])?;
+                    let rep = replacement_of(name, &args[2])?;
+                    Ok(args[0]
+                        .to_polars_expr()?
+                        .cast(polars::prelude::DataType::String)
+                        .str()
+                        .replace_all(
+                            polars::lazy::dsl::lit(pattern.as_str().to_string()),
+                            polars::lazy::dsl::lit(rep),
+                            false,
+                        ))
+                }
+                "regexp_extract" => {
+                    let pattern = regex_literal(name, &args[1])?;
+                    let group = group_of(args, &pattern)?;
+                    Ok(args[0]
+                        .to_polars_expr()?
+                        .cast(polars::prelude::DataType::String)
+                        .str()
+                        .extract(polars::lazy::dsl::lit(pattern.as_str().to_string()), group))
                 }
                 "year" | "month" | "day" | "hour" | "minute" | "today" | "now" | "date_format" => {
                     Err(format!("Function '{}' requires slow-path evaluation", name))
@@ -814,6 +896,34 @@ impl Expr {
                             Value::Number(out)
                         } else {
                             Value::Null
+                        }
+                    }
+                    "regexp_replace" | "regexp_extract" => {
+                        let Some(text) = text_of(&evaluated_args[0]) else {
+                            return Value::Null;
+                        };
+                        // Parsing already checked the literal compiles; this reuses the
+                        // compiled pattern rather than building it again for every row.
+                        let Expr::Literal(Value::String(pattern)) = &args[1] else {
+                            return Value::Null;
+                        };
+                        let Some(re) = cached_regex(pattern) else {
+                            return Value::Null;
+                        };
+                        if name == "regexp_replace" {
+                            match replacement_of(name, &args[2]) {
+                                Ok(rep) => {
+                                    Value::String(re.replace_all(&text, rep.as_str()).into_owned())
+                                }
+                                Err(_) => Value::Null,
+                            }
+                        } else {
+                            let Ok(group) = group_of(args, &re) else {
+                                return Value::Null;
+                            };
+                            re.captures(&text)
+                                .and_then(|c| c.get(group))
+                                .map_or(Value::Null, |m| Value::String(m.as_str().to_string()))
                         }
                     }
                     "today" => Value::Date(chrono::Local::now().naive_local().date()),
@@ -1971,6 +2081,127 @@ mod tests {
         for expr in ["ln(v)", "log10(v)"] {
             let (fast, slow) = on_both_paths(expr, &[0.0]);
             assert_eq!((fast[0], slow[0]), (None, None), "{}", expr);
+        }
+    }
+
+    /// A text column `s`, evaluated on both paths and read back as text.
+    fn texts_on_both_paths(
+        expr: &str,
+        values: &[Option<&str>],
+    ) -> (Vec<Option<String>>, Vec<Option<String>>) {
+        use polars::prelude::IntoLazy;
+        let df =
+            polars::prelude::DataFrame::new_infer_height(vec![
+                Series::new("s".into(), values).into()
+            ])
+            .unwrap();
+        let mut tui_df = crate::data::dataframe::DataFrame::empty();
+        tui_df.df = df;
+        let lookup: HashMap<&str, usize> = [("s", 0)].into_iter().collect();
+        let parsed = super::Expr::parse(expr).expect("expression must parse");
+        let fast = tui_df
+            .df
+            .clone()
+            .lazy()
+            .select([parsed
+                .to_polars_expr()
+                .expect("must lower to Polars")
+                .alias("m")])
+            .collect()
+            .expect("must evaluate");
+        let fast: Vec<Option<String>> = fast
+            .column("m")
+            .unwrap()
+            .str()
+            .unwrap()
+            .into_iter()
+            .map(|v| v.map(str::to_string))
+            .collect();
+        let slow: Vec<Option<String>> = (0..values.len())
+            .map(|row| match parsed.eval(row, &lookup, &tui_df) {
+                Value::String(t) => Some(t),
+                Value::Null => None,
+                other => panic!("{} gave {:?}", expr, other),
+            })
+            .collect();
+        (fast, slow)
+    }
+
+    fn agree(expr: &str, values: &[Option<&str>], want: &[Option<&str>]) {
+        let (fast, slow) = texts_on_both_paths(expr, values);
+        let want: Vec<Option<String>> = want.iter().map(|w| w.map(str::to_string)).collect();
+        assert_eq!(fast, want, "{} on polars", expr);
+        assert_eq!(slow, want, "{} row by row", expr);
+    }
+
+    #[test]
+    fn regexp_replace_replaces_every_match() {
+        agree(
+            "regexp_replace(s, \"[0-9]+\", \"N\")",
+            &[Some("a1b22"), Some("none"), None],
+            &[Some("aNbN"), Some("none"), None],
+        );
+        agree(
+            "regexp_replace(s, \"(?i)x\", \"-\")",
+            &[Some("xXx")],
+            &[Some("---")],
+        );
+    }
+
+    #[test]
+    fn regexp_replace_backrefs() {
+        agree(
+            "regexp_replace(s, \"(a)(b)\", \"$2$1\")",
+            &[Some("ab")],
+            &[Some("ba")],
+        );
+        agree(
+            "regexp_replace(s, \"(a)(b)\", \"\\2\\1\")",
+            &[Some("ab")],
+            &[Some("ba")],
+        );
+        agree(
+            "regexp_replace(s, \"(?P<w>[a-z]+)\", \"<${w}>\")",
+            &[Some("hi 1")],
+            &[Some("<hi> 1")],
+        );
+    }
+
+    #[test]
+    fn regexp_extract_takes_a_group_and_null_when_absent() {
+        agree(
+            "regexp_extract(s, \"x=([0-9]+)\", 1)",
+            &[Some("a x=42 b"), Some("nothing"), None],
+            &[Some("42"), None, None],
+        );
+        agree(
+            "regexp_extract(s, \"x=[0-9]+\")",
+            &[Some("a x=42 b")],
+            &[Some("x=42")],
+        );
+        agree(
+            "regexp_extract(s, \"(?i)https?://([A-Za-z0-9.-]+)\", 1)",
+            &[Some("see HTTPS://Geo.Example/x?y=1")],
+            &[Some("Geo.Example")],
+        );
+    }
+
+    /// A pattern that cannot work is refused when the expression is read: lowering to
+    /// Polars failing would otherwise fall back to the row-by-row path, which answers
+    /// NULL for every row.
+    #[test]
+    fn a_non_literal_or_broken_pattern_is_an_error() {
+        for e in [
+            "regexp_replace(s, s, \"x\")",
+            "regexp_replace(s, \"x\", s)",
+            "regexp_replace(s, \"(\", \"x\")",
+            "regexp_extract(s, \"[\", 0)",
+            "regexp_extract(s, s, 0)",
+            "regexp_extract(s, \"(a)\", 2)",
+            "regexp_extract(s, \"(a)\", -1)",
+            "regexp_extract(s, \"(a)\", 0.5)",
+        ] {
+            assert!(super::Expr::parse(e).is_err(), "{} should be refused", e);
         }
     }
 }
