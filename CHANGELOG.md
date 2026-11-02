@@ -63,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `eq "2026-08-24 11:10:00"` never matched. The same holds for `in`, `not_in`
   and `between`, and `contains` reads the text the table shows.
 - **A datetime with a time zone opens and saves.** A named zone
-  (`Europe/Moscow`) crashed the MCP server and the terminal, a filter on a zoned
+  (`Europe/Moscow`) crashed the MCP server, a filter on a zoned
   column failed, and saving dropped the zone. The column is shown and compared in
   UTC, as before, `tuitab_inspect` names its zone, and Parquet and Arrow get it
   back on save.

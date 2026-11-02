@@ -401,6 +401,7 @@ fn a_step_that_cannot_run_fails_alike() {
         json!({"col": "ms", "op": "gt", "value": {"col": "class"}}),
         json!({"col": "Time", "op": "between", "value": [1, 2]}),
         json!({"col": "ms", "op": "in", "value": ["a", 10]}),
+        json!({"col": "class", "op": "contains", "value": "["}),
     ] {
         let out = agree(
             "tuitab_query",
@@ -569,4 +570,19 @@ fn the_guard_names_the_tool_that_wanted_the_rows() {
         "{}",
         text
     );
+}
+
+#[test]
+fn a_jsonl_pattern_streams_like_its_files_loaded() {
+    write(
+        "lines-a.jsonl",
+        "{\"k\":\"x\",\"v\":1}\n{\"k\":\"y\",\"v\":2}\n",
+    );
+    write("lines-b.jsonl", "{\"k\":\"x\",\"v\":3}\n");
+    let pattern = dir().join("lines-*.jsonl").to_string_lossy().into_owned();
+    let out = agree(
+        "tuitab_query",
+        json!({"source": pattern, "ops": [{"group_by": {"by": ["k"], "agg": [{"col": "v", "fn": "sum"}]}}]}),
+    );
+    assert_eq!(out["structuredContent"]["row_count"], json!(2), "{}", out);
 }

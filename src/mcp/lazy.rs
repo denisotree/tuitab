@@ -151,27 +151,35 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
             // Lines whose fields change shape, arrays per line, numbers past 64 bits:
             // the scan cannot type them (and Polars may panic trying), the in-memory
             // reader can.  The answer is remembered, so the passes are paid once.
+            let known = pattern_schema;
             let schema = cached(&LINE_SCHEMAS, &key, || {
                 let p = path.clone();
-                Ok(std::panic::catch_unwind(move || {
-                    let lf = LazyJsonLineReader::new(p.clone())
-                        .with_infer_schema_length(None)
-                        .finish()
-                        .ok()?;
-                    let schema = inferred(lf).ok()?;
-                    // A type that fits every line is not yet a type every value
-                    // decodes into: a field that is a number here and an object there
-                    // types as the object, then fails.  Decode every column once.
-                    let decoded = LazyJsonLineReader::new(p)
-                        .with_schema(Some(std::sync::Arc::new(schema.clone())))
-                        .finish()
-                        .ok()?
-                        .select([all().as_expr().null_count()]);
-                    crate::data::collect(decoded).ok()?;
-                    Some(schema)
-                })
-                .ok()
-                .flatten())
+                Ok(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let schema = match known {
+                            Some(schema) => schema,
+                            None => {
+                                let lf = LazyJsonLineReader::new(p.clone())
+                                    .with_infer_schema_length(None)
+                                    .finish()
+                                    .ok()?;
+                                inferred(lf).ok()?
+                            }
+                        };
+                        // A type that fits every line is not yet a type every value
+                        // decodes into: a field that is a number here and an object there
+                        // types as the object, then fails.  Decode every column once.
+                        let decoded = LazyJsonLineReader::new(p)
+                            .with_schema(Some(std::sync::Arc::new(schema.clone())))
+                            .finish()
+                            .ok()?
+                            .select([all().as_expr().null_count()]);
+                        crate::data::collect(decoded).ok()?;
+                        Some(schema)
+                    }))
+                    .ok()
+                    .flatten(),
+                )
             })
             .map_err(named)?;
             let Some(schema) = schema else {
