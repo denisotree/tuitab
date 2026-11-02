@@ -203,9 +203,10 @@ cargo build --release
 
 The default build bundles DuckDB and SQLite from source, so the binary is fully
 self-contained — no system libraries required. This compiles DuckDB's C++ core
-(~5 min the first time).
+(~10 min the first time; a C++17 compiler is needed).
 
-To skip that and link a **system** DuckDB instead:
+To skip that and link a **system** DuckDB instead — it has to be DuckDB 2.0, which
+some distributions do not ship yet:
 
 ```sh
 brew install duckdb                # macOS

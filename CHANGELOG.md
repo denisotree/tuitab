@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-02
+
 ### Changed
 
 - **DuckDB 2.0 inside.** Files made by DuckDB 2.0 open and can be edited; files made
@@ -16,7 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The MCP server says why a database will not open** — a corrupt file, or one
-  written by a newer DuckDB — instead of reporting that it holds no tables.
+  written by a newer DuckDB — instead of reporting that it holds no tables, and
+  names a file another program holds once rather than twice.
+
+### Security
+
+- Dependencies updated past published advisories: `zstd` 0.13.4, `zstd-safe` 7.4.0
+  and `zstd-sys` 2.1.2 (RUSTSEC-2026-0391, -0398, -0403); `tar` 0.4.46
+  (GHSA-3pv8-6f4r-ffg2) and `xxhash-rust` 0.8.19 (GHSA-6g2r-675j-hx59). The zip 6
+  build dependency of DuckDB (RUSTSEC-2026-0429) is gone.
 
 ## [0.10.3] - 2026-10-25
 
@@ -1301,7 +1311,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/denisotree/tuitab/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/denisotree/tuitab/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/denisotree/tuitab/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/denisotree/tuitab/compare/v0.10.0...v0.10.1

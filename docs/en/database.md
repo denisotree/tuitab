@@ -25,6 +25,13 @@ A view opens read-only. So does the overview itself: saving either onto the
 database it came from is refused, with `This table or view is read-only; save to
 a different file instead.`
 
+### DuckDB 1.x and 2.x files
+
+DuckDB 2.0 changed its file format, and DuckDB 1.x cannot open a file in the new
+one. tuitab reads and edits both, and a file stays in the format it was made
+with — editing a 1.x file never turns it into one 1.x can no longer open. A new
+`.duckdb` that tuitab creates is in the 1.x format, so any DuckDB opens it.
+
 ## Edit
 
 Everything that works on an ordinary sheet works here: `e` edits a cell, `ge`
