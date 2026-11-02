@@ -679,6 +679,7 @@ pub(crate) fn column_type_of(dtype: &DataType) -> ColumnType {
         DataType::Float32 | DataType::Float64 => ColumnType::Float,
         DataType::Date => ColumnType::Date,
         DataType::Datetime(_, _) => ColumnType::Datetime,
+        DataType::Boolean => ColumnType::Boolean,
         _ => ColumnType::String,
     }
 }

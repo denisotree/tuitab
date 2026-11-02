@@ -1926,11 +1926,9 @@ impl DataFrame {
 
         let visible = self.get_visible_df()?;
 
-        // Use first group column as the "count source" — count() on any col gives row count
-        let count_source = group_names[0].clone();
-        let mut agg_exprs: Vec<Expr> = vec![crate::data::column_expr(&count_source)
-            .count()
-            .alias("Count")];
+        // Rows, not the first key's non-null values: a group keyed by a NULL is real
+        // rows and used to read 0.
+        let mut agg_exprs: Vec<Expr> = vec![len().alias("Count")];
 
         // ── Per-column aggregators ─────────────────────────────────────────
         let mut extra_metas: Vec<crate::data::column::ColumnMeta> = Vec::new();
