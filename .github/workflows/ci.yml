@@ -16,7 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # 22.04, as the Linux release builds: DuckDB 2.0 needs C++17, and a toolchain
+        # newer than the release one would hide a build the release cannot do.
+        os: [ubuntu-22.04, macos-latest]
 
     steps:
       - uses: actions/checkout@v7

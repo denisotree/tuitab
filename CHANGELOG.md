@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **DuckDB 2.0 inside.** Files made by DuckDB 2.0 open and can be edited; files made
+  by DuckDB 1.x keep working. Each file stays in the format it was made with, and a
+  new `.duckdb` that tuitab creates is in the 1.x format, so any DuckDB opens it.
+
 ### Fixed
 
 - **The MCP server says why a database will not open** — a corrupt file, or one

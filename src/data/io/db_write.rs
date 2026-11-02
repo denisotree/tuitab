@@ -43,13 +43,20 @@ pub(crate) fn open_sqlite(path: &Path) -> Result<rusqlite::Connection> {
     Ok(conn)
 }
 
+/// The storage format of a DuckDB file tuitab creates: the 1.x one (version 64), which
+/// every DuckDB from 1.0 to 2.x opens.  DuckDB 2.0 would otherwise write its own
+/// format, which 1.x refuses outright.  An existing file — 1.x or 2.x — keeps the
+/// format it was made with whatever this says.
+const NEW_FILE_STORAGE: &str = "v1.0.0";
+
 /// Open DuckDB, saying what it means when it refuses.
 ///
 /// DuckDB has no busy timeout to set: one process holds the file and every other one is
 /// turned away outright, with a message about lock files and PIDs.  Waiting is not on
 /// offer, so the only thing to improve is the sentence.
 pub(crate) fn open_duckdb(path: &Path) -> Result<duckdb::Connection> {
-    duckdb::Connection::open(path).map_err(|e| {
+    let cfg = duckdb::Config::default().with("storage_compatibility_version", NEW_FILE_STORAGE)?;
+    duckdb::Connection::open_with_flags(path, cfg).map_err(|e| {
         let text = e.to_string();
         if text.contains("Conflicting lock") {
             eyre!(

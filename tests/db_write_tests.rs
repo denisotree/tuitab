@@ -37,20 +37,43 @@ fn sqlite_fixture(name: &str) -> PathBuf {
     path
 }
 
+const USERS_DDL: &str =
+    "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score INTEGER, note TEXT);
+     INSERT INTO users VALUES (1, 'ann',  10, NULL);
+     INSERT INTO users VALUES (2, 'bob',  20, '');
+     INSERT INTO users VALUES (3, 'cara', 30, 'hi');
+     INSERT INTO users VALUES (4, 'dan',  40, 'yo');
+     CREATE TABLE other (k TEXT);
+     INSERT INTO other VALUES ('untouched');";
+
+/// In the engine's own default format — DuckDB 2.x since the 2.0 upgrade.
 fn duckdb_fixture(name: &str) -> PathBuf {
     let path = scratch(name);
     let conn = duckdb::Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score INTEGER, note TEXT);
-         INSERT INTO users VALUES (1, 'ann',  10, NULL);
-         INSERT INTO users VALUES (2, 'bob',  20, '');
-         INSERT INTO users VALUES (3, 'cara', 30, 'hi');
-         INSERT INTO users VALUES (4, 'dan',  40, 'yo');
-         CREATE TABLE other (k TEXT);
-         INSERT INTO other VALUES ('untouched');",
-    )
-    .unwrap();
+    conn.execute_batch(USERS_DDL).unwrap();
     path
+}
+
+/// A connection that writes new files the way DuckDB 1.x does.
+fn open_duckdb_1x(path: &Path) -> duckdb::Connection {
+    let cfg = duckdb::Config::default()
+        .with("storage_compatibility_version", "v1.0.0")
+        .unwrap();
+    duckdb::Connection::open_with_flags(path, cfg).unwrap()
+}
+
+/// The same tables as [`duckdb_fixture`], in the 1.x storage format.
+fn duckdb_fixture_1x(name: &str) -> PathBuf {
+    let path = scratch(name);
+    open_duckdb_1x(&path).execute_batch(USERS_DDL).unwrap();
+    path
+}
+
+/// The storage version a DuckDB file was written with: a little-endian u64 right after
+/// the `DUCK` magic at offset 8.  DuckDB 1.x reads 64 to 68.
+fn storage_version(path: &Path) -> u64 {
+    let head = std::fs::read(path).unwrap();
+    u64::from_le_bytes(head[12..20].try_into().unwrap())
 }
 
 fn open_sqlite(path: &Path) -> (tuitab::data::dataframe::DataFrame, TableSource) {
@@ -2610,6 +2633,112 @@ fn a_duckdb_file_held_by_another_process_says_so_plainly() {
         "raw engine text: {}",
         err
     );
+}
+
+// ── Storage formats: DuckDB 1.x and 2.x files ─────────────────────────────────────
+
+/// Edit a cell of `users` and add a table `extra` beside it, then check both landed.
+fn edit_and_add_a_table(path: &Path) {
+    let (mut df, src) = load_duckdb_table_full(path, "users").unwrap();
+    let src = src.unwrap();
+    df.set_cell(0, 1, "ANN".to_string()).unwrap();
+    let plan = db_write::build_plan(&src, &df).unwrap();
+    db_write::apply(&src, &plan).unwrap();
+    db_write::create_table(db_write::DbKind::DuckDb, path, "extra", &df).unwrap();
+
+    let (after, _) = load_duckdb_table_full(path, "users").unwrap();
+    assert_eq!(after.get_physical(0, 1), "ANN");
+    let names: Vec<String> = tuitab::data::io::db_containers(path)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert!(names.contains(&"extra".to_string()), "{:?}", names);
+}
+
+#[test]
+fn storage_new_file_is_written_in_the_1x_format() {
+    let src = duckdb_fixture("storage-src.duckdb");
+    let (df, _) = load_duckdb_table_full(&src, "users").unwrap();
+    let path = scratch("storage-new.duckdb");
+    db_write::create_table(db_write::DbKind::DuckDb, &path, "users", &df).unwrap();
+    assert_eq!(storage_version(&path), 64);
+}
+
+#[test]
+fn storage_1x_file_stays_1x_after_an_edit_and_a_new_table() {
+    let path = duckdb_fixture_1x("storage-1x.duckdb");
+    assert_eq!(storage_version(&path), 64);
+    edit_and_add_a_table(&path);
+    assert_eq!(storage_version(&path), 64);
+}
+
+#[test]
+fn storage_2x_file_stays_2x_after_an_edit_and_a_new_table() {
+    let path = duckdb_fixture("storage-2x.duckdb");
+    let before = storage_version(&path);
+    assert!(
+        before > 68,
+        "fixture must be in the 2.x format, got {}",
+        before
+    );
+    edit_and_add_a_table(&path);
+    assert_eq!(storage_version(&path), before);
+}
+
+/// A 1.x file whose last writes are still in the WAL, as a crash leaves it.  Takes a
+/// second process: within one process DuckDB shares the open database, so the WAL
+/// would never be replayed.
+#[test]
+fn storage_1x_file_with_a_pending_wal_is_read_whole() {
+    // Not scratch(): it deletes the file, and the child must not.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/db-write-tests/storage-wal.duckdb");
+    let wal = PathBuf::from(format!("{}.wal", path.display()));
+    if std::env::var("TUITAB_DUCK_WAL_CHILD").is_ok() {
+        let conn = open_duckdb_1x(&path);
+        conn.execute_batch(USERS_DDL).unwrap();
+        conn.execute_batch(
+            "CHECKPOINT;
+             SET wal_autocheckpoint = '1TB';
+             INSERT INTO users VALUES (5, 'eve', 50, NULL);",
+        )
+        .unwrap();
+        // No drop, no checkpoint: the insert stays in the WAL.
+        std::process::exit(0);
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&wal);
+
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "storage_1x_file_with_a_pending_wal_is_read_whole",
+            "--exact",
+        ])
+        .env("TUITAB_DUCK_WAL_CHILD", "1")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(wal.exists(), "the child must leave a WAL behind");
+
+    let (df, _) = load_duckdb_table_full(&path, "users").unwrap();
+    assert_eq!(df.df.height(), 5);
+    assert_eq!(storage_version(&path), 64);
+}
+
+#[test]
+fn storage_timestamptz_reads_the_same_as_under_duckdb_1x() {
+    let path = scratch("storage-tz.duckdb");
+    duckdb::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE t (ts TIMESTAMPTZ);
+             INSERT INTO t VALUES ('2024-03-10 12:34:56.789+03');",
+        )
+        .unwrap();
+    let (df, _) = load_duckdb_table_full(&path, "t").unwrap();
+    assert_eq!(df.get_physical(0, 0), "2024-03-10 09:34:56.789+00");
 }
 
 // ── Types the user assigns with `t` ───────────────────────────────────────────────
