@@ -152,6 +152,22 @@ To compare two columns, give a column where a constant would go:
 
 SQL's `HAVING` is a `filter` placed after `group_by`.
 
+An aggregate can read only some of its group's rows: give it a `where` — the
+same predicates `filter` takes, `any_of` and `not` included — and an `as` to
+name its column. Several such counters fit in one pass:
+
+```json
+{"group_by": {"by": ["day"], "agg": [
+  {"col": "*", "fn": "count"},
+  {"col": "*", "fn": "count", "as": "n503",
+   "where": [{"col": "response_code", "op": "contains", "value": "^503"}]},
+  {"col": "ms", "fn": "p95", "as": "slow_p95",
+   "where": [{"col": "ms", "op": "gt", "value": 1000}]}
+]}}
+```
+
+The same works in `aggregate`; `frequency` refuses it.
+
 `ops` may be left out entirely, and then the result is the table as it stands —
 which is what copying one file into another asks for.
 

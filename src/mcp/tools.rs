@@ -95,7 +95,10 @@ OPERATIONS for tuitab_query
       'not'.
   {\"group_by\": {\"by\":[\"region\"],\"agg\":[{\"col\":\"amount\",\"fn\":\"sum\"}]}}
       Exactly the aggregates you ask for. Result columns are named 'col:fn'. \
-      Use {\"col\":\"*\",\"fn\":\"count\"} for a row count.
+      Use {\"col\":\"*\",\"fn\":\"count\"} for a row count. A conditional \
+      aggregate reads only the rows its 'where' picks (filter predicates) and \
+      needs 'as': {\"col\":\"*\",\"fn\":\"count\",\"as\":\"n503\",\"where\":[...]} — \
+      several counters in one group_by. Also in aggregate, not in frequency.
   {\"aggregate\": [{\"col\":\"amount\",\"fn\":\"sum\"},{\"col\":\"*\",\"fn\":\"count\"}]}
       A grand total over every remaining row — one row out, no grouping.
   {\"frequency\": {\"by\":[\"product\"]}}

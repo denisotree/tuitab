@@ -24,12 +24,29 @@ pub struct AggSpec {
     /// A column name, or `*` for a row count.
     pub col: String,
     pub kind: AggregatorKind,
+    /// Aggregate only the rows these predicates pick — a conditional aggregate.
+    pub where_: Vec<crate::data::filter::Clause>,
+    /// The result column's name; required with `where_`, whose answers would
+    /// otherwise share one name.
+    pub as_name: Option<String>,
 }
 
 impl AggSpec {
-    /// The name the result column will carry: `salary:sum`, or plain `count`
-    /// for a row count.
+    pub fn new(col: impl Into<String>, kind: AggregatorKind) -> Self {
+        Self {
+            col: col.into(),
+            kind,
+            where_: Vec::new(),
+            as_name: None,
+        }
+    }
+
+    /// The name the result column will carry: `as` when given, else `salary:sum`,
+    /// or plain `count` for a row count.
     pub fn output_name(&self) -> String {
+        if let Some(name) = &self.as_name {
+            return name.clone();
+        }
         if self.col == "*" {
             self.kind.name().to_string()
         } else {
@@ -53,6 +70,22 @@ fn build_aggregates(
     let mut metas = Vec::with_capacity(agg.len());
 
     for spec in agg {
+        // The rows a conditional aggregate reads: the predicates as one mask, where a
+        // NULL verdict picks nothing.
+        let mask = if spec.where_.is_empty() {
+            None
+        } else {
+            let expr = crate::data::filter::clauses_to_expr(df, &spec.where_)?
+                .ok_or("an empty 'where' picks every row — leave it out")?;
+            for p in spec.where_.iter().flat_map(|c| c.predicates()) {
+                df.column_index(&p.col)?;
+            }
+            Some(
+                expr.to_polars_expr_with(Some(df.df.schema().as_ref()))?
+                    .fill_null(lit(false)),
+            )
+        };
+
         // A row count needs no source column.
         if spec.col == "*" {
             if spec.kind != AggregatorKind::Count {
@@ -62,7 +95,11 @@ fn build_aggregates(
                 ));
             }
             let alias = spec.output_name();
-            exprs.push(len().alias(alias.as_str()));
+            let counted = match &mask {
+                Some(m) => m.clone().cast(DataType::UInt32).sum(),
+                None => len(),
+            };
+            exprs.push(counted.alias(alias.as_str()));
             let mut meta = ColumnMeta::new(alias);
             meta.col_type = ColumnType::Integer;
             metas.push(meta);
@@ -81,7 +118,12 @@ fn build_aggregates(
             ));
         }
 
-        let expr = spec.kind.to_expr(&spec.col).ok_or_else(|| {
+        let target = crate::data::column_expr(&spec.col);
+        let target = match &mask {
+            Some(m) => target.filter(m.clone()),
+            None => target,
+        };
+        let expr = spec.kind.to_expr_of(target).ok_or_else(|| {
             format!(
                 "'{}' is not available as a group aggregate",
                 spec.kind.name()
@@ -190,6 +232,13 @@ pub fn frequency(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataF
     // error, not something to drop quietly on the way through.
     let mut aggregated: Vec<(usize, Vec<AggregatorKind>)> = Vec::new();
     for spec in agg {
+        if !spec.where_.is_empty() || spec.as_name.is_some() {
+            return Err(
+                "frequency takes plain aggregates; for one over some rows use group_by \
+                 with 'where' and 'as'"
+                    .to_string(),
+            );
+        }
         let idx = df.column_index(&spec.col)?;
         let source = &df.columns[idx];
         if !spec.kind.is_compatible(source.col_type) {

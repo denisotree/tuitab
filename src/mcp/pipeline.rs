@@ -453,9 +453,26 @@ fn parse_aggs(value: Option<&Value>) -> Result<Vec<AggSpec>, String> {
         .as_array()
         .ok_or_else(|| "'agg' must be a list of {col, fn} objects".to_string())?;
 
+    const AGG_KEYS: &[&str] = &["col", "fn", "where", "as"];
     array
         .iter()
         .map(|item| {
+            if let Some(obj) = item.as_object() {
+                for key in obj.keys() {
+                    if !AGG_KEYS.contains(&key.as_str()) {
+                        let hint = AGG_KEYS
+                            .iter()
+                            .find(|k| close_enough(key, k))
+                            .map(|k| format!(" (did you mean '{}'?)", k))
+                            .unwrap_or_default();
+                        return Err(format!(
+                            "an aggregate has no field '{}'{}. It takes: col, fn, and for \
+                             a conditional one where and as",
+                            key, hint
+                        ));
+                    }
+                }
+            }
             let col = required_str(item, "col")?;
             let name = required_str(item, "fn")?;
             let kind = AggregatorKind::all()
@@ -469,7 +486,24 @@ fn parse_aggs(value: Option<&Value>) -> Result<Vec<AggSpec>, String> {
                         name
                     )
                 })?;
-            Ok(AggSpec { col, kind })
+            let where_ = match item.get("where") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(w) => parse_predicates(w)?,
+            };
+            let as_name = item.get("as").and_then(Value::as_str).map(str::to_string);
+            if !where_.is_empty() && as_name.is_none() {
+                return Err(format!(
+                    "an aggregate with 'where' needs 'as', a name for its column — \
+                     {}:{} with a condition is a different number from without",
+                    col, name
+                ));
+            }
+            Ok(AggSpec {
+                col,
+                kind,
+                where_,
+                as_name,
+            })
         })
         .collect()
 }

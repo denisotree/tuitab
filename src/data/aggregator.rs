@@ -125,7 +125,12 @@ impl AggregatorKind {
 
     /// Map to Polars expression
     pub fn to_expr(self, col_name: &str) -> Option<polars::lazy::dsl::Expr> {
-        let c = crate::data::column_expr(col_name);
+        self.to_expr_of(crate::data::column_expr(col_name))
+    }
+
+    /// The aggregate over any expression of a column — a filtered one, for a
+    /// conditional aggregate.
+    pub fn to_expr_of(self, c: polars::lazy::dsl::Expr) -> Option<polars::lazy::dsl::Expr> {
         match self {
             Self::Count => Some(c.count()),
             Self::Distinct => Some(c.n_unique()),

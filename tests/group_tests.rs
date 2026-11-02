@@ -11,10 +11,7 @@ fn sample() -> DataFrame {
 }
 
 fn spec(col: &str, kind: AggregatorKind) -> AggSpec {
-    AggSpec {
-        col: col.to_string(),
-        kind,
-    }
+    AggSpec::new(col, kind)
 }
 
 fn number(df: &DataFrame, row: usize, col: &str) -> f64 {

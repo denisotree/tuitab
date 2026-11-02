@@ -1747,10 +1747,7 @@ impl App {
             .flat_map(|c| {
                 c.aggregators
                     .iter()
-                    .map(|kind| crate::data::group::AggSpec {
-                        col: c.name.clone(),
-                        kind: *kind,
-                    })
+                    .map(|kind| crate::data::group::AggSpec::new(c.name.clone(), *kind))
                     .collect::<Vec<_>>()
             })
             .collect();
