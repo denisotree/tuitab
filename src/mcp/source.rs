@@ -219,19 +219,9 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // listing — and then its extension.
     if crate::data::io::db_write::is_db(&source.path, source.format.as_deref()) {
         // The engine's refusal, not a count of zero: "holds 0 tables" sends the caller
-        // off to name a container in a file that will not open at all.  Named once: a
-        // refusal tuitab words itself (a locked file) already carries the path, the
-        // engine's own (a corrupt file) does not.
+        // off to name a container in a file that will not open at all.
         let n = io::db_containers(&source.path)
-            .map_err(|e| {
-                let shown = source.path.display().to_string();
-                let text = e.to_string();
-                if text.contains(&shown) {
-                    text
-                } else {
-                    format!("Could not open {}: {}", shown, text)
-                }
-            })?
+            .map_err(|e| name_once(&source.path, "Could not open", &e.to_string()))?
             .len();
         return Err(format!(
             "'{}' holds {} tables and views; pass 'container' to pick one. \
@@ -274,13 +264,27 @@ pub fn load_db_table(
         crate::data::io::db_write::DbKind::Sqlite => io::load_sqlite_table_full(path, container),
     }
     .map_err(|e| {
-        format!(
-            "Could not read '{}' from {}: {}",
-            container,
-            path.display(),
-            e
+        name_once(
+            path,
+            &format!("Could not read '{}' from", container),
+            &e.to_string(),
         )
     })
+}
+
+/// `"{lead} {path}: {text}"`, unless `text` already names the file.
+///
+/// A refusal tuitab words itself (a locked file) quotes the path, and so do DuckDB's
+/// own I/O errors; the engine's text for a corrupt file does not name it at all.  Only
+/// the quoted forms count: a short relative path such as `data` turns up inside
+/// "Corrupt database file" without naming anything.
+pub(crate) fn name_once(path: &Path, lead: &str, text: &str) -> String {
+    let shown = path.display().to_string();
+    if text.contains(&format!("'{}'", shown)) || text.contains(&format!("\"{}\"", shown)) {
+        text.to_string()
+    } else {
+        format!("{} {}: {}", lead, shown, text)
+    }
 }
 
 fn load_container(path: &Path, ext: &str, container: &str) -> Result<DataFrame, String> {
@@ -350,4 +354,35 @@ pub fn load_doc(source: &Source) -> Result<Doc, String> {
     })?;
     Doc::load(&source.path, format)
         .map_err(|e| format!("Could not read {}: {}", source.path.display(), e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::name_once;
+    use std::path::Path;
+
+    #[test]
+    fn a_short_path_inside_the_engine_text_is_still_named() {
+        // "data" occurs in "Corrupt database file" — that is not the file being named.
+        let msg = name_once(
+            Path::new("data"),
+            "Could not open",
+            "IO Error: Corrupt database file",
+        );
+        assert_eq!(msg, "Could not open data: IO Error: Corrupt database file");
+    }
+
+    #[test]
+    fn a_message_that_quotes_the_path_is_left_alone() {
+        let text = "'/x/db.duckdb' is open in another program";
+        assert_eq!(
+            name_once(Path::new("/x/db.duckdb"), "Could not open", text),
+            text
+        );
+        let text = "IO Error: Could not set lock on file \"/x/db.duckdb\"";
+        assert_eq!(
+            name_once(Path::new("/x/db.duckdb"), "Could not open", text),
+            text
+        );
+    }
 }

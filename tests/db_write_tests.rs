@@ -2605,15 +2605,25 @@ fn a_save_waits_for_another_writer_instead_of_failing() {
 
 /// DuckDB lets one process at a time near a file and has no timeout to wait with, so
 /// the only thing to get right is the sentence.  It takes a second process to provoke:
-/// within one process DuckDB shares the open database rather than refusing.
+/// within one process DuckDB shares the open database rather than refusing.  The child
+/// says when it holds the lock and keeps it until told, so a slow runner cannot let the
+/// parent in first.
 #[test]
 fn a_duckdb_file_held_by_another_process_says_so_plainly() {
-    let path = scratch("duck-second-writer.duckdb");
-    if std::env::var("TUITAB_DUCK_LOCK_CHILD").is_ok() {
-        let _held = duckdb::Connection::open(&path).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(3));
+    // The child gets the path from its parent: scratch() would delete the file.
+    if let Ok(held) = std::env::var("TUITAB_DUCK_LOCK_CHILD") {
+        let _held = duckdb::Connection::open(&held).unwrap();
+        let ready = PathBuf::from(format!("{}.ready", held));
+        std::fs::write(&ready, b"").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         return;
     }
+    let path = scratch("duck-second-writer.duckdb");
+    let ready = PathBuf::from(format!("{}.ready", path.display()));
+    let _ = std::fs::remove_file(&ready);
     {
         let conn = duckdb::Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -2627,17 +2637,29 @@ fn a_duckdb_file_held_by_another_process_says_so_plainly() {
             "a_duckdb_file_held_by_another_process_says_so_plainly",
             "--exact",
         ])
-        .env("TUITAB_DUCK_LOCK_CHILD", "1")
+        .env("TUITAB_DUCK_LOCK_CHILD", &path)
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never took the lock (renamed test? the child runs it by name)"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 
     let err = match load_duckdb_table_full(&path, "users") {
         Ok(_) => panic!("the child holds the file; the open should have been refused"),
         Err(e) => e.to_string(),
     };
-    let _ = child.wait();
+    std::fs::remove_file(&ready).unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "the child holding the lock failed; the parent saw: {}",
+        err
+    );
 
     assert!(err.contains("open in another program"), "{}", err);
     assert!(
@@ -2733,6 +2755,8 @@ fn storage_1x_file_with_a_pending_wal_is_read_whole() {
 
     let (df, _) = load_duckdb_table_full(&path, "users").unwrap();
     assert_eq!(df.df.height(), 5);
+    // After the load, not before: tuitab's read-write open replays the WAL into the
+    // file, and only then is there one file for the read-only check to look at.
     assert_eq!(storage_tag(&path), "v1.0.0+");
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&wal);

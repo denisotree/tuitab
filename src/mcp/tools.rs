@@ -960,7 +960,13 @@ fn write_result(
         crate::data::io::doc_io::Shape::Records,
         table,
     )
-    .map_err(|e| CallError::Failed(format!("Could not write {}: {}", path.display(), e)))?;
+    .map_err(|e| {
+        CallError::Failed(super::source::name_once(
+            path,
+            "Could not write",
+            &e.to_string(),
+        ))
+    })?;
 
     let mut written = json!({
         "written": path.to_string_lossy(),

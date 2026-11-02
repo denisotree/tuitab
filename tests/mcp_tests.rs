@@ -1853,18 +1853,27 @@ fn a_database_that_will_not_open_says_why_instead_of_holding_nothing() {
 }
 
 /// DuckDB lets one process at a time near a file; the refusal already names the file,
-/// so the MCP layer must not name it a second time.  Takes a second process: within
-/// one process DuckDB shares the open database rather than refusing.
+/// so the MCP layer must not name it a second time — with a container or without.
+/// Takes a second process: within one process DuckDB shares the open database rather
+/// than refusing.  The child says when it holds the lock and keeps it until told, so
+/// a slow runner cannot let the parent in first.
 #[test]
 fn a_locked_database_says_so_and_names_the_file_once() {
     if let Ok(held) = std::env::var("TUITAB_MCP_LOCK_CHILD") {
         let _conn = duckdb::Connection::open(&held).unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        let ready = PathBuf::from(format!("{}.ready", held));
+        std::fs::write(&ready, b"").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         return;
     }
     let mut server = Server::new();
     let path = tmp("mcp-locked.duckdb");
+    let ready = PathBuf::from(format!("{}.ready", path.display()));
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&ready);
     duckdb::Connection::open(&path)
         .unwrap()
         .execute_batch("CREATE TABLE users (id INTEGER); CHECKPOINT;")
@@ -1879,17 +1888,44 @@ fn a_locked_database_says_so_and_names_the_file_once() {
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the child never took the lock (renamed test? the child runs it by name)"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 
-    let err = call_expecting_failure(
-        &mut server,
-        "tuitab_query",
-        json!({"source": path.to_string_lossy()}),
+    let shown = path.to_string_lossy().into_owned();
+    let csv = tmp("mcp-locked-src.csv");
+    std::fs::write(&csv, "id\n1\n").unwrap();
+    let errs = [
+        call_expecting_failure(&mut server, "tuitab_query", json!({"source": shown})),
+        call_expecting_failure(
+            &mut server,
+            "tuitab_query",
+            json!({"source": {"path": shown, "container": "users"}}),
+        ),
+        // Writing a result into it: a new table beside `users`.
+        call_expecting_failure(
+            &mut server,
+            "tuitab_query",
+            json!({"source": csv.to_string_lossy(), "output": {"path": shown, "table": "extra"}}),
+        ),
+    ];
+    std::fs::remove_file(&ready).unwrap();
+    assert!(
+        child.wait().unwrap().success(),
+        "the child holding the lock failed; the parent saw: {:?}",
+        errs
     );
-    assert!(child.wait().unwrap().success());
-    assert!(err.contains("open in another program"), "{}", err);
-    assert_eq!(err.matches(&*path.to_string_lossy()).count(), 1, "{}", err);
+    for err in &errs {
+        assert!(err.contains("open in another program"), "{}", err);
+        assert_eq!(err.matches(&*shown).count(), 1, "{}", err);
+    }
     std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&csv).unwrap();
 }
 
 // ── The write gate on output.path ─────────────────────────────────────────────────
