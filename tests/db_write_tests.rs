@@ -69,11 +69,23 @@ fn duckdb_fixture_1x(name: &str) -> PathBuf {
     path
 }
 
-/// The storage version a DuckDB file was written with: a little-endian u64 right after
-/// the `DUCK` magic at offset 8.  DuckDB 1.x reads 64 to 68.
-fn storage_version(path: &Path) -> u64 {
-    let head = std::fs::read(path).unwrap();
-    u64::from_le_bytes(head[12..20].try_into().unwrap())
+/// The storage format of a DuckDB file as the engine itself reads it: `v1.0.0+` for a
+/// file DuckDB 1.x opens, `v2.0.0+` for one only 2.x does.  Not the version in the
+/// main header: DuckDB writes that once, at creation, so it cannot show a file being
+/// rewritten in another format.  Read-only, so asking changes nothing.
+fn storage_tag(path: &Path) -> String {
+    let cfg = duckdb::Config::default()
+        .access_mode(duckdb::AccessMode::ReadOnly)
+        .unwrap();
+    duckdb::Connection::open_with_flags(path, cfg)
+        .unwrap()
+        .query_row(
+            "SELECT tags['storage_version'] FROM duckdb_databases() \
+             WHERE database_name = current_database()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
 }
 
 fn open_sqlite(path: &Path) -> (tuitab::data::dataframe::DataFrame, TableSource) {
@@ -2662,28 +2674,27 @@ fn storage_new_file_is_written_in_the_1x_format() {
     let (df, _) = load_duckdb_table_full(&src, "users").unwrap();
     let path = scratch("storage-new.duckdb");
     db_write::create_table(db_write::DbKind::DuckDb, &path, "users", &df).unwrap();
-    assert_eq!(storage_version(&path), 64);
+    assert_eq!(storage_tag(&path), "v1.0.0+");
 }
 
 #[test]
 fn storage_1x_file_stays_1x_after_an_edit_and_a_new_table() {
     let path = duckdb_fixture_1x("storage-1x.duckdb");
-    assert_eq!(storage_version(&path), 64);
+    assert_eq!(storage_tag(&path), "v1.0.0+");
     edit_and_add_a_table(&path);
-    assert_eq!(storage_version(&path), 64);
+    assert_eq!(storage_tag(&path), "v1.0.0+");
 }
 
 #[test]
 fn storage_2x_file_stays_2x_after_an_edit_and_a_new_table() {
     let path = duckdb_fixture("storage-2x.duckdb");
-    let before = storage_version(&path);
-    assert!(
-        before > 68,
-        "fixture must be in the 2.x format, got {}",
-        before
+    assert_eq!(
+        storage_tag(&path),
+        "v2.0.0+",
+        "the fixture itself must be 2.x"
     );
     edit_and_add_a_table(&path);
-    assert_eq!(storage_version(&path), before);
+    assert_eq!(storage_tag(&path), "v2.0.0+");
 }
 
 /// A 1.x file whose last writes are still in the WAL, as a crash leaves it.  Takes a
@@ -2691,11 +2702,9 @@ fn storage_2x_file_stays_2x_after_an_edit_and_a_new_table() {
 /// would never be replayed.
 #[test]
 fn storage_1x_file_with_a_pending_wal_is_read_whole() {
-    // Not scratch(): it deletes the file, and the child must not.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/db-write-tests/storage-wal.duckdb");
-    let wal = PathBuf::from(format!("{}.wal", path.display()));
-    if std::env::var("TUITAB_DUCK_WAL_CHILD").is_ok() {
-        let conn = open_duckdb_1x(&path);
+    // The child gets the path from its parent: scratch() would delete the file.
+    if let Ok(child_path) = std::env::var("TUITAB_DUCK_WAL_CHILD") {
+        let conn = open_duckdb_1x(Path::new(&child_path));
         conn.execute_batch(USERS_DDL).unwrap();
         conn.execute_batch(
             "CHECKPOINT;
@@ -2706,8 +2715,8 @@ fn storage_1x_file_with_a_pending_wal_is_read_whole() {
         // No drop, no checkpoint: the insert stays in the WAL.
         std::process::exit(0);
     }
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let _ = std::fs::remove_file(&path);
+    let path = scratch("storage-wal.duckdb");
+    let wal = PathBuf::from(format!("{}.wal", path.display()));
     let _ = std::fs::remove_file(&wal);
 
     let status = std::process::Command::new(std::env::current_exe().unwrap())
@@ -2715,7 +2724,7 @@ fn storage_1x_file_with_a_pending_wal_is_read_whole() {
             "storage_1x_file_with_a_pending_wal_is_read_whole",
             "--exact",
         ])
-        .env("TUITAB_DUCK_WAL_CHILD", "1")
+        .env("TUITAB_DUCK_WAL_CHILD", &path)
         .stdout(std::process::Stdio::null())
         .status()
         .unwrap();
@@ -2724,7 +2733,9 @@ fn storage_1x_file_with_a_pending_wal_is_read_whole() {
 
     let (df, _) = load_duckdb_table_full(&path, "users").unwrap();
     assert_eq!(df.df.height(), 5);
-    assert_eq!(storage_version(&path), 64);
+    assert_eq!(storage_tag(&path), "v1.0.0+");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&wal);
 }
 
 #[test]

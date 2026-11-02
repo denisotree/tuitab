@@ -219,9 +219,19 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // listing — and then its extension.
     if crate::data::io::db_write::is_db(&source.path, source.format.as_deref()) {
         // The engine's refusal, not a count of zero: "holds 0 tables" sends the caller
-        // off to name a container in a file that will not open at all.
+        // off to name a container in a file that will not open at all.  Named once: a
+        // refusal tuitab words itself (a locked file) already carries the path, the
+        // engine's own (a corrupt file) does not.
         let n = io::db_containers(&source.path)
-            .map_err(|e| format!("Could not open {}: {}", source.path.display(), e))?
+            .map_err(|e| {
+                let shown = source.path.display().to_string();
+                let text = e.to_string();
+                if text.contains(&shown) {
+                    text
+                } else {
+                    format!("Could not open {}: {}", shown, text)
+                }
+            })?
             .len();
         return Err(format!(
             "'{}' holds {} tables and views; pass 'container' to pick one. \

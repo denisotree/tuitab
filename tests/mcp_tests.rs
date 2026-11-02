@@ -19,6 +19,23 @@ fn tmp(name: &str) -> PathBuf {
     dir.join(name)
 }
 
+/// The storage format of a DuckDB file as the engine reads it — `v1.0.0+` or
+/// `v2.0.0+`.  Read-only, so asking changes nothing.
+fn duckdb_storage_tag(path: &std::path::Path) -> String {
+    let cfg = duckdb::Config::default()
+        .access_mode(duckdb::AccessMode::ReadOnly)
+        .unwrap();
+    duckdb::Connection::open_with_flags(path, cfg)
+        .unwrap()
+        .query_row(
+            "SELECT tags['storage_version'] FROM duckdb_databases() \
+             WHERE database_name = current_database()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
 fn send(server: &mut Server, message: Value) -> Value {
     handle_message(server, &message.to_string()).expect("a request must get a response")
 }
@@ -1776,6 +1793,9 @@ fn a_duckdb_file_named_db_is_read_as_duckdb() {
         )
         .unwrap();
     }
+    // The engine's default format is what makes this a 2.x file; say so, so a change
+    // of default cannot quietly turn it into a 1.x test.
+    assert_eq!(duckdb_storage_tag(&path), "v2.0.0+");
 
     let listing = call(
         &mut server,
@@ -1802,6 +1822,10 @@ fn a_duckdb_file_named_db_is_read_as_duckdb() {
 /// A database the engine refuses — corrupt, or written by a newer DuckDB — used to be
 /// reported as holding no tables, and the error only surfaced once a container was
 /// named.  A DuckDB header with garbage after it is recognised as DuckDB and refused.
+///
+/// A file from a newer DuckDB cannot be faked here: the 2.x main header is
+/// checksummed, so editing its version number only yields "Corrupt database file".
+/// It takes the same path through the code as this one.
 #[test]
 fn a_database_that_will_not_open_says_why_instead_of_holding_nothing() {
     let mut server = Server::new();
@@ -1817,7 +1841,54 @@ fn a_database_that_will_not_open_says_why_instead_of_holding_nothing() {
             call_expecting_failure(&mut server, tool, json!({"source": path.to_string_lossy()}));
         assert!(!err.contains("holds 0 tables"), "{}: {}", tool, err);
         assert!(err.contains("Corrupt database file"), "{}: {}", tool, err);
+        assert_eq!(
+            err.matches(&*path.to_string_lossy()).count(),
+            1,
+            "{}: {}",
+            tool,
+            err
+        );
     }
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// DuckDB lets one process at a time near a file; the refusal already names the file,
+/// so the MCP layer must not name it a second time.  Takes a second process: within
+/// one process DuckDB shares the open database rather than refusing.
+#[test]
+fn a_locked_database_says_so_and_names_the_file_once() {
+    if let Ok(held) = std::env::var("TUITAB_MCP_LOCK_CHILD") {
+        let _conn = duckdb::Connection::open(&held).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        return;
+    }
+    let mut server = Server::new();
+    let path = tmp("mcp-locked.duckdb");
+    let _ = std::fs::remove_file(&path);
+    duckdb::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE users (id INTEGER); CHECKPOINT;")
+        .unwrap();
+
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "a_locked_database_says_so_and_names_the_file_once",
+            "--exact",
+        ])
+        .env("TUITAB_MCP_LOCK_CHILD", &path)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+
+    let err = call_expecting_failure(
+        &mut server,
+        "tuitab_query",
+        json!({"source": path.to_string_lossy()}),
+    );
+    assert!(child.wait().unwrap().success());
+    assert!(err.contains("open in another program"), "{}", err);
+    assert_eq!(err.matches(&*path.to_string_lossy()).count(), 1, "{}", err);
     std::fs::remove_file(&path).unwrap();
 }
 

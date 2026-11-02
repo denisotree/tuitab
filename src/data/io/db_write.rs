@@ -1406,9 +1406,9 @@ pub fn create_plan(
 
 /// Delete a database file and whatever the engine keeps beside it.
 ///
-/// `Connection::open` makes the file *before* the transaction, so a failed create would
-/// otherwise leave a zero-byte database behind — and the next attempt would see it
-/// exist, take the table-already-there branch, and behave differently from the first.
+/// Opening the connection makes the file *before* the transaction, so a failed create
+/// would otherwise leave a zero-byte database behind — and the next attempt would see
+/// it exist, take the table-already-there branch, and behave differently from the first.
 pub fn remove_new_file(path: &Path) {
     let _ = std::fs::remove_file(path);
     let name = path.to_string_lossy().into_owned();
