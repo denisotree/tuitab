@@ -29,6 +29,13 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
+      # duckdb-rs#935: the cache restores DuckDB's unpacked sources without the
+      # marker that says they are complete, and the bundled build then fails with
+      # "Directory not empty". Unpacking again takes seconds. Drop once fixed upstream.
+      - name: Drop cached DuckDB sources
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources
+
       - name: Build
         run: cargo build --all-targets --locked
 
@@ -44,6 +51,12 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # duckdb-rs#935: the cache restores DuckDB's unpacked sources without the
+      # marker that says they are complete, and the bundled build then fails with
+      # "Directory not empty". Unpacking again takes seconds. Drop once fixed upstream.
+      - name: Drop cached DuckDB sources
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources
       - run: cargo clippy --all-targets --locked -- -D warnings
 
   fmt:

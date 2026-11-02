@@ -52,6 +52,13 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      # duckdb-rs#935: the cache restores DuckDB's unpacked sources without the
+      # marker that says they are complete, and the bundled build then fails with
+      # "Directory not empty". Unpacking again takes seconds. Drop once fixed upstream.
+      - name: Drop cached DuckDB sources
+        shell: bash
+        run: rm -rf target/duckdb-sources target/*/duckdb-sources
+
       - name: Build
         env:
           CARGO_BUILD_JOBS: ${{ matrix.cargo_build_jobs || '2' }}
