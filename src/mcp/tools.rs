@@ -71,6 +71,10 @@ OPERATIONS for tuitab_query
                                 {\"col\":\"region\",\"op\":\"eq\",\"value\":\"South\"}]},
                     {\"col\":\"amount\",\"op\":\"gt\",\"value\":1000}]}
       reads as (North OR South) AND amount > 1000. One level of nesting only.
+      To negate, wrap a predicate or an any_of in not:
+        {\"filter\": [{\"not\": {\"col\":\"message\",\"op\":\"contains\",\"value\":\"https?://\"}}]}
+      keeps every row where it is not true — a row with nothing in the column \
+      is kept, so not and its filter add up to all rows. One level.
       To compare two columns, give a column instead of a constant:
         {\"col\":\"revenue\",\"op\":\"gt\",\"value\":{\"col\":\"cost\"}}
   {\"select\": [\"a\",\"b\"]}          keep these columns, in this order

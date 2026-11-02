@@ -402,16 +402,31 @@ pub fn parse_predicates(value: &Value) -> Result<Vec<Clause>, String> {
 
     items
         .into_iter()
-        .map(|item| match item.get("any_of") {
-            Some(Value::Array(group)) => group
-                .iter()
-                .map(parse_predicate)
-                .collect::<Result<Vec<_>, _>>()
-                .map(Clause::AnyOf),
-            Some(_) => Err("'any_of' takes an array of predicates".to_string()),
-            None => parse_predicate(item).map(Clause::One),
+        .map(|item| match item.get("not") {
+            Some(inner) => {
+                if inner.get("not").is_some() {
+                    return Err(
+                        "'not' goes one level deep, around a predicate or an 'any_of'".to_string(),
+                    );
+                }
+                parse_clause(inner).map(|c| Clause::Not(Box::new(c)))
+            }
+            None => parse_clause(item),
         })
         .collect()
+}
+
+/// A predicate, or an `any_of` group of them.
+fn parse_clause(item: &Value) -> Result<Clause, String> {
+    match item.get("any_of") {
+        Some(Value::Array(group)) => group
+            .iter()
+            .map(parse_predicate)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Clause::AnyOf),
+        Some(_) => Err("'any_of' takes an array of predicates".to_string()),
+        None => parse_predicate(item).map(Clause::One),
+    }
 }
 
 fn parse_aggs(value: Option<&Value>) -> Result<Vec<AggSpec>, String> {

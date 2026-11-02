@@ -99,6 +99,21 @@ pub struct Predicate {
 pub enum Clause {
     One(Predicate),
     AnyOf(Vec<Predicate>),
+    /// Rows where the inner clause is not true — one level, around a predicate or an
+    /// `any_of`.  A row whose column is NULL is kept: `not` and the filter it negates
+    /// together cover every row.
+    Not(Box<Clause>),
+}
+
+impl Clause {
+    /// The predicates this clause reads, for checking their columns up front.
+    pub fn predicates(&self) -> &[Predicate] {
+        match self {
+            Clause::One(p) => std::slice::from_ref(p),
+            Clause::AnyOf(list) => list,
+            Clause::Not(inner) => inner.predicates(),
+        }
+    }
 }
 
 // ── Compiling predicates to expressions ─────────────────────────────────────
@@ -279,22 +294,7 @@ pub fn clauses_to_expr(df: &DataFrame, clauses: &[Clause]) -> Result<Option<Expr
     let mut combined: Option<Expr> = None;
 
     for clause in clauses {
-        let expr = match clause {
-            Clause::One(p) => p.to_expr(df)?,
-            Clause::AnyOf(predicates) => {
-                let mut any: Option<Expr> = None;
-                for p in predicates {
-                    let e = p.to_expr(df)?;
-                    any = Some(match any {
-                        Some(acc) => binop(Op::Or, acc, e),
-                        None => e,
-                    });
-                }
-                // An empty `any_of` matches nothing, which is the honest answer
-                // to "any of no things".
-                any.unwrap_or(Expr::Literal(Value::Boolean(false)))
-            }
-        };
+        let expr = clause_to_expr(df, clause)?;
         combined = Some(match combined {
             Some(acc) => binop(Op::And, acc, expr),
             None => expr,
@@ -302,6 +302,35 @@ pub fn clauses_to_expr(df: &DataFrame, clauses: &[Clause]) -> Result<Option<Expr
     }
 
     Ok(combined)
+}
+
+fn clause_to_expr(df: &DataFrame, clause: &Clause) -> Result<Expr, String> {
+    Ok(match clause {
+        Clause::One(p) => p.to_expr(df)?,
+        Clause::AnyOf(predicates) => {
+            let mut any: Option<Expr> = None;
+            for p in predicates {
+                let e = p.to_expr(df)?;
+                any = Some(match any {
+                    Some(acc) => binop(Op::Or, acc, e),
+                    None => e,
+                });
+            }
+            // An empty `any_of` matches nothing, which is the honest answer
+            // to "any of no things".
+            any.unwrap_or(Expr::Literal(Value::Boolean(false)))
+        }
+        Clause::Not(inner) => {
+            // NOT x OR x IS NULL: a NULL verdict — the column was empty — counts as
+            // "not true" rather than staying NULL and dropping the row.
+            let e = clause_to_expr(df, inner)?;
+            binop(
+                Op::Or,
+                Expr::Not(Box::new(e.clone())),
+                Expr::IsNull(Box::new(e)),
+            )
+        }
+    })
 }
 
 // ── Evaluating ──────────────────────────────────────────────────────────────
@@ -408,11 +437,7 @@ pub fn select_rows(df: &DataFrame, expr: &Expr, fallback: Fallback) -> Result<Ve
 /// in display order — ready to become a new `row_order`.
 pub fn matching_rows(df: &DataFrame, clauses: &[Clause]) -> Result<Vec<usize>, String> {
     for clause in clauses {
-        let predicates: &[Predicate] = match clause {
-            Clause::One(p) => std::slice::from_ref(p),
-            Clause::AnyOf(list) => list,
-        };
-        for p in predicates {
+        for p in clause.predicates() {
             df.column_index(&p.col)?;
             if let Operand::Column(other) = &p.value {
                 df.column_index(other)?;

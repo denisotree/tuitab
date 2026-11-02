@@ -449,6 +449,74 @@ fn any_of_gives_the_filter_an_or() {
     assert_eq!(narrowed["row_count"], 1, "only Noah Martin, 44");
 }
 
+/// `not` is "where the predicate is not true", so a row with nothing in the column is
+/// kept: `not` and the filter it negates add up to every row.
+#[test]
+fn not_keeps_rows_where_the_predicate_is_not_true() {
+    let path = tmp("not_filter.csv");
+    std::fs::write(
+        &path,
+        "id,msg\n1,see http://a\n2,plain\n3,\n4,also https://b\n",
+    )
+    .unwrap();
+    let mut server = Server::new();
+    let out = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"filter": {"not": {"col": "msg", "op": "contains", "value": "https?://"}}}
+        ]}),
+    );
+    assert_eq!(out["row_count"], 2, "{}", out);
+    assert_eq!(cell(&out, 0, "id"), json!(2));
+    assert_eq!(
+        cell(&out, 1, "id"),
+        json!(3),
+        "the row with no msg is not a match"
+    );
+
+    let none_of = call(
+        &mut server,
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"filter": [{"not": {"any_of": [
+                {"col": "id", "op": "eq", "value": 1},
+                {"col": "id", "op": "eq", "value": 4}
+            ]}}]}
+        ]}),
+    );
+    assert_eq!(none_of["row_count"], 2);
+}
+
+#[test]
+fn not_inside_not_is_refused() {
+    let path = tmp("not_nested.csv");
+    std::fs::write(&path, "id\n1\n").unwrap();
+    let err = call_expecting_failure(
+        &mut Server::new(),
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"filter": {"not": {"not": {"col": "id", "op": "eq", "value": 1}}}}
+        ]}),
+    );
+    assert!(err.contains("one level"), "{}", err);
+}
+
+#[test]
+fn a_write_where_can_say_not() {
+    let mut server = writable_server();
+    let db = db_fixture("where_not.sqlite");
+    let out = call(
+        &mut server,
+        "tuitab_write",
+        json!({"source": {"path": db.to_string_lossy(), "container": "users"},
+               "set": {"name": "X"},
+               "where": [{"not": {"col": "id", "op": "eq", "value": 1}}]}),
+    );
+    assert_eq!(out["rows_matched"], 2, "{}", out);
+    std::fs::remove_file(&db).unwrap();
+}
+
 #[test]
 fn a_predicate_can_name_another_column_as_its_value() {
     let mut server = Server::new();

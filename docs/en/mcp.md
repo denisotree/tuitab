@@ -130,6 +130,16 @@ For OR, wrap alternatives in `any_of`:
 
 which reads as `(North OR South) AND amount > 1000`. One level of nesting.
 
+To negate, wrap a predicate — or an `any_of` — in `not`:
+
+```json
+{"filter": [{"not": {"col": "message", "op": "contains", "value": "https?://"}}]}
+```
+
+It keeps every row where the predicate is not true. A row with nothing in the
+column is kept, so `not` and the filter it negates add up to every row. One
+level: `not` inside `not` is refused. The same works in `tuitab_write`'s `where`.
+
 To compare two columns, give a column where a constant would go:
 
 ```json
