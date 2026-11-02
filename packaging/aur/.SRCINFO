@@ -9,6 +9,6 @@ pkgbase = tuitab
 	makedepends = rust
 	makedepends = cargo
 	source = tuitab-0.11.0.tar.gz::https://github.com/denisotree/tuitab/archive/refs/tags/v0.11.0.tar.gz
-	sha256sums = SKIP
+	sha256sums = 6c3cfaf42b31b8908d60840b259b856296ecd3e6c2be1b027eafbd0539b3d619
 
 pkgname = tuitab
