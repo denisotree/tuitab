@@ -177,7 +177,101 @@ pub const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("log", 2, 2),
     ("regexp_replace", 3, 3),
     ("regexp_extract", 2, 3),
+    ("from_epoch", 2, 2),
+    ("time_bucket", 2, 2),
 ];
+
+/// Which kind of time a sub-expression produces, when the frame's types say.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Temporal {
+    Date,
+    Datetime,
+}
+
+fn temporal_kind(e: &Expr, schema: Option<&polars::prelude::Schema>) -> Option<Temporal> {
+    use polars::prelude::DataType;
+    match e {
+        Expr::ColumnRef(name) => match schema?.get(name.as_str())? {
+            DataType::Date => Some(Temporal::Date),
+            DataType::Datetime(_, _) => Some(Temporal::Datetime),
+            _ => None,
+        },
+        Expr::FunctionCall { name, args } => match name.as_str() {
+            "from_epoch" => Some(Temporal::Datetime),
+            "time_bucket" => temporal_kind(args.first()?, schema),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `from_epoch`'s unit: `"s"`, `"ms"`, `"us"` or `"ns"`, in quotes.
+fn epoch_unit_of(arg: &Expr) -> Result<crate::data::column::EpochUnit, String> {
+    match arg {
+        Expr::Literal(Value::String(u)) => {
+            crate::data::column::EpochUnit::parse(u).ok_or_else(|| {
+                format!(
+                    "from_epoch(): unit is \"s\", \"ms\", \"us\" or \"ns\", got {:?}",
+                    u
+                )
+            })
+        }
+        _ => Err(
+            "from_epoch() needs its unit in quotes: \"s\", \"ms\", \"us\" or \"ns\"".to_string(),
+        ),
+    }
+}
+
+/// `time_bucket`'s width: a whole number of seconds, minutes, hours or days in quotes,
+/// as `"10m"`, `"1h"`, `"1d"`.  Returned in the form Polars reads.
+fn bucket_of(arg: &Expr) -> Result<String, String> {
+    let ok = |w: &str| {
+        let (n, unit) = w.split_at(w.len().saturating_sub(1));
+        !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+            && n.parse::<u32>().is_ok_and(|v| v > 0)
+            && matches!(unit, "s" | "m" | "h" | "d")
+    };
+    match arg {
+        Expr::Literal(Value::String(w)) if ok(w) => Ok(w.clone()),
+        _ => Err(
+            "time_bucket() takes a width in quotes: a whole number of s, m, h or d, as \"10m\" or \"1h\""
+                .to_string(),
+        ),
+    }
+}
+
+/// The bucket width in nanoseconds, for the row-by-row path.
+fn bucket_nanos(w: &str) -> i64 {
+    let (n, unit) = w.split_at(w.len() - 1);
+    let n: i64 = n.parse().unwrap_or(1);
+    n * match unit {
+        "s" => 1_000_000_000,
+        "m" => 60_000_000_000,
+        "h" => 3_600_000_000_000,
+        _ => 86_400_000_000_000,
+    }
+}
+
+fn epoch_to_datetime(
+    x: polars::lazy::dsl::Expr,
+    unit: crate::data::column::EpochUnit,
+) -> polars::lazy::dsl::Expr {
+    use crate::data::column::EpochUnit;
+    use polars::prelude::{DataType, RoundMode, TimeUnit};
+    let whole = |e: polars::lazy::dsl::Expr| {
+        e.cast(DataType::Float64)
+            .round(0, RoundMode::HalfAwayFromZero)
+            .cast(DataType::Int64)
+    };
+    match unit {
+        EpochUnit::Seconds => whole(x * polars::lazy::dsl::lit(1000.0))
+            .cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
+        EpochUnit::Millis => whole(x).cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
+        EpochUnit::Micros => whole(x).cast(DataType::Datetime(TimeUnit::Microseconds, None)),
+        EpochUnit::Nanos => whole(x).cast(DataType::Datetime(TimeUnit::Nanoseconds, None)),
+    }
+}
 
 /// The pattern argument of a regex function: a text literal that compiles.
 fn regex_literal(name: &str, arg: &Expr) -> Result<regex::Regex, String> {
@@ -307,6 +401,12 @@ impl Expr {
                         let re = regex_literal(name, &args[1])?;
                         group_of(args, &re)?;
                     }
+                    "from_epoch" => {
+                        epoch_unit_of(&args[1])?;
+                    }
+                    "time_bucket" => {
+                        bucket_of(&args[1])?;
+                    }
                     _ => {}
                 }
                 args.iter().try_for_each(|a| a.check_functions())
@@ -397,6 +497,15 @@ impl Expr {
     /// Try to translate AST into Polars lazy expression.
     /// Returns Err if the operation is not supported (triggers fallback execution).
     pub fn to_polars_expr(&self) -> Result<polars::lazy::dsl::Expr, String> {
+        self.to_polars_expr_with(None)
+    }
+
+    /// The column types of the frame let the date functions lower too: `hour(ts)` on a
+    /// datetime column is vectorised, while on text it still parses row by row.
+    pub fn to_polars_expr_with(
+        &self,
+        schema: Option<&polars::prelude::Schema>,
+    ) -> Result<polars::lazy::dsl::Expr, String> {
         match self {
             Expr::ColumnRef(name) => Ok(crate::data::column_expr(name.as_str())),
             Expr::Literal(val) => match val {
@@ -415,8 +524,8 @@ impl Expr {
                 Value::Null => Ok(polars::lazy::dsl::lit(polars::prelude::Null {})),
             },
             Expr::BinOp { op, left, right } => {
-                let l = left.to_polars_expr()?;
-                let r = right.to_polars_expr()?;
+                let l = left.to_polars_expr_with(schema)?;
+                let r = right.to_polars_expr_with(schema)?;
                 Ok(match op {
                     Op::Add => l + r,
                     Op::Sub => l - r,
@@ -435,10 +544,10 @@ impl Expr {
                     Op::Or => l.or(r),
                 })
             }
-            Expr::Not(inner) => Ok(inner.to_polars_expr()?.not()),
-            Expr::IsNull(inner) => Ok(inner.to_polars_expr()?.is_null()),
+            Expr::Not(inner) => Ok(inner.to_polars_expr_with(schema)?.not()),
+            Expr::IsNull(inner) => Ok(inner.to_polars_expr_with(schema)?.is_null()),
             Expr::InList { left, list } => {
-                let l = left.to_polars_expr()?;
+                let l = left.to_polars_expr_with(schema)?;
                 let mut polars_list = Vec::new();
                 for item in list {
                     // Only support literals in Polars is_in for now
@@ -469,47 +578,47 @@ impl Expr {
                 then_branch,
                 else_branch,
             } => {
-                let c = cond.to_polars_expr()?;
-                let t = then_branch.to_polars_expr()?;
-                let e = else_branch.to_polars_expr()?;
+                let c = cond.to_polars_expr_with(schema)?;
+                let t = then_branch.to_polars_expr_with(schema)?;
+                let e = else_branch.to_polars_expr_with(schema)?;
                 Ok(polars::lazy::dsl::when(c).then(t).otherwise(e))
             }
             Expr::FunctionCall { name, args } => match name.as_str() {
                 "len" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .str()
                     .len_chars()
                     .cast(polars::prelude::DataType::Int64)),
                 "sum" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .sum()
                     .cast(polars::prelude::DataType::Float64)),
                 "count" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .count()
                     .cast(polars::prelude::DataType::Float64)),
                 "mean" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .mean()
                     .cast(polars::prelude::DataType::Float64)),
                 "max" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .max()
                     .cast(polars::prelude::DataType::Float64)),
                 "min" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .min()
                     .cast(polars::prelude::DataType::Float64)),
                 // Casting to text so a value of any type can be compared with
                 // a string — polars refuses `numeric == ""` outright.
                 "text" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr()?
+                    .to_polars_expr_with(schema)?
                     .cast(polars::prelude::DataType::String)),
                 // The pattern has to be a literal: a per-row regex would mean
                 // recompiling it for every row, and no caller wants that.
                 "contains" if args.len() == 2 => match &args[1] {
                     Expr::Literal(Value::String(pattern)) => Ok(args[0]
-                        .to_polars_expr()?
+                        .to_polars_expr_with(schema)?
                         .cast(polars::prelude::DataType::String)
                         .str()
                         .contains(polars::lazy::dsl::lit(pattern.clone()), true)),
@@ -519,7 +628,7 @@ impl Expr {
                 },
                 "abs" | "round" | "floor" | "ceil" | "sqrt" | "exp" | "ln" | "log10" | "log" => {
                     let x = args[0]
-                        .to_polars_expr()?
+                        .to_polars_expr_with(schema)?
                         .cast(polars::prelude::DataType::Float64);
                     let e = std::f64::consts::E;
                     Ok(finite_or_null(match name.as_str() {
@@ -539,7 +648,7 @@ impl Expr {
                         "log10" => x.log(polars::lazy::dsl::lit(10.0)),
                         _ => {
                             let base = args[1]
-                                .to_polars_expr()?
+                                .to_polars_expr_with(schema)?
                                 .cast(polars::prelude::DataType::Float64);
                             x.log(polars::lazy::dsl::lit(e)) / base.log(polars::lazy::dsl::lit(e))
                         }
@@ -549,7 +658,7 @@ impl Expr {
                     let pattern = regex_literal(name, &args[1])?;
                     let rep = replacement_of(name, &args[2])?;
                     Ok(args[0]
-                        .to_polars_expr()?
+                        .to_polars_expr_with(schema)?
                         .cast(polars::prelude::DataType::String)
                         .str()
                         .replace_all(
@@ -562,10 +671,42 @@ impl Expr {
                     let pattern = regex_literal(name, &args[1])?;
                     let group = group_of(args, &pattern)?;
                     Ok(args[0]
-                        .to_polars_expr()?
+                        .to_polars_expr_with(schema)?
                         .cast(polars::prelude::DataType::String)
                         .str()
                         .extract(polars::lazy::dsl::lit(pattern.as_str().to_string()), group))
+                }
+                "from_epoch" => {
+                    let unit = epoch_unit_of(&args[1])?;
+                    let x = args[0].to_polars_expr_with(schema)?;
+                    Ok(epoch_to_datetime(x, unit))
+                }
+                "time_bucket" => {
+                    let every = bucket_of(&args[1])?;
+                    let dt = args[0].to_polars_expr_with(schema)?;
+                    Ok(dt.dt().truncate(polars::lazy::dsl::lit(every)))
+                }
+                "year" | "month" | "day" | "hour" | "minute" | "date_format"
+                    if temporal_kind(&args[0], schema).is_some() =>
+                {
+                    let kind = temporal_kind(&args[0], schema).unwrap_or(Temporal::Date);
+                    let d = args[0].to_polars_expr_with(schema)?;
+                    let int = polars::prelude::DataType::Int64;
+                    match name.as_str() {
+                        "year" => Ok(d.dt().year().cast(int)),
+                        "month" => Ok(d.dt().month().cast(int)),
+                        "day" => Ok(d.dt().day().cast(int)),
+                        // A date has no time of day; the row path answers NULL for it.
+                        "hour" | "minute" if kind == Temporal::Date => {
+                            Err(format!("{}() of a date is NULL row by row", name))
+                        }
+                        "hour" => Ok(d.dt().hour().cast(int)),
+                        "minute" => Ok(d.dt().minute().cast(int)),
+                        _ => match &args[1] {
+                            Expr::Literal(Value::String(fmt)) => Ok(d.dt().strftime(fmt)),
+                            _ => Err("date_format() needs its pattern in quotes".to_string()),
+                        },
+                    }
                 }
                 "year" | "month" | "day" | "hour" | "minute" | "today" | "now" | "date_format" => {
                     Err(format!("Function '{}' requires slow-path evaluation", name))
@@ -924,6 +1065,54 @@ impl Expr {
                             re.captures(&text)
                                 .and_then(|c| c.get(group))
                                 .map_or(Value::Null, |m| Value::String(m.as_str().to_string()))
+                        }
+                    }
+                    "from_epoch" => {
+                        let (Some(x), Ok(unit)) =
+                            (evaluated_args[0].as_f64(), epoch_unit_of(&args[1]))
+                        else {
+                            return Value::Null;
+                        };
+                        // As Polars does it: round to the unit (to milliseconds for
+                        // seconds), then scale in integers, so 13-digit milliseconds do
+                        // not lose their last digits to a float.
+                        use crate::data::column::EpochUnit;
+                        let (count, scale) = match unit {
+                            EpochUnit::Seconds => ((x * 1000.0).round(), 1_000_000i64),
+                            other => (x.round(), other.nanos()),
+                        };
+                        if !count.is_finite() || count.abs() >= i64::MAX as f64 {
+                            return Value::Null;
+                        }
+                        match (count as i64).checked_mul(scale) {
+                            Some(ns) => Value::Datetime(
+                                chrono::DateTime::from_timestamp_nanos(ns).naive_utc(),
+                            ),
+                            None => Value::Null,
+                        }
+                    }
+                    "time_bucket" => {
+                        let Ok(every) = bucket_of(&args[1]) else {
+                            return Value::Null;
+                        };
+                        let step = bucket_nanos(&every);
+                        match &evaluated_args[0] {
+                            Value::Datetime(dt) => match dt.and_utc().timestamp_nanos_opt() {
+                                Some(ns) => Value::Datetime(
+                                    chrono::DateTime::from_timestamp_nanos(
+                                        ns - ns.rem_euclid(step),
+                                    )
+                                    .naive_utc(),
+                                ),
+                                None => Value::Null,
+                            },
+                            Value::Date(d) if every.ends_with('d') => {
+                                let days = step / 86_400_000_000_000;
+                                let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+                                let n = (*d - epoch).num_days();
+                                Value::Date(epoch + chrono::Duration::days(n - n.rem_euclid(days)))
+                            }
+                            _ => Value::Null,
                         }
                     }
                     "today" => Value::Date(chrono::Local::now().naive_local().date()),
@@ -2200,6 +2389,119 @@ mod tests {
             "regexp_extract(s, \"(a)\", 2)",
             "regexp_extract(s, \"(a)\", -1)",
             "regexp_extract(s, \"(a)\", 0.5)",
+        ] {
+            assert!(super::Expr::parse(e).is_err(), "{} should be refused", e);
+        }
+    }
+
+    /// Evaluate on both paths and read every result back as the text a cell shows.
+    fn shown_on_both_paths(
+        expr: &str,
+        df: &crate::data::dataframe::DataFrame,
+        lookup: &HashMap<&str, usize>,
+    ) -> (Vec<String>, Vec<String>) {
+        use polars::prelude::IntoLazy;
+        let parsed = super::Expr::parse(expr).expect("expression must parse");
+        let lowered = parsed
+            .to_polars_expr_with(Some(df.df.schema().as_ref()))
+            .unwrap_or_else(|e| panic!("{} must lower to Polars: {}", expr, e));
+        let fast = df
+            .df
+            .clone()
+            .lazy()
+            .select([lowered.alias("m")])
+            .collect()
+            .expect("must evaluate");
+        let col = fast.column("m").unwrap().as_materialized_series().clone();
+        let fast: Vec<String> = (0..col.len())
+            .map(|i| match col.get(i).unwrap() {
+                polars::prelude::AnyValue::Datetime(v, tu, _) => {
+                    let nanos = match tu {
+                        polars::prelude::TimeUnit::Nanoseconds => v,
+                        polars::prelude::TimeUnit::Microseconds => v * 1_000,
+                        polars::prelude::TimeUnit::Milliseconds => v * 1_000_000,
+                    };
+                    chrono::DateTime::from_timestamp_nanos(nanos)
+                        .naive_utc()
+                        .to_string()
+                }
+                polars::prelude::AnyValue::Null => String::new(),
+                polars::prelude::AnyValue::String(t) => t.to_string(),
+                polars::prelude::AnyValue::StringOwned(t) => t.to_string(),
+                other => other.to_string(),
+            })
+            .collect();
+        let slow: Vec<String> = (0..df.df.height())
+            .map(|row| match parsed.eval(row, lookup, df) {
+                Value::Null => String::new(),
+                Value::Number(n) if n.fract() == 0.0 => format!("{}", n as i64),
+                other => other.to_string(),
+            })
+            .collect();
+        (fast, slow)
+    }
+
+    fn epochs(
+        ms: &[i64],
+    ) -> (
+        crate::data::dataframe::DataFrame,
+        HashMap<&'static str, usize>,
+    ) {
+        let df =
+            polars::prelude::DataFrame::new_infer_height(vec![Series::new("t".into(), ms).into()])
+                .unwrap();
+        let mut tui_df = crate::data::dataframe::DataFrame::empty();
+        tui_df.df = df;
+        (tui_df, [("t", 0)].into_iter().collect())
+    }
+
+    #[test]
+    fn from_epoch_and_time_bucket() {
+        let (df, lookup) = epochs(&[1787569800000, 1787571412345]);
+        let cases: &[(&str, [&str; 2])] = &[
+            (
+                "from_epoch(t, \"ms\")",
+                ["2026-08-24 11:10:00", "2026-08-24 11:36:52.345"],
+            ),
+            (
+                "from_epoch(t / 1000, \"s\")",
+                ["2026-08-24 11:10:00", "2026-08-24 11:36:52.345"],
+            ),
+            (
+                "time_bucket(from_epoch(t, \"ms\"), \"1h\")",
+                ["2026-08-24 11:00:00", "2026-08-24 11:00:00"],
+            ),
+            (
+                "time_bucket(from_epoch(t, \"ms\"), \"10m\")",
+                ["2026-08-24 11:10:00", "2026-08-24 11:30:00"],
+            ),
+            (
+                "time_bucket(from_epoch(t, \"ms\"), \"1d\")",
+                ["2026-08-24 00:00:00", "2026-08-24 00:00:00"],
+            ),
+            ("hour(from_epoch(t, \"ms\"))", ["11", "11"]),
+            ("minute(from_epoch(t, \"ms\"))", ["10", "36"]),
+            ("year(from_epoch(t, \"ms\"))", ["2026", "2026"]),
+            (
+                "date_format(from_epoch(t, \"ms\"), \"%H:%M\")",
+                ["11:10", "11:36"],
+            ),
+        ];
+        for (expr, want) in cases {
+            let (fast, slow) = shown_on_both_paths(expr, &df, &lookup);
+            assert_eq!(fast, want.to_vec(), "{} on polars", expr);
+            assert_eq!(slow, want.to_vec(), "{} row by row", expr);
+        }
+    }
+
+    #[test]
+    fn time_functions_refuse_what_they_cannot_read() {
+        for e in [
+            "from_epoch(t, \"minutes\")",
+            "from_epoch(t, u)",
+            "time_bucket(t, \"1mo\")",
+            "time_bucket(t, \"often\")",
+            "time_bucket(t, u)",
         ] {
             assert!(super::Expr::parse(e).is_err(), "{} should be refused", e);
         }

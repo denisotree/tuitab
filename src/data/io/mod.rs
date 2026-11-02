@@ -165,7 +165,7 @@ pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> 
     // A named format is read as exactly that, with no sniffing: the user has said what
     // the file is, which is the whole point of `--type csv export.dat`.
     let (df, doc) = if forced.is_some() {
-        let df = load_tabular(path, delimiter, &ext)
+        let df = load_tabular(path, &LoadOpts::with_delimiter(delimiter), &ext)
             .map_err(|e| eyre!("Could not read {} as {}: {}", path.display(), ext, e))?;
         (df, None)
     } else {
@@ -237,6 +237,8 @@ pub fn load_pattern(
     // does not match means the pattern caught a file it should not have, and saying so
     // is worth more than a sparse frame.
     let names: Vec<&str> = head.columns.iter().map(|c| c.name.as_str()).collect();
+    let head_epochs: Vec<Option<crate::data::column::EpochUnit>> =
+        head.columns.iter().map(|c| c.epoch_unit).collect();
     let mut frames = vec![head.df.clone()];
     for path in rest {
         let next = one(path)?;
@@ -277,9 +279,44 @@ pub fn load_pattern(
         }
         stacked
     };
-    let df = wrap_polars_df(combined)
+    let mut df = wrap_polars_df(combined)
         .map_err(|e| eyre!("{} matched {} files: {}", pattern, files.len(), e))?;
+    // The files were read one by one, each with its epoch columns shown as datetimes;
+    // the stacked frame keeps the units so it saves back the way a single file does.
+    for (meta, first_meta) in df.columns.iter_mut().zip(&head_epochs) {
+        if let Some(unit) = first_meta {
+            if meta.col_type == ColumnType::Datetime {
+                meta.epoch_unit = Some(*unit);
+            }
+        }
+    }
     Ok((df, files.len()))
+}
+
+/// How a file is read: the CSV delimiter, and whether integer epoch columns are shown
+/// as datetimes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadOpts {
+    pub delimiter: Option<u8>,
+    pub detect_epoch: bool,
+}
+
+impl Default for LoadOpts {
+    fn default() -> Self {
+        Self {
+            delimiter: None,
+            detect_epoch: true,
+        }
+    }
+}
+
+impl LoadOpts {
+    pub fn with_delimiter(delimiter: Option<u8>) -> Self {
+        Self {
+            delimiter,
+            ..Self::default()
+        }
+    }
 }
 
 pub fn load_file_as(
@@ -287,11 +324,20 @@ pub fn load_file_as(
     delimiter: Option<u8>,
     forced: Option<crate::data::doc::Format>,
 ) -> Result<(DataFrame, Option<doc_io::DocState>)> {
+    load_file_as_opts(path, &LoadOpts::with_delimiter(delimiter), forced)
+}
+
+pub fn load_file_as_opts(
+    path: &Path,
+    opts: &LoadOpts,
+    forced: Option<crate::data::doc::Format>,
+) -> Result<(DataFrame, Option<doc_io::DocState>)> {
+    let delimiter = opts.delimiter;
     // The header before the name, and before the sniffer below: a database stored as
     // `db` or `.aup3` would otherwise be read in full by `read_to_string`, then parsed
     // as CSV.
     if forced.is_none() && db_write::kind_of_file(path).is_some() {
-        return load_tabular(path, delimiter, "db").map(|df| (df, None));
+        return load_tabular(path, opts, "db").map(|df| (df, None));
     }
 
     let ext = path
@@ -338,11 +384,94 @@ pub fn load_file_as(
         }
     }
 
-    load_tabular(path, delimiter, &ext).map(|df| (df, None))
+    let _ = delimiter;
+    load_tabular(path, opts, &ext).map(|df| (df, None))
 }
 
 /// Read a file as `ext` says, whatever it happens to be called.
-pub(crate) fn load_tabular(path: &Path, delimiter: Option<u8>, ext: &str) -> Result<DataFrame> {
+///
+/// Integer epoch columns of a table file are shown as datetimes here (see
+/// [`detect_epoch`]); documents — JSON, YAML, TOML, markdown — are not touched, because
+/// their table is rebuilt from the tree after every edit and a column would change type
+/// under the user.
+pub(crate) fn load_tabular(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
+    let mut df = load_tabular_raw(path, opts.delimiter, ext)?;
+    if opts.detect_epoch
+        && matches!(
+            ext,
+            "csv" | "tsv" | "parquet" | "arrow" | "feather" | "ipc" | "xlsx" | "xls"
+        )
+    {
+        detect_epoch(&mut df);
+    }
+    Ok(df)
+}
+
+/// Integer columns named like a time whose every value is an epoch in one unit become
+/// datetimes (UTC); the unit is kept on the column, so a save writes the integers back
+/// and retyping to Integer restores them.
+pub fn detect_epoch(df: &mut DataFrame) {
+    use crate::data::column::{names_a_time, EpochUnit};
+    for idx in 0..df.columns.len() {
+        if df.columns[idx].col_type != ColumnType::Integer || !names_a_time(&df.columns[idx].name) {
+            continue;
+        }
+        let series = df.df.columns()[idx].as_materialized_series().clone();
+        let Ok(ints) = series.cast(&DataType::Int64) else {
+            continue;
+        };
+        let Ok(ca) = ints.i64() else { continue };
+        let (Some(min), Some(max)) = (ca.min(), ca.max()) else {
+            continue;
+        };
+        let Some(unit) = EpochUnit::of_range(min, max) else {
+            continue;
+        };
+        let Ok(stamps) = unit.to_datetime(&series) else {
+            continue;
+        };
+        let name = df.columns[idx].name.clone();
+        if df
+            .df
+            .replace(&name, stamps.with_name(name.as_str().into()).into())
+            .is_err()
+        {
+            continue;
+        }
+        df.columns[idx].col_type = ColumnType::Datetime;
+        df.columns[idx].epoch_unit = Some(unit);
+    }
+    df.calc_widths(40, 1000);
+}
+
+/// The frame with every detected epoch column back to the integers it was read from —
+/// what a save writes, so that opening a file and saving it changes nothing.
+pub fn with_epoch_restored(df: &DataFrame) -> std::borrow::Cow<'_, DataFrame> {
+    if df.columns.iter().all(|c| c.epoch_unit.is_none()) {
+        return std::borrow::Cow::Borrowed(df);
+    }
+    let mut out = df.clone();
+    for idx in 0..out.columns.len() {
+        let Some(unit) = out.columns[idx].epoch_unit else {
+            continue;
+        };
+        let series = out.df.columns()[idx].as_materialized_series().clone();
+        if let Ok(ints) = unit.to_integers(&series) {
+            let name = out.columns[idx].name.clone();
+            if out
+                .df
+                .replace(&name, ints.with_name(name.as_str().into()).into())
+                .is_ok()
+            {
+                out.columns[idx].col_type = ColumnType::Integer;
+                out.columns[idx].epoch_unit = None;
+            }
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+fn load_tabular_raw(path: &Path, delimiter: Option<u8>, ext: &str) -> Result<DataFrame> {
     match ext {
         "csv" | "tsv" => crate::data::loader::load_csv(path, delimiter),
         "txt" => txt::load_txt(path),
@@ -379,6 +508,8 @@ pub fn save_file_as(
     shape: doc_io::Shape,
     sheet_name: &str,
 ) -> Result<()> {
+    let restored = with_epoch_restored(df);
+    let df: &DataFrame = &restored;
     // First, before any writer the name would pick: an existing database gets a table
     // added, never a CSV or JSON written over it.  The engine comes from the file when
     // there is one — the new table has to speak that database's dialect.
@@ -524,7 +655,9 @@ pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFram
 }
 
 fn save_csv(df: &DataFrame, path: &Path, delimiter: u8) -> Result<()> {
-    let mut out_df = df.to_display_polars_df();
+    let mut out_df = df
+        .get_visible_df()
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
     let mut file = File::create(path)?;
     CsvWriter::new(&mut file)
         .include_header(true)

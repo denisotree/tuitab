@@ -187,6 +187,21 @@ impl DataFrame {
             AnyValue::UInt64(i) => i.to_string(),
             AnyValue::Float32(f) => f.to_string(),
             AnyValue::Float64(f) => f.to_string(),
+            // No zone: chrono's own text, which shows a fraction only when there is one —
+            // the same text the row-by-row evaluator gives, at every unit.
+            AnyValue::Datetime(v, tu, None) => {
+                let nanos = match tu {
+                    TimeUnit::Nanoseconds => Some(*v),
+                    TimeUnit::Microseconds => v.checked_mul(1_000),
+                    TimeUnit::Milliseconds => v.checked_mul(1_000_000),
+                };
+                match nanos {
+                    Some(ns) => chrono::DateTime::from_timestamp_nanos(ns)
+                        .naive_utc()
+                        .to_string(),
+                    None => format!("{}", val),
+                }
+            }
             AnyValue::Datetime(_v, tu, tz) => {
                 if let Ok(s) = polars::prelude::Series::from_any_values_and_dtype(
                     "".into(),
@@ -327,45 +342,6 @@ impl DataFrame {
             _ => {}
         }
         raw
-    }
-
-    /// Build a Polars DataFrame where Percentage / Currency / Float columns are
-    /// replaced by their display strings, respecting the current row_order.
-    /// Used by save functions so exported files match what the user sees on screen.
-    pub fn to_display_polars_df(&self) -> polars::prelude::DataFrame {
-        use polars::prelude::{Column, Series};
-        let nrows = self.row_order.len();
-        let cols: Vec<Column> = self
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(col_idx, meta)| {
-                let needs_fmt = matches!(
-                    meta.col_type,
-                    ColumnType::Percentage
-                        | ColumnType::Currency
-                        | ColumnType::Float
-                        | ColumnType::FileSize
-                );
-                if needs_fmt {
-                    let values: Vec<String> = (0..nrows)
-                        .map(|r| self.format_display(self.row_order[r], col_idx))
-                        .collect();
-                    Series::new(meta.name.clone().into(), values).into()
-                } else {
-                    // Keep original series but reorder to match row_order
-                    let orig = &self.df.columns()[col_idx];
-                    if nrows == self.df.height() && self.row_order == self.original_order {
-                        orig.clone()
-                    } else {
-                        let idx: Vec<u32> = self.row_order.iter().map(|&i| i as u32).collect();
-                        let idx_ca = polars::prelude::IdxCa::new("".into(), idx);
-                        orig.take(&idx_ca).unwrap_or_else(|_| orig.clone())
-                    }
-                }
-            })
-            .collect();
-        polars::prelude::DataFrame::new_infer_height(cols).unwrap_or_else(|_| self.df.clone())
     }
 
     /// Overwrite the cell at physical (`physical_row`, `col`) with `value`.
@@ -719,6 +695,25 @@ impl DataFrame {
     /// Updates both the Polars `Series` dtype and the corresponding [`crate::data::column::ColumnMeta`].
     /// Returns an error string if the Polars cast fails (e.g. non-numeric string → integer).
     pub fn set_column_type(&mut self, col_idx: usize, col_type: ColumnType) -> Result<(), String> {
+        // A datetime read from epoch integers goes back to exactly those integers; any
+        // other type makes it an ordinary column that no longer saves as integers.
+        if let Some(unit) = self.columns.get(col_idx).and_then(|c| c.epoch_unit) {
+            if col_type == ColumnType::Integer {
+                let series = self.df.columns()[col_idx].as_materialized_series().clone();
+                let ints = unit.to_integers(&series).map_err(|e| e.to_string())?;
+                let name = self.columns[col_idx].name.clone();
+                self.df
+                    .replace(&name, ints.with_name(name.as_str().into()).into())
+                    .map_err(|e| e.to_string())?;
+                self.columns[col_idx].col_type = ColumnType::Integer;
+                self.columns[col_idx].epoch_unit = None;
+                self.aggregates_cache = None;
+                return Ok(());
+            }
+            if col_type != ColumnType::Datetime {
+                self.columns[col_idx].epoch_unit = None;
+            }
+        }
         if col_idx >= self.columns.len() {
             return Err("Column out of bounds".into());
         }
@@ -1430,7 +1425,7 @@ impl DataFrame {
         expr.check_text_arithmetic(&|s| self.column_index(s).is_ok())?;
 
         // Fast path: Try using Polars Lazy API
-        if let Ok(polars_expr) = expr.to_polars_expr() {
+        if let Ok(polars_expr) = expr.to_polars_expr_with(Some(self.df.schema().as_ref())) {
             match self
                 .df
                 .clone()
@@ -1506,7 +1501,22 @@ impl DataFrame {
         // text of any result to float instead — the cast never fails, it nulls what
         // does not parse — turned every string `concat` or `substring` made into null.
         let all = |kind: fn(&Value) -> bool| values.iter().all(|v| *v == Value::Null || kind(v));
-        let final_series = if all(|v| matches!(v, Value::Number(_))) {
+        // A part of a date is a whole number, as it is when Polars computes it.
+        let whole_part = matches!(
+            expr,
+            crate::data::expression::Expr::FunctionCall { name, .. }
+                if matches!(name.as_str(), "year" | "month" | "day" | "hour" | "minute")
+        );
+        let final_series = if whole_part && all(|v| matches!(v, Value::Number(_))) {
+            let numbers: Vec<Option<i64>> = values
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => Some(*n as i64),
+                    _ => None,
+                })
+                .collect();
+            Series::new(name.into(), numbers)
+        } else if all(|v| matches!(v, Value::Number(_))) {
             let numbers: Vec<Option<f64>> = values
                 .iter()
                 .map(|v| match v {
@@ -2039,7 +2049,7 @@ impl DataFrame {
         }
 
         formula.check_text_arithmetic(&|s| self.column_index(s).is_ok())?;
-        let polars_formula = formula.to_polars_expr()?;
+        let polars_formula = formula.to_polars_expr_with(Some(self.df.schema().as_ref()))?;
 
         let grouped = visible
             .lazy()

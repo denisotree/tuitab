@@ -76,7 +76,9 @@ pub fn excel_sheet_sizes(path: &Path) -> Result<Vec<(String, usize, usize)>> {
 pub(super) fn save_xlsx(df: &DataFrame, path: &Path) -> Result<()> {
     use rust_xlsxwriter::{Format, Workbook};
 
-    let ordered_df = df.to_display_polars_df();
+    let ordered_df = df
+        .get_visible_df()
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
     let col_names: Vec<String> = ordered_df
         .get_column_names()
         .iter()

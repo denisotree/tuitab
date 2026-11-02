@@ -65,6 +65,110 @@ pub struct ColumnMeta {
     /// never turn into an `ALTER COLUMN … TYPE`.
     #[serde(default)]
     pub db_retype: Option<ColumnType>,
+
+    /// Set when this column was read as integers holding an epoch and shown as a
+    /// datetime: the unit those integers were in.  Saving writes the integers back, and
+    /// retyping to Integer restores them, so reading a file never changes what it holds.
+    #[serde(default)]
+    pub epoch_unit: Option<EpochUnit>,
+}
+
+/// The unit of an integer epoch column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EpochUnit {
+    Seconds,
+    Millis,
+    Micros,
+    Nanos,
+}
+
+impl EpochUnit {
+    pub fn label(self) -> &'static str {
+        match self {
+            EpochUnit::Seconds => "s",
+            EpochUnit::Millis => "ms",
+            EpochUnit::Micros => "us",
+            EpochUnit::Nanos => "ns",
+        }
+    }
+
+    pub fn parse(label: &str) -> Option<Self> {
+        Some(match label {
+            "s" => EpochUnit::Seconds,
+            "ms" => EpochUnit::Millis,
+            "us" => EpochUnit::Micros,
+            "ns" => EpochUnit::Nanos,
+            _ => return None,
+        })
+    }
+
+    /// How many of this unit make a nanosecond's worth of scale: s→1e9, ms→1e6, …
+    pub fn nanos(self) -> i64 {
+        match self {
+            EpochUnit::Seconds => 1_000_000_000,
+            EpochUnit::Millis => 1_000_000,
+            EpochUnit::Micros => 1_000,
+            EpochUnit::Nanos => 1,
+        }
+    }
+
+    /// The unit whose values span 2001–2286: the range a real timestamp lies in, and
+    /// the ranges of the four units do not overlap.
+    pub fn of_range(min: i64, max: i64) -> Option<Self> {
+        let unit = |v: i64| -> Option<Self> {
+            match v {
+                1_000_000_000..=9_999_999_999 => Some(EpochUnit::Seconds),
+                1_000_000_000_000..=9_999_999_999_999 => Some(EpochUnit::Millis),
+                1_000_000_000_000_000..=9_999_999_999_999_999 => Some(EpochUnit::Micros),
+                1_000_000_000_000_000_000..=i64::MAX => Some(EpochUnit::Nanos),
+                _ => None,
+            }
+        };
+        match (unit(min), unit(max)) {
+            (Some(a), Some(b)) if a == b => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Integers in this unit as a datetime column (UTC, no zone), and back.
+    pub fn to_datetime(
+        self,
+        s: &polars::prelude::Series,
+    ) -> polars::prelude::PolarsResult<polars::prelude::Series> {
+        use polars::prelude::{DataType, TimeUnit};
+        let ints = s.cast(&DataType::Int64)?;
+        match self {
+            EpochUnit::Seconds => {
+                (&ints * 1000i64).cast(&DataType::Datetime(TimeUnit::Milliseconds, None))
+            }
+            EpochUnit::Millis => ints.cast(&DataType::Datetime(TimeUnit::Milliseconds, None)),
+            EpochUnit::Micros => ints.cast(&DataType::Datetime(TimeUnit::Microseconds, None)),
+            EpochUnit::Nanos => ints.cast(&DataType::Datetime(TimeUnit::Nanoseconds, None)),
+        }
+    }
+
+    pub fn to_integers(
+        self,
+        s: &polars::prelude::Series,
+    ) -> polars::prelude::PolarsResult<polars::prelude::Series> {
+        use polars::prelude::{DataType, TimeUnit};
+        let ns = s
+            .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))?
+            .cast(&DataType::Int64)?;
+        Ok(&ns / self.nanos())
+    }
+}
+
+/// Whether a column's name says it holds a time: `time`, `ts`, `timestamp`,
+/// `datetime`, `date`, `epoch`, or a name ending `_time`, `_ts`, `_timestamp`, `_at`.
+pub fn names_a_time(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "time" | "ts" | "timestamp" | "datetime" | "date" | "epoch"
+    ) || ["_time", "_ts", "_timestamp", "_at"]
+        .iter()
+        .any(|end| n.ends_with(end))
 }
 
 impl ColumnMeta {
@@ -88,6 +192,7 @@ impl ColumnMeta {
             backup_datetime_str: None,
             db_origin: None,
             db_retype: None,
+            epoch_unit: None,
         }
     }
 }

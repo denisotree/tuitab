@@ -21,6 +21,8 @@ pub struct Source {
     pub delimiter: Option<u8>,
     /// Overrides the extension, so a `.conf` file can be read as YAML.
     pub format: Option<String>,
+    /// Show integer epoch columns as datetimes (the default).
+    pub detect_epoch: bool,
 }
 
 impl Source {
@@ -33,6 +35,7 @@ impl Source {
                 container: None,
                 delimiter: None,
                 format: None,
+                detect_epoch: true,
             });
         }
 
@@ -72,7 +75,22 @@ impl Source {
                 .get("format")
                 .and_then(Value::as_str)
                 .map(|s| s.to_lowercase()),
+            detect_epoch: match obj.get("detect_epoch") {
+                None => true,
+                Some(Value::Bool(b)) => *b,
+                Some(other) => {
+                    return Err(format!("'detect_epoch' is true or false, got {}", other))
+                }
+            },
         })
+    }
+
+    /// How the file is read.
+    pub fn load_opts(&self) -> io::LoadOpts {
+        io::LoadOpts {
+            delimiter: self.delimiter,
+            detect_epoch: self.detect_epoch,
+        }
     }
 
     fn extension(&self) -> String {
@@ -236,14 +254,14 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // 'parquet' quietly came back as CSV.  Send those through the reader by name.
     if let Some(declared) = source.format.as_deref() {
         if Format::from_name(declared).is_none() {
-            return io::load_tabular(&source.path, source.delimiter, &ext).map_err(|e| {
+            return io::load_tabular(&source.path, &source.load_opts(), &ext).map_err(|e| {
                 format!("Could not read {} as {}: {}", source.path.display(), ext, e)
             });
         }
     }
 
     let forced = source.format.as_deref().and_then(Format::from_name);
-    io::load_file_as(&source.path, source.delimiter, forced)
+    io::load_file_as_opts(&source.path, &source.load_opts(), forced)
         .map(|(df, _)| df)
         .map_err(|e| format!("Could not read {}: {}", source.path.display(), e))
 }

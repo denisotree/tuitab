@@ -74,8 +74,9 @@ name are wrong often enough to cost a round trip. It takes `sample_rows` (defaul
 
 Every tool that reads a file takes the same `source`: `path`, plus `container` for a sheet or
 table, `delimiter` to override CSV auto-detection, and `format` to override the
-extension (`{"path": "deploy.conf", "format": "yaml"}`). A bare path string works
-too. `tuitab_describe` takes `columns` to profile only some of them;
+extension (`{"path": "deploy.conf", "format": "yaml"}`), and `detect_epoch: false` to keep
+integer epoch columns as integers (see [Dates & time](expressions.md#dates--time)). A bare
+path string works too. `tuitab_describe` takes `columns` to profile only some of them;
 `tuitab_query` takes `output.limit` (default 100 rows).
 
 Started with `--mcp-write`, the server has two more — `tuitab_write` and

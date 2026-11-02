@@ -1,6 +1,4 @@
-use crate::data::column::ColumnMeta;
 use crate::data::dataframe::DataFrame;
-use crate::types::ColumnType;
 use color_eyre::Result;
 use polars::prelude::*;
 use std::io::Read;
@@ -20,39 +18,7 @@ pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
     .finish()?;
 
     let pdf = lf.collect()?;
-
-    let col_count = pdf.width();
-
-    let mut columns = Vec::with_capacity(col_count);
-
-    for series in pdf.columns() {
-        let name = series.name().to_string();
-        let mut col_meta = ColumnMeta::new(name);
-
-        // Map Polars DataType → our ColumnType
-        col_meta.col_type = match series.dtype() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => ColumnType::Integer,
-            DataType::Float32 | DataType::Float64 => ColumnType::Float,
-            DataType::Date => ColumnType::Date,
-            DataType::Datetime(_, _) => ColumnType::Datetime,
-            _ => ColumnType::String,
-        };
-
-        columns.push(col_meta);
-    }
-
-    let mut df = DataFrame::from_parts(pdf, columns);
-
-    df.calc_widths(40, 1000);
-
-    Ok(df)
+    crate::data::io::wrap_polars_df(pdf)
 }
 
 /// Detect the most likely delimiter by reading the first 8 KB of the file.

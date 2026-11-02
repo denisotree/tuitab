@@ -132,6 +132,26 @@ ln(requests + 1)
 | `now()` | Current datetime |
 | `date(s)` | Parse a value into a date |
 | `date_format(d, fmt)` | Format a date with a `chrono`/`strftime` pattern |
+| `from_epoch(x, unit)` | Integer seconds, milliseconds, microseconds or nanoseconds since 1970 (`"s"`, `"ms"`, `"us"`, `"ns"`) as a UTC datetime |
+| `time_bucket(dt, width)` | The start of the bucket `dt` falls in; `width` is a whole number of `s`, `m`, `h` or `d`, as `"10m"` or `"1h"` |
+
+`year` … `minute` give whole numbers. On a date or datetime column they — and
+`date_format`, `from_epoch`, `time_bucket` — run vectorised; on text they parse
+each value.
+
+```text
+hour(Time)                                  # 24 groups for an hourly profile
+time_bucket(from_epoch(ts_ms, "ms"), "10m") # ten-minute buckets
+```
+
+**Epoch columns are recognised when a table file is read.** An integer column
+named like a time — `time`, `ts`, `timestamp`, `datetime`, `date`, `epoch`, or a
+name ending `_time`, `_ts`, `_timestamp`, `_at` — whose every value is an epoch
+in one unit (s, ms, µs or ns, years 2001–2286) is shown as a UTC datetime. The
+file still holds the integers: saving writes them back, and `t` → Integer
+restores them. In the MCP server `tuitab_inspect` notes such a column, and
+`"detect_epoch": false` on the source keeps the integers. JSON, YAML, TOML and
+markdown are left as they are.
 
 ### Conditionals
 

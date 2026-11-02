@@ -3,11 +3,10 @@
 //! Two rules drive this module.
 //!
 //! **Raw values, not display values.**  Rendering goes through
-//! [`DataFrame::get_visible_df`], never `to_display_polars_df` — the latter
-//! turns Float, Currency and Percentage columns into strings like `$1,234.50`
-//! (see `dataframe.rs:176`).  That is right for a file a human opens and exactly
-//! wrong for JSON a model computes over.  Percentages therefore arrive as
-//! fractions: `0.42`, not `"42%"`.
+//! [`DataFrame::get_visible_df`], the typed frame — never the strings the screen
+//! shows for Float, Currency and Percentage columns (`$1,234.50`), which would be
+//! exactly wrong for JSON a model computes over.  Percentages therefore arrive as
+//! fractions: `0.42`, not `"42%"`.  Files are written from the same typed frame.
 //!
 //! **Bounded output.**  A model that asks for a million rows should get an
 //! answer, not a blown context window.  Rows are capped by count and by bytes,

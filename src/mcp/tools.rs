@@ -87,7 +87,8 @@ OPERATIONS for tuitab_query
       Expression syntax: arithmetic, comparisons, and/or/not, if(cond, a, b), \
       concat, substring, len, contains(col, regex), \
       regexp_replace(col, regex, replacement), regexp_extract(col, regex, group), \
-      year/month/day, \
+      year/month/day/hour/minute (whole numbers), from_epoch(x, \"ms\"), \
+      time_bucket(dt, \"10m\"), \
       date_format, abs, round(x, places), floor, ceil, sqrt, exp, ln, \
       log10, log(x, base), and 'x in (a, b)'. 'or' binds loosest, then 'and', then \
       'not'.
@@ -235,6 +236,10 @@ pub fn definitions(write: bool) -> Vec<Value> {
                 "enum": ["csv", "tsv", "json", "jsonl", "ndjson", "yaml", "yml", "toml",
                          "sqlite", "sqlite3", "db", "duckdb", "ddb", "xlsx", "xls",
                          "parquet", "arrow"]
+            },
+            "detect_epoch": {
+                "type": "boolean",
+                "description": "Show an integer column named like a time (time, ts, timestamp, *_at, …) whose every value is an epoch in s, ms, us or ns as a UTC datetime. On by default; tuitab_inspect marks such a column with a note. false keeps the integers."
             }
         },
         "required": ["path"]
@@ -646,6 +651,15 @@ fn columns_json_with_schema(
     src: Option<&crate::data::io::db_write::TableSource>,
 ) -> Value {
     let mut cols = render::columns_json(df);
+    // A datetime that was read from integers says so: the file holds the integers.
+    for (entry, meta) in cols.iter_mut().zip(&df.columns) {
+        if let (Some(obj), Some(unit)) = (entry.as_object_mut(), meta.epoch_unit) {
+            obj.insert(
+                "note".into(),
+                json!(format!("epoch {} → datetime (UTC)", unit.label())),
+            );
+        }
+    }
     let Some(src) = src else {
         return Value::Array(cols);
     };

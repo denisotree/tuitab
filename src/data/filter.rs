@@ -364,7 +364,7 @@ pub fn select_rows(df: &DataFrame, expr: &Expr, fallback: Fallback) -> Result<Ve
     // for five different reasons — an expression Polars cannot lower, a type
     // mismatch, a bad regex, a mixed `in` list, a non-boolean result — and a
     // model told only "it did not work" has nothing to correct.
-    let refusal = match expr.to_polars_expr() {
+    let refusal = match expr.to_polars_expr_with(Some(visible.schema().as_ref())) {
         Ok(polars_expr) => match visible
             .clone()
             .lazy()

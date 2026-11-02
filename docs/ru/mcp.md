@@ -74,8 +74,9 @@ printf '%s\n' \
 
 Все инструменты, читающие файл, принимают один и тот же `source`: `path`, плюс `container` для
 листа или таблицы, `delimiter` — перекрыть автоопределение разделителя CSV, и
-`format` — перекрыть расширение (`{"path": "deploy.conf", "format": "yaml"}`).
-Голая строка с путём тоже работает. `tuitab_describe` принимает `columns`, чтобы
+`format` — перекрыть расширение (`{"path": "deploy.conf", "format": "yaml"}`), а
+`detect_epoch: false` оставляет целые колонки epoch целыми (см. [Даты и
+время](expressions.md#даты-и-время)). Голая строка с путём тоже работает. `tuitab_describe` принимает `columns`, чтобы
 профилировать только часть; `tuitab_query` — `output.limit` (по умолчанию 100
 строк).
 

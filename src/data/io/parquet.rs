@@ -12,7 +12,9 @@ pub(super) fn load_parquet(path: &Path) -> Result<DataFrame> {
 }
 
 pub(super) fn save_parquet(df: &DataFrame, path: &Path) -> Result<()> {
-    let mut out_df = df.to_display_polars_df();
+    let mut out_df = df
+        .get_visible_df()
+        .map_err(|e| color_eyre::eyre::eyre!(e))?;
     let mut file = File::create(path)?;
     ParquetWriter::new(&mut file).finish(&mut out_df)?;
     Ok(())
