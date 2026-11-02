@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Files larger than memory stream through the MCP server.** A CSV, TSV,
+  Parquet, Arrow or JSONL file is scanned rather than loaded: `filter`,
+  `select`, `compute`, `sort`, `limit` and `unpivot` become one plan that reads
+  only what it needs, and `group_by`, `aggregate` and `frequency` stream to their
+  groups. `frequency` over a 16 GB JSONL file runs in under 40 MB. A step that
+  needs the whole table is checked against the machine's memory first and refused
+  with the numbers rather than left to run out. `tuitab_inspect` and
+  `tuitab_describe` stream too.
+- **Regular expressions in expressions:** `regexp_replace(s, regex, replacement)`
+  (`$1`, `${name}` or `\1` for groups) and `regexp_extract(s, regex[, group])` —
+  turning a log line into its template is one `compute`.
+- **JSON held in a text column:** `json_get(s, "$.path")` reads one value into a
+  typed column; the `expand_json` operation (`zJ` in the terminal) makes one
+  column per top-level key, parsing each cell once.
+- **Math in expressions:** `abs`, `round(x[, places])`, `floor`, `ceil`, `sqrt`,
+  `exp`, `ln`, `log10`, `log(x, base)`, with `tuitab_calc`'s names and rounding.
+- **Time:** `from_epoch(x, "ms")` and `time_bucket(dt, "10m")`. An integer column
+  named like a time (`time`, `ts`, `*_at`, …) whose every value is an epoch is
+  shown as a UTC datetime; the file keeps its integers — saving writes them back
+  and `t` → Integer restores them. `detect_epoch: false` on an MCP source turns
+  it off.
+- **`unpivot`**, wide to long — `gW` in the terminal, the reverse of `W`.
+- **`not`** around a filter predicate or an `any_of`, in `filter` and
+  `tuitab_write`'s `where`.
+- **Conditional aggregates:** an aggregate with `where` and `as` counts or sums
+  only the rows it picks, so several counters come out of one `group_by`.
+- **`mad`** — the median absolute deviation — as an aggregate, and `median` and
+  `mad` as window functions: a robust z-score per group is two windows and one
+  `compute`.
+- **Rank tests in `tuitab_calc`:** `mannwhitney`, `ks2` and their statistics, as
+  `scipy.stats` computes them, and `lists` to hand a query's column to a test.
+- **`null_values`** on an MCP source, for text that means "no value" in a CSV.
+
+### Changed
+
+- `undefined`, `null`, `NaN`, `None`, `N/A` in a CSV column that is otherwise
+  numbers are read as missing values, so the column stays numeric (Grafana
+  exports). A text column keeps them; `NA` is never a token.
+- `year`, `month`, `day`, `hour` and `minute` give whole numbers, and run
+  vectorised on date and datetime columns.
+- A datetime shows a fraction of a second only when it has one.
+- `frequency` and `group_by` run on Polars' streaming engine in the terminal too.
+
+### Fixed
+
+- **Saving no longer rounds numbers to the screen's precision.** A float column
+  went to a CSV with two decimals (1.23456 became 1.23), and to Parquet, Arrow and
+  xlsx as text.
+- A misspelt function in an expression filled the column with NULLs and
+  reported success; it is now an error naming the functions there are, and a
+  call with the wrong number of arguments — which could crash — is refused.
+- A true/false column was treated as text, so it could not be summed.
+- A `frequency` over several columns counted a group keyed by a NULL as 0.
+- A misspelt field in an MCP `source` was ignored; it is now refused with the
+  one it was close to.
+
+### Security
+
+- Dependencies moved off two yanked releases: `chacha20` 0.10.2 and
+  `clipboard-win` 5.4.3.
+
+### Performance
+
+- Tables in load order share one row order instead of two vectors of eight
+  bytes a row each, and JSON, JSONL and YAML no longer keep a second copy of the
+  file's text.
+
 ## [0.11.0] - 2026-11-02
 
 ### Changed
