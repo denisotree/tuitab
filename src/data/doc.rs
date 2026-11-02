@@ -602,7 +602,7 @@ impl Node {
 
 /// Format a float without a trailing `.0` for whole values, matching how the rest of
 /// tuitab renders numbers.
-fn fmt_float(f: f64) -> String {
+pub(crate) fn fmt_float(f: f64) -> String {
     if f.fract() == 0.0 && f.abs() < 1e15 {
         format!("{:.1}", f)
     } else {

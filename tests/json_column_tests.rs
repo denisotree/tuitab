@@ -13,8 +13,14 @@ fn tmp(name: &str) -> PathBuf {
     dir.join(name)
 }
 
-/// A CSV whose `client` column holds a JSON object per row.
+/// A CSV whose `client` column holds a JSON object per row — written once, since the
+/// tests read it in parallel and a rewrite under a reader is an empty file.
 fn clients() -> PathBuf {
+    static WRITTEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    WRITTEN.get_or_init(write_clients).clone()
+}
+
+fn write_clients() -> PathBuf {
     let path = tmp("clients.csv");
     std::fs::write(
         &path,

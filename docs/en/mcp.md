@@ -275,6 +275,30 @@ A mistake names the step and says what is wrong: `b (a + c): unknown name 'c' �
 earlier steps: a`, `division by zero`, `'=' is not an operator here: compare with
 '=='`. A step name cannot shadow a function or a constant.
 
+## Files larger than memory
+
+A CSV, TSV, Parquet, Arrow or JSONL file — or a pattern of them — is never loaded
+whole. It is scanned, the pipeline's leading steps become one plan that reads only
+the columns and rows they need, and the plan runs on Polars' streaming engine:
+
+- `filter`, `select`, `compute` (any expression except `json_get` and a date
+  difference), `sort`, `limit` and `unpivot` join the plan;
+- `group_by`, `aggregate` and `frequency` run the same grouping over the stream and
+  collect only the groups;
+- `tuitab_inspect` counts the rows as they stream past and collects the sample;
+  `tuitab_describe` collects only the `columns` it is asked to profile.
+
+So `frequency` over a 17 GB JSONL file holds the counts, not the file. A step that
+needs the whole table — `dedup`, `duplicates`, `sample`, `window`, `pivot`, `join`,
+`transpose`, `expand_json`, writing to `output.path` — runs in memory over what the
+plan has produced by then. Before it collects, the server counts the rows and
+estimates their size; more than half the machine's memory is refused with the
+numbers and what streams instead, rather than left to run out of memory. Narrow the
+rows or columns first, or put a `group_by` before it.
+
+The answers are the same as for a small file: a streamed pipeline and a loaded one
+are held to the same output by the test suite.
+
 ## Many files at once
 
 A path may be a pattern, and every file it matches is read as one table, in sorted

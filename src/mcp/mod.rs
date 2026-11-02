@@ -16,6 +16,7 @@
 //! messages**.  Diagnostics go to stderr.
 
 pub mod calc;
+pub mod lazy;
 pub mod pipeline;
 pub mod render;
 pub mod rpc;
@@ -47,6 +48,12 @@ pub struct Server {
     /// `tuitab_write_apply` runs the plan the model just read and refuses any other, and
     /// a counter does that as well as a nonce would.
     pub plan_seq: u64,
+    /// Load every file whole, as before streaming — for tests that hold the two paths
+    /// against each other.
+    pub eager_only: bool,
+    /// How much a pipeline may collect into memory, in bytes; half the machine's
+    /// physical memory when unset.
+    pub memory_budget: Option<u64>,
 }
 
 impl Server {

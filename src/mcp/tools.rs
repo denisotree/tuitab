@@ -47,6 +47,14 @@ column's declared SQL type, NOT NULL, PRIMARY KEY and DEFAULT. Views are listed 
 readable; they cannot be written to. A database source always needs a 'container' — \
 without one there is nothing to read.
 
+FILES LARGER THAN MEMORY
+CSV, TSV, Parquet, Arrow and JSONL are scanned, never loaded whole: filter, select, \
+compute, sort, limit and unpivot become one plan that reads only the columns and rows \
+it needs, and group_by, aggregate and frequency stream to their groups. So start a \
+question about a big file with the steps that shrink it. A step that needs the whole \
+table (dedup, window, join, pivot, sample, transpose, expand_json, output.path) runs \
+on what the plan produced; one that would not fit in memory is refused with the size.
+
 MANY FILES AT ONCE
 A path may be a glob pattern — 'data/*.csv', 'content/**/index.md' — and every file it \
 matches is read as one table, in sorted order. The files have to hold the same columns, \
@@ -603,6 +611,27 @@ fn inspect(server: &mut Server, args: &Value) -> Result<Value, CallError> {
         }
     }
 
+    // A file Polars scans is inspected without loading it: its columns from the scan,
+    // its rows counted as they stream past, and the first few collected.
+    if !server.eager_only {
+        if let Some(scanned) = super::lazy::scan(&src).map_err(CallError::Failed)? {
+            let budget = server
+                .memory_budget
+                .unwrap_or_else(super::lazy::default_budget);
+            if let super::lazy::Outcome::Head { df, row_count } =
+                super::lazy::run(&scanned, &[], sample, false, budget).map_err(CallError::Failed)?
+            {
+                let table = render::table_of(&df, sample, row_count)?;
+                return Ok(json!({
+                    "path": src.path.to_string_lossy(),
+                    "columns": columns_json_with_schema(&df, None),
+                    "row_count": row_count,
+                    "sample_rows": table.get("rows").cloned().unwrap_or(Value::Array(vec![])),
+                }));
+            }
+        }
+    }
+
     // A database container is loaded through the path that keeps its declared types —
     // the ones a model actually needs, since every value arrives as text and the
     // inferred type is a guess made over that text.
@@ -810,7 +839,19 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
         }
     }
 
-    let base = source::load(server, &src)?;
+    // A file Polars can scan runs as a streamed plan; anything else is loaded whole.
+    let scanned = if server.eager_only {
+        None
+    } else {
+        super::lazy::scan(&src).map_err(CallError::Failed)?
+    };
+    let budget = server
+        .memory_budget
+        .unwrap_or_else(super::lazy::default_budget);
+    let base = match &scanned {
+        Some(_) => None,
+        None => Some(source::load(server, &src)?),
+    };
     let mut results = Vec::with_capacity(pipelines.len());
 
     let mut failures = 0usize;
@@ -818,13 +859,25 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
         let label = name
             .clone()
             .unwrap_or_else(|| format!("pipeline_{}", index));
-        let outcome = match ops {
-            Err(why) => Err(why.clone()),
-            Ok(ops) => pipeline::apply_all_reporting_seeds(base.clone(), ops)
-                .map_err(|e| format!("{}: {}", label, e)),
-        };
+        let outcome = match (ops, &scanned, &base) {
+            (Err(why), _, _) => Err(why.clone()),
+            (Ok(ops), Some(scanned), _) => {
+                run_streamed(scanned, ops, output.limit, output.path.is_some(), budget)
+            }
+            (Ok(ops), None, Some(base)) => pipeline::apply_all_reporting_seeds(base.clone(), ops)
+                .map(|(df, seeds)| Answer::Table(df, seeds)),
+            (Ok(_), None, None) => Err("nothing was loaded".to_string()),
+        }
+        .map_err(|e| format!("{}: {}", label, e));
         let (df, seeds) = match outcome {
-            Ok(pair) => pair,
+            Ok(Answer::Table(df, seeds)) => (df, seeds),
+            Ok(Answer::Shown(mut entry)) => {
+                if let (Some(name), Some(obj)) = (name, entry.as_object_mut()) {
+                    obj.insert("name".into(), json!(name));
+                }
+                results.push(entry);
+                continue;
+            }
             Err(why) => {
                 failures += 1;
                 results.push(json!({"name": label, "error": why}));
@@ -885,11 +938,34 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     })
 }
 
-/// Write a result to disk through tuitab's own saver.
-///
-/// This deliberately takes a different frame than [`render::table`] does: the
-/// saver formats Currency, Percentage and Float columns for a reader, which is
-/// right for a file someone opens and wrong for JSON a model computes over.
+/// What a pipeline came to: a table still to be shown or written, or — when the whole
+/// pipeline streamed — the payload already made from its first rows.
+enum Answer {
+    Table(crate::data::dataframe::DataFrame, pipeline::Seeds),
+    Shown(Value),
+}
+
+/// A pipeline over a scanned file: as much as streams runs as one plan, the rest in
+/// memory over what that plan produced.
+fn run_streamed(
+    scanned: &super::lazy::Scanned,
+    ops: &[pipeline::Op],
+    limit: usize,
+    whole: bool,
+    budget: u64,
+) -> Result<Answer, String> {
+    match super::lazy::run(scanned, ops, limit, whole, budget)? {
+        super::lazy::Outcome::Head { df, row_count } => {
+            render::table_of(&df, limit, row_count).map(Answer::Shown)
+        }
+        super::lazy::Outcome::Collected { df, next } => {
+            pipeline::apply_from(df, ops, next).map(|(df, seeds)| Answer::Table(df, seeds))
+        }
+    }
+}
+
+/// Write a result to disk through tuitab's own saver, from the typed frame — the
+/// same values the rendered rows carry.
 fn write_result(
     server: &mut Server,
     df: &crate::data::dataframe::DataFrame,
@@ -1048,18 +1124,39 @@ fn write_result(
 
 fn describe_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     let src = source_arg(args)?;
-    let mut df = source::load(server, &src)?;
-
-    if let Some(Value::Array(names)) = args.get("columns") {
-        let wanted: Vec<String> = names
+    let wanted: Vec<String> = match args.get("columns") {
+        Some(Value::Array(names)) => names
             .iter()
             .filter_map(Value::as_str)
             .map(str::to_string)
-            .collect();
-        if !wanted.is_empty() {
-            df = pipeline::apply_all(df, &[pipeline::Op::Select(wanted)])?;
+            .collect(),
+        _ => Vec::new(),
+    };
+    let select: Vec<pipeline::Op> = if wanted.is_empty() {
+        Vec::new()
+    } else {
+        vec![pipeline::Op::Select(wanted)]
+    };
+
+    // A scanned file is profiled from just the columns asked for, held to the memory
+    // budget; anything else is loaded as before.
+    let scanned = if server.eager_only {
+        None
+    } else {
+        super::lazy::scan(&src).map_err(CallError::Failed)?
+    };
+    let df = match scanned {
+        Some(scanned) => {
+            let budget = server
+                .memory_budget
+                .unwrap_or_else(super::lazy::default_budget);
+            match run_streamed(&scanned, &select, usize::MAX, true, budget)? {
+                Answer::Table(df, _) => df,
+                Answer::Shown(_) => unreachable!("a whole run is never shown from its head"),
+            }
         }
-    }
+        None => pipeline::apply_all(source::load(server, &src)?, &select)?,
+    };
 
     let mut profile = describe::describe(&df);
 

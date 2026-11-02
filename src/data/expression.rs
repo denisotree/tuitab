@@ -265,7 +265,7 @@ fn bucket_nanos(w: &str) -> i64 {
     }
 }
 
-fn epoch_to_datetime(
+pub(crate) fn epoch_to_datetime(
     x: polars::lazy::dsl::Expr,
     unit: crate::data::column::EpochUnit,
 ) -> polars::lazy::dsl::Expr {
@@ -650,10 +650,15 @@ impl Expr {
                         "abs" => x.abs(),
                         "round" => {
                             let places = round_places(args)?;
-                            let scale = polars::lazy::dsl::lit(10f64.powi(places));
-                            (x * scale.clone())
-                                .round(0, polars::prelude::RoundMode::HalfAwayFromZero)
-                                / scale
+                            let mode = polars::prelude::RoundMode::HalfAwayFromZero;
+                            if places >= 0 {
+                                // Polars' own kernel: no division the optimiser could turn
+                                // into a multiplication by 0.1 in one engine and not another.
+                                x.round(places as u32, mode)
+                            } else {
+                                let scale = polars::lazy::dsl::lit(10f64.powi(places));
+                                (x * scale.clone()).round(0, mode) / scale
+                            }
                         }
                         "floor" => x.floor(),
                         "ceil" => x.ceil(),

@@ -600,12 +600,19 @@ pub fn apply_all(df: DataFrame, ops: &[Op]) -> Result<DataFrame, String> {
     apply_all_reporting_seeds(df, ops).map(|(df, _)| df)
 }
 
-pub fn apply_all_reporting_seeds(
+pub fn apply_all_reporting_seeds(df: DataFrame, ops: &[Op]) -> Result<(DataFrame, Seeds), String> {
+    apply_from(df, ops, 0)
+}
+
+/// `ops[from..]` over `df`, numbered as steps of the whole pipeline — the rest of one
+/// that streamed its first steps.
+pub fn apply_from(
     mut df: DataFrame,
     ops: &[Op],
+    from: usize,
 ) -> Result<(DataFrame, Seeds), String> {
     let mut seeds = Seeds::default();
-    for (i, op) in ops.iter().enumerate() {
+    for (i, op) in ops.iter().enumerate().skip(from) {
         // Draw here rather than inside `apply`, so the value can be reported.
         let drawn = match op {
             Op::Sample { seed: None, .. } => Some(crate::data::dedup::random_seed()),
@@ -621,6 +628,11 @@ pub fn apply_all_reporting_seeds(
             .map_err(|e| format!("ops[{}]: {}", i, without_polars_hints(&e)))?;
     }
     Ok((df, seeds))
+}
+
+/// One step over a table, as a pipeline runs it.
+pub(crate) fn apply_op(df: DataFrame, op: &Op) -> Result<DataFrame, String> {
+    apply(df, op, None)
 }
 
 fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFrame, String> {
@@ -713,7 +725,7 @@ fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFram
 
 /// A Polars error without the parts meant for Polars users: the dump of the query
 /// plan, and advice about Polars' own API (`suffix`) that tuitab does not expose.
-fn without_polars_hints(message: &str) -> &str {
+pub(crate) fn without_polars_hints(message: &str) -> &str {
     ["\n\nResolved plan until failure", "\n\nYou may want to try"]
         .iter()
         .filter_map(|marker| message.find(marker))

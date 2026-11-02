@@ -2420,7 +2420,11 @@ fn a_caller_can_ask_for_more_statements_than_the_default() {
 
 #[test]
 fn two_sources_read_in_turn_do_not_evict_each_other() {
-    let mut server = Server::new();
+    // The table cache is the in-memory path's; a CSV otherwise streams and is not held.
+    let mut server = Server {
+        eager_only: true,
+        ..Server::new()
+    };
     let a = tmp("cache-a.csv");
     let b = tmp("cache-b.csv");
     std::fs::write(&a, "x\n1\n").unwrap();

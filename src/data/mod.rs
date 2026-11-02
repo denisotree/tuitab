@@ -72,3 +72,11 @@ pub const DATETIME_FORMATS: &[&str] = &[
     "%Y-%m-%dT%H:%M:%S%.f",
     "%Y-%m-%dT%H:%M:%S",
 ];
+
+/// Run a lazy plan with Polars' streaming engine: a scan of a file larger than memory
+/// is read in pieces, and a plan over a table already in memory gives the same answer.
+pub fn collect(
+    lf: polars::prelude::LazyFrame,
+) -> polars::prelude::PolarsResult<polars::prelude::DataFrame> {
+    lf.collect_with_engine(polars::prelude::Engine::Streaming)
+}

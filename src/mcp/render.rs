@@ -88,8 +88,14 @@ fn rows_json(df: &DataFrame, limit: usize) -> Result<(Vec<Value>, bool), String>
 
 /// The standard table payload every tool returns.
 pub fn table(df: &DataFrame, limit: usize) -> Result<Value, String> {
-    let (rows, truncated) = rows_json(df, limit)?;
-    let row_count = df.row_order.len();
+    table_of(df, limit, df.row_order.len())
+}
+
+/// [`table`] for the first rows of a longer result — a streamed pipeline collects only
+/// what it shows, and counts the rest.
+pub fn table_of(df: &DataFrame, limit: usize, row_count: usize) -> Result<Value, String> {
+    let (rows, _) = rows_json(df, limit)?;
+    let truncated = rows.len() < row_count;
 
     let mut out = Map::new();
     out.insert("columns".into(), Value::Array(columns_json(df)));

@@ -154,6 +154,17 @@ fn build_aggregates(
 /// the hash table produced, which would make the same question give differently
 /// ordered answers on different runs.
 pub fn group_by(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataFrame, String> {
+    group_by_from(df, df.get_visible_df()?.lazy(), by, agg)
+}
+
+/// [`group_by`] over any lazy source of `df`'s columns — its own rows, or a file
+/// scanned and streamed; `df` supplies the column types and names.
+pub fn group_by_from(
+    df: &DataFrame,
+    source: LazyFrame,
+    by: &[String],
+    agg: &[AggSpec],
+) -> Result<DataFrame, String> {
     if by.is_empty() {
         return Err(
             "grouping needs at least one column to group by — for a grand total, total() it"
@@ -172,17 +183,14 @@ pub fn group_by(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataFr
     let (exprs, agg_metas) = build_aggregates(df, agg)?;
     metas.extend(agg_metas);
 
-    let grouped = df
-        .get_visible_df()?
-        .lazy()
+    let grouped = source
         .group_by_stable(
             by.iter()
                 .map(|s| crate::data::column_expr(s.as_str()))
                 .collect::<Vec<_>>(),
         )
-        .agg(exprs)
-        .collect()
-        .map_err(|e| format!("group_by failed: {}", e))?;
+        .agg(exprs);
+    let grouped = crate::data::collect(grouped).map_err(|e| format!("group_by failed: {}", e))?;
 
     Ok(DataFrame::from_parts(grouped, metas))
 }
@@ -193,17 +201,18 @@ pub fn group_by(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataFr
 /// easy to pass by accident, and "what is the total revenue" deserves to be
 /// asked directly rather than as a degenerate case of something else.
 pub fn total(df: &DataFrame, agg: &[AggSpec]) -> Result<DataFrame, String> {
+    total_from(df, df.get_visible_df()?.lazy(), agg)
+}
+
+/// [`total`] over any lazy source of `df`'s columns.
+pub fn total_from(df: &DataFrame, source: LazyFrame, agg: &[AggSpec]) -> Result<DataFrame, String> {
     if agg.is_empty() {
         return Err("a total needs at least one aggregate".to_string());
     }
 
     let (exprs, metas) = build_aggregates(df, agg)?;
 
-    let totalled = df
-        .get_visible_df()?
-        .lazy()
-        .select(exprs)
-        .collect()
+    let totalled = crate::data::collect(source.select(exprs))
         .map_err(|e| format!("aggregate failed: {}", e))?;
 
     Ok(DataFrame::from_parts(totalled, metas))
@@ -219,6 +228,16 @@ pub fn total(df: &DataFrame, agg: &[AggSpec]) -> Result<DataFrame, String> {
 /// dropped — it is a sparkline for a terminal, and meaningless in JSON or in a
 /// saved file. Callers that want it should use the builder directly.
 pub fn frequency(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataFrame, String> {
+    frequency_from(df, df.get_visible_df()?.lazy(), by, agg)
+}
+
+/// [`frequency`] over any lazy source of `df`'s columns.
+pub fn frequency_from(
+    df: &DataFrame,
+    source: LazyFrame,
+    by: &[String],
+    agg: &[AggSpec],
+) -> Result<DataFrame, String> {
     if by.is_empty() {
         return Err("a frequency table needs at least one column to count by".to_string());
     }
@@ -257,9 +276,9 @@ pub fn frequency(df: &DataFrame, by: &[String], agg: &[AggSpec]) -> Result<DataF
     }
 
     let (pdf, metas) = if group_indices.len() == 1 {
-        df.build_frequency_table(group_indices[0], &aggregated)?
+        df.build_frequency_table_from(source, group_indices[0], &aggregated)?
     } else {
-        df.build_multi_frequency_table(&group_indices, &aggregated)?
+        df.build_multi_frequency_table_from(source, &group_indices, &aggregated)?
     };
 
     let mut result = DataFrame::from_parts(pdf, metas);

@@ -191,7 +191,7 @@ pub fn is_pattern(path: &Path) -> bool {
 }
 
 /// Every file a pattern names, in a fixed order.
-fn glob_matches(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
+pub(crate) fn glob_matches(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
     let mut found: Vec<std::path::PathBuf> = glob::glob(pattern)
         .map_err(|e| eyre!("'{}' is not a usable pattern: {}", pattern, e))?
         .filter_map(std::result::Result::ok)

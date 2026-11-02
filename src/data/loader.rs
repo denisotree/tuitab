@@ -32,7 +32,7 @@ pub fn load_csv_opts(path: &Path, opts: &crate::data::io::LoadOpts) -> Result<Da
 
 /// Detect the most likely delimiter by reading the first 8 KB of the file.
 /// Counts occurrences of common delimiters per line and picks the most consistent one.
-fn detect_delimiter(path: &Path) -> u8 {
+pub(crate) fn detect_delimiter(path: &Path) -> u8 {
     let candidates: &[u8] = b",\t|;";
     let default = b',';
 

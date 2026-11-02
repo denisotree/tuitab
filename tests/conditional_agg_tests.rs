@@ -4,7 +4,14 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tuitab::mcp::{handle_message, Server};
 
+/// Written once: the tests read it in parallel, and a rewrite under a reader is an
+/// empty file.
 fn responses() -> PathBuf {
+    static WRITTEN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    WRITTEN.get_or_init(write_responses).clone()
+}
+
+fn write_responses() -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tmp")
         .join("conditional-agg-tests");

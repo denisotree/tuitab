@@ -1807,10 +1807,27 @@ impl DataFrame {
         ),
         String,
     > {
+        let source = polars::prelude::IntoLazy::lazy(self.get_visible_df()?);
+        self.build_frequency_table_from(source, col_idx, aggregated_cols)
+    }
+
+    /// The same table from any lazy source of this sheet's columns — the sheet's own
+    /// rows, or a file scanned and streamed.
+    pub fn build_frequency_table_from(
+        &self,
+        source: polars::prelude::LazyFrame,
+        col_idx: usize,
+        aggregated_cols: &[(usize, Vec<crate::data::aggregator::AggregatorKind>)],
+    ) -> Result<
+        (
+            polars::prelude::DataFrame,
+            Vec<crate::data::column::ColumnMeta>,
+        ),
+        String,
+    > {
         use polars::prelude::*;
 
         let col_name = self.columns[col_idx].name.clone();
-        let visible = self.get_visible_df()?;
 
         // ── Base agg: count per group ──────────────────────────────────────
         let mut agg_exprs: Vec<Expr> = vec![len().alias("Count")];
@@ -1841,8 +1858,7 @@ impl DataFrame {
         }
 
         // ── Run group_by ───────────────────────────────────────────────────
-        let grouped = visible
-            .lazy()
+        let grouped = source
             .group_by_stable([crate::data::column_expr(&col_name)])
             .agg(agg_exprs)
             .sort(
@@ -1850,9 +1866,9 @@ impl DataFrame {
                 SortMultipleOptions::new()
                     .with_order_descending_multi([true])
                     .with_maintain_order(true),
-            )
-            .collect()
-            .map_err(|e| format!("group_by error: {}", e))?;
+            );
+        let grouped =
+            crate::data::collect(grouped).map_err(|e| format!("group_by error: {}", e))?;
 
         // ── Build Pct and Bar columns ──────────────────────────────────────
         let count_col = grouped.column("Count").map_err(|e| e.to_string())?;
@@ -1928,6 +1944,24 @@ impl DataFrame {
         ),
         String,
     > {
+        let source = polars::prelude::IntoLazy::lazy(self.get_visible_df()?);
+        self.build_multi_frequency_table_from(source, group_col_indices, aggregated_cols)
+    }
+
+    /// The same table from any lazy source of this sheet's columns — the sheet's own
+    /// rows, or a file scanned and streamed.
+    pub fn build_multi_frequency_table_from(
+        &self,
+        source: polars::prelude::LazyFrame,
+        group_col_indices: &[usize],
+        aggregated_cols: &[(usize, Vec<crate::data::aggregator::AggregatorKind>)],
+    ) -> Result<
+        (
+            polars::prelude::DataFrame,
+            Vec<crate::data::column::ColumnMeta>,
+        ),
+        String,
+    > {
         use polars::prelude::*;
 
         if group_col_indices.is_empty() {
@@ -1938,8 +1972,6 @@ impl DataFrame {
             .iter()
             .map(|&i| self.columns[i].name.clone())
             .collect();
-
-        let visible = self.get_visible_df()?;
 
         // Rows, not the first key's non-null values: a group keyed by a NULL is real
         // rows and used to read 0.
@@ -1981,18 +2013,14 @@ impl DataFrame {
             .map(|n| crate::data::column_expr(n))
             .collect();
 
-        let grouped = visible
-            .lazy()
-            .group_by_stable(group_exprs)
-            .agg(agg_exprs)
-            .sort(
-                ["Count"],
-                SortMultipleOptions::new()
-                    .with_order_descending_multi([true])
-                    .with_maintain_order(true),
-            )
-            .collect()
-            .map_err(|e| format!("multi group_by error: {}", e))?;
+        let grouped = source.group_by_stable(group_exprs).agg(agg_exprs).sort(
+            ["Count"],
+            SortMultipleOptions::new()
+                .with_order_descending_multi([true])
+                .with_maintain_order(true),
+        );
+        let grouped =
+            crate::data::collect(grouped).map_err(|e| format!("multi group_by error: {}", e))?;
 
         // ── Pct and Bar ───────────────────────────────────────────────────
         let count_col = grouped.column("Count").map_err(|e| e.to_string())?;
