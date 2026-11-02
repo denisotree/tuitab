@@ -92,6 +92,25 @@ not (status == "closed")
 | `len(s)` | Length of the string |
 | `contains(s, regex)` | True when `s` matches the regular expression |
 
+### Math
+
+| Function | Result |
+|----------|--------|
+| `abs(x)` | Absolute value |
+| `round(x)` / `round(x, places)` | Rounded half away from zero; `places` is a whole number, −28 to 28 |
+| `floor(x)` / `ceil(x)` | Down / up to a whole number |
+| `sqrt(x)` `exp(x)` | Square root, eˣ |
+| `ln(x)` `log10(x)` `log(x, base)` | Logarithms |
+
+The names and rounding are the same as in `tuitab_calc`. A result outside the
+function's domain — `sqrt(-1)`, `ln(0)` — is NULL, and so is a value that is not
+a number. The result is always a decimal number.
+
+```text
+round(abs(value - 67184) / 18852, 2)     # a z-score to two places
+ln(requests + 1)
+```
+
 ### Dates & time
 
 | Function | Result |

@@ -696,6 +696,23 @@ fn compute_adds_a_derived_column() {
 
 /// Functions Polars cannot run are evaluated row by row, and that path used to
 /// cast its result to float — every string came back null.
+#[test]
+fn compute_round_abs_on_a_csv() {
+    let path = tmp("compute_math.csv");
+    std::fs::write(&path, "v\n3\n18\n-6\n").unwrap();
+    let result = call(
+        &mut Server::new(),
+        "tuitab_query",
+        json!({"source": {"path": path}, "ops": [
+            {"compute": {"name": "z", "expr": "round(abs(v - 10) / 4, 2)"}},
+            {"filter": [{"col": "z", "op": "ge", "value": 2}]}
+        ]}),
+    );
+    assert_eq!(result["row_count"], json!(2));
+    assert_eq!(cell(&result, 0, "z"), json!(2.0));
+    assert_eq!(cell(&result, 1, "z"), json!(4.0));
+}
+
 /// A misspelt function name used to fill the column with NULLs and report success.
 #[test]
 fn compute_with_a_misspelt_function_fails_instead_of_filling_nulls() {

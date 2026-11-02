@@ -166,7 +166,43 @@ pub const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("date_format", 2, 2),
     ("today", 0, 0),
     ("now", 0, 0),
+    ("abs", 1, 1),
+    ("round", 1, 2),
+    ("floor", 1, 1),
+    ("ceil", 1, 1),
+    ("sqrt", 1, 1),
+    ("exp", 1, 1),
+    ("ln", 1, 1),
+    ("log10", 1, 1),
+    ("log", 2, 2),
 ];
+
+/// `round()`'s places: a whole-number literal, as in `tuitab_calc`.
+fn round_places(args: &[Expr]) -> Result<i32, String> {
+    match args.get(1) {
+        None => Ok(0),
+        Some(Expr::Literal(Value::Number(n))) if n.fract() == 0.0 && n.abs() <= 28.0 => {
+            Ok(*n as i32)
+        }
+        Some(_) => {
+            Err("round()'s second argument is a whole number of places, -28 to 28".to_string())
+        }
+    }
+}
+
+/// Half away from zero, as a person rounds and as `tuitab_calc` does.
+fn round_half_away(x: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (x * scale).round() / scale
+}
+
+/// A result outside the function's domain — NaN, or an infinity — is NULL, not a number.
+fn finite_or_null(e: polars::lazy::dsl::Expr) -> polars::lazy::dsl::Expr {
+    use polars::lazy::dsl::{lit, when};
+    when(e.clone().is_finite())
+        .then(e)
+        .otherwise(lit(polars::prelude::Null {}))
+}
 
 impl Expr {
     /// Parse an expression string into an AST.
@@ -421,6 +457,34 @@ impl Expr {
                         Err("contains() needs a literal pattern as its second argument".to_string())
                     }
                 },
+                "abs" | "round" | "floor" | "ceil" | "sqrt" | "exp" | "ln" | "log10" | "log" => {
+                    let x = args[0]
+                        .to_polars_expr()?
+                        .cast(polars::prelude::DataType::Float64);
+                    let e = std::f64::consts::E;
+                    Ok(finite_or_null(match name.as_str() {
+                        "abs" => x.abs(),
+                        "round" => {
+                            let places = round_places(args)?;
+                            let scale = polars::lazy::dsl::lit(10f64.powi(places));
+                            (x * scale.clone())
+                                .round(0, polars::prelude::RoundMode::HalfAwayFromZero)
+                                / scale
+                        }
+                        "floor" => x.floor(),
+                        "ceil" => x.ceil(),
+                        "sqrt" => x.sqrt(),
+                        "exp" => x.exp(),
+                        "ln" => x.log(polars::lazy::dsl::lit(e)),
+                        "log10" => x.log(polars::lazy::dsl::lit(10.0)),
+                        _ => {
+                            let base = args[1]
+                                .to_polars_expr()?
+                                .cast(polars::prelude::DataType::Float64);
+                            x.log(polars::lazy::dsl::lit(e)) / base.log(polars::lazy::dsl::lit(e))
+                        }
+                    }))
+                }
                 "year" | "month" | "day" | "hour" | "minute" | "today" | "now" | "date_format" => {
                     Err(format!("Function '{}' requires slow-path evaluation", name))
                 }
@@ -723,6 +787,34 @@ impl Expr {
                             }
                         }
                         Value::Null
+                    }
+                    "abs" | "round" | "floor" | "ceil" | "sqrt" | "exp" | "ln" | "log10"
+                    | "log" => {
+                        let Some(x) = evaluated_args[0].as_f64() else {
+                            return Value::Null;
+                        };
+                        let out = match name.as_str() {
+                            "abs" => x.abs(),
+                            "round" => match round_places(args) {
+                                Ok(places) => round_half_away(x, places),
+                                Err(_) => return Value::Null,
+                            },
+                            "floor" => x.floor(),
+                            "ceil" => x.ceil(),
+                            "sqrt" => x.sqrt(),
+                            "exp" => x.exp(),
+                            "ln" => x.ln(),
+                            "log10" => x.log10(),
+                            _ => match evaluated_args[1].as_f64() {
+                                Some(base) => x.ln() / base.ln(),
+                                None => return Value::Null,
+                            },
+                        };
+                        if out.is_finite() {
+                            Value::Number(out)
+                        } else {
+                            Value::Null
+                        }
                     }
                     "today" => Value::Date(chrono::Local::now().naive_local().date()),
                     "now" => Value::Datetime(chrono::Local::now().naive_local()),
@@ -1781,5 +1873,104 @@ mod tests {
     fn an_unknown_function_deep_inside_is_found() {
         assert!(Expr::parse("1 + if(a > 1, lenn(b), 0)").is_err());
         assert!(Expr::parse("x in (1, 2) and not frob(y)").is_err());
+    }
+
+    /// One number column `v`, and a way to evaluate an expression over it on both paths:
+    /// Polars (the one 35M rows go through) and the row-by-row interpreter.
+    fn numbers(
+        values: &[f64],
+    ) -> (
+        crate::data::dataframe::DataFrame,
+        HashMap<&'static str, usize>,
+    ) {
+        let df =
+            polars::prelude::DataFrame::new_infer_height(vec![
+                Series::new("v".into(), values).into()
+            ])
+            .unwrap();
+        let mut tui_df = crate::data::dataframe::DataFrame::empty();
+        tui_df.df = df;
+        (tui_df, [("v", 0)].into_iter().collect())
+    }
+
+    fn on_both_paths(expr: &str, values: &[f64]) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+        use polars::prelude::IntoLazy;
+        let (df, lookup) = numbers(values);
+        let parsed = super::Expr::parse(expr).expect("expression must parse");
+        let fast = df
+            .df
+            .clone()
+            .lazy()
+            .select([parsed
+                .to_polars_expr()
+                .expect("must lower to Polars")
+                .cast(polars::prelude::DataType::Float64)
+                .alias("m")])
+            .collect()
+            .expect("must evaluate");
+        let fast: Vec<Option<f64>> = fast
+            .column("m")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .into_iter()
+            .collect();
+        let slow: Vec<Option<f64>> = (0..values.len())
+            .map(|row| match parsed.eval(row, &lookup, &df) {
+                Value::Number(n) => Some(n),
+                Value::Null => None,
+                other => panic!("{} gave {:?}", expr, other),
+            })
+            .collect();
+        (fast, slow)
+    }
+
+    #[test]
+    fn math_functions_agree_on_both_paths() {
+        let cases: &[(&str, &[f64], &[f64])] = &[
+            ("abs(v)", &[-2.5, 3.0], &[2.5, 3.0]),
+            ("round(v, 2)", &[2.345, -2.345], &[2.35, -2.35]),
+            // Half away from zero, as tuitab_calc rounds.
+            ("round(v)", &[2.5, -2.5, 1.4], &[3.0, -3.0, 1.0]),
+            ("floor(v)", &[-1.5, 1.5], &[-2.0, 1.0]),
+            ("ceil(v)", &[1.2, -1.2], &[2.0, -1.0]),
+            ("sqrt(v)", &[9.0], &[3.0]),
+            ("exp(v)", &[0.0], &[1.0]),
+            ("ln(v)", &[1.0], &[0.0]),
+            ("log10(v)", &[100.0], &[2.0]),
+            ("log(v, 2)", &[8.0], &[3.0]),
+            ("round(abs(v - 10) / 4, 2)", &[3.0], &[1.75]),
+        ];
+        for (expr, input, want) in cases {
+            let (fast, slow) = on_both_paths(expr, input);
+            for (i, w) in want.iter().enumerate() {
+                for (path, got) in [("polars", fast[i]), ("rows", slow[i])] {
+                    let got = got
+                        .unwrap_or_else(|| panic!("{} on {} gave NULL ({})", expr, input[i], path));
+                    assert!(
+                        (got - w).abs() < 1e-9,
+                        "{} on {}: {} gave {}, want {}",
+                        expr,
+                        input[i],
+                        path,
+                        got,
+                        w
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn math_outside_its_domain_is_null() {
+        for expr in ["sqrt(v)", "ln(v)", "log10(v)", "log(v, 2)"] {
+            let (fast, slow) = on_both_paths(expr, &[-1.0, 0.0]);
+            assert_eq!(fast[0], None, "{} polars", expr);
+            assert_eq!(slow[0], None, "{} rows", expr);
+        }
+        for expr in ["ln(v)", "log10(v)"] {
+            let (fast, slow) = on_both_paths(expr, &[0.0]);
+            assert_eq!((fast[0], slow[0]), (None, None), "{}", expr);
+        }
     }
 }

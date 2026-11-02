@@ -82,7 +82,8 @@ OPERATIONS for tuitab_query
   {\"compute\": {\"name\":\"margin\",\"expr\":\"revenue - cost\"}}
       Expression syntax: arithmetic, comparisons, and/or/not, if(cond, a, b), \
       concat, substring, len, contains(col, regex), year/month/day, \
-      date_format, and 'x in (a, b)'. 'or' binds loosest, then 'and', then \
+      date_format, abs, round(x, places), floor, ceil, sqrt, exp, ln, \
+      log10, log(x, base), and 'x in (a, b)'. 'or' binds loosest, then 'and', then \
       'not'.
   {\"group_by\": {\"by\":[\"region\"],\"agg\":[{\"col\":\"amount\",\"fn\":\"sum\"}]}}
       Exactly the aggregates you ask for. Result columns are named 'col:fn'. \
