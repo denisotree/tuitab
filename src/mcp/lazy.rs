@@ -471,12 +471,20 @@ pub fn run(
                 return Ok(Outcome::Collected { df, next: i + 1 });
             }
             _ => match lower(lf.clone(), &shell, op)? {
-                Some(lowered) => lf = lowered,
+                Some((lowered, retyped)) => {
+                    lf = lowered;
+                    shell = next;
+                    // json_get's column took its type from the values, which the empty
+                    // table has none of.
+                    if let Some((name, dtype)) = retyped {
+                        retype_shell(&mut shell, &name, &dtype)?;
+                    }
+                    i += 1;
+                    continue;
+                }
                 None => break,
             },
         }
-        shell = next;
-        i += 1;
     }
 
     // The step's columns, in the step's order and types.
@@ -510,59 +518,149 @@ pub fn run(
     Ok(Outcome::Collected { df, next: i })
 }
 
-/// One step as part of the plan, or `None` when it needs the whole table in memory.
-fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<LazyFrame>, String> {
+/// A column of the shell given the type the plan found for it.
+fn retype_shell(shell: &mut DataFrame, name: &str, dtype: &DataType) -> Result<(), String> {
+    let idx = shell.column_index(name)?;
+    let empty = Series::new_empty(name.into(), dtype);
+    shell
+        .df
+        .replace(name, empty.into())
+        .map_err(|e| e.to_string())?;
+    shell.columns[idx].col_type = crate::data::io::column_type_of(dtype);
+    Ok(())
+}
+
+/// The type `json_get`'s text takes on the rows of `lf`: the in-memory rule
+/// (`type_from_text` with booleans), counted in one streaming pass.
+fn json_type(lf: &LazyFrame, text: Expr) -> Result<DataType, String> {
+    let x = col("__json");
+    let failing = |dtype: DataType| {
+        (x.clone().is_not_null().and(x.clone().cast(dtype).is_null()))
+            .sum()
+            .cast(DataType::UInt64)
+    };
+    let stats = crate::data::collect(
+        lf.clone().select([text.alias("__json")]).select([
+            x.clone()
+                .str()
+                .contains(lit("^-?0[0-9]"), true)
+                .any(true)
+                .alias("padded"),
+            failing(DataType::Int64).alias("int"),
+            failing(DataType::Float64).alias("float"),
+            x.clone()
+                .is_not_null()
+                .sum()
+                .cast(DataType::UInt64)
+                .alias("present"),
+            (x.clone().is_not_null().and(
+                x.clone()
+                    .eq(lit("true"))
+                    .or(x.clone().eq(lit("false")))
+                    .not(),
+            ))
+            .sum()
+            .cast(DataType::UInt64)
+            .alias("not_bool"),
+        ]),
+    )
+    .map_err(|e| e.to_string())?;
+    let get = |c: &str| stats.column(c).ok().and_then(|s| s.get(0).ok());
+    let count = |c: &str| get(c).and_then(|v| v.extract::<u64>()).unwrap_or(0);
+    if matches!(get("padded"), Some(AnyValue::Boolean(true))) {
+        return Ok(DataType::String);
+    }
+    Ok(if count("int") == 0 {
+        DataType::Int64
+    } else if count("float") == 0 {
+        DataType::Float64
+    } else if count("present") > 0 && count("not_bool") == 0 {
+        DataType::Boolean
+    } else {
+        DataType::String
+    })
+}
+
+/// A step as part of the plan, and the column it gave a type of its own, if any.
+type Lowered = (LazyFrame, Option<(String, DataType)>);
+
+/// One step as part of the plan — with the column it retyped, if any — or `None` when
+/// it needs the whole table in memory.
+fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<Lowered>, String> {
     let schema = shell.df.schema().clone();
-    Ok(Some(match op {
-        Op::Filter(clauses) => {
-            let Some(expr) = crate::data::filter::clauses_to_expr(shell, clauses)? else {
-                return Ok(Some(lf));
-            };
-            match expr.to_polars_expr_with(Some(schema.as_ref())) {
-                Ok(mask) => lf.filter(mask.fill_null(lit(false))),
-                Err(_) => return Ok(None),
-            }
-        }
-        Op::Select(names) => lf.select(names.iter().map(|n| col(n.as_str())).collect::<Vec<_>>()),
-        Op::Compute { name, expr } => {
-            let Ok(parsed) = crate::data::expression::Expr::parse(expr) else {
-                return Ok(None);
-            };
-            // json_get's type depends on every value, and a date difference is turned
-            // into seconds after the fact: both are the in-memory path's to finish.
-            if matches!(&parsed, crate::data::expression::Expr::FunctionCall { name, .. } if name == "json_get")
-            {
-                return Ok(None);
-            }
-            match parsed.to_polars_expr_with(Some(schema.as_ref())) {
-                Ok(e) => {
-                    let out = lf.with_column(e.alias(name.as_str()));
-                    let mut probe = out.clone();
-                    match probe.collect_schema() {
-                        Ok(s) if !matches!(s.get(name.as_str()), Some(DataType::Duration(_))) => {
-                            out
-                        }
-                        _ => return Ok(None),
-                    }
+    Ok(Some((
+        match op {
+            Op::Filter(clauses) => {
+                let Some(expr) = crate::data::filter::clauses_to_expr(shell, clauses)? else {
+                    return Ok(Some((lf, None)));
+                };
+                match expr.to_polars_expr_with(Some(schema.as_ref())) {
+                    Ok(mask) => lf.filter(mask.fill_null(lit(false))),
+                    Err(_) => return Ok(None),
                 }
-                Err(_) => return Ok(None),
             }
-        }
-        Op::Sort(keys) => {
-            let names: Vec<PlSmallStr> = keys.iter().map(|k| k.col.as_str().into()).collect();
-            let descending: Vec<bool> = keys.iter().map(|k| k.desc).collect();
-            lf.sort(
-                names,
-                SortMultipleOptions::new()
-                    .with_order_descending_multi(descending)
-                    .with_nulls_last(true)
-                    .with_maintain_order(true),
-            )
-        }
-        Op::Limit(n) => lf.limit(*n as IdxSize),
-        Op::Unpivot(spec) => crate::data::unpivot::unpivot_lazy(lf, schema.as_ref(), spec)?,
-        _ => return Ok(None),
-    }))
+            Op::Select(names) => {
+                lf.select(names.iter().map(|n| col(n.as_str())).collect::<Vec<_>>())
+            }
+            Op::Compute { name, expr } => {
+                let Ok(parsed) = crate::data::expression::Expr::parse(expr) else {
+                    return Ok(None);
+                };
+                // json_get's type depends on every value: profile the rows the plan has
+                // reached, then cast to what the in-memory path would have made of them.
+                if matches!(&parsed, crate::data::expression::Expr::FunctionCall { name, .. } if name == "json_get")
+                {
+                    let Ok(text) = parsed.to_polars_expr_with(Some(schema.as_ref())) else {
+                        return Ok(None);
+                    };
+                    let dtype = json_type(&lf, text.clone())?;
+                    let typed = match &dtype {
+                        DataType::Boolean => when(text.clone().is_null())
+                            .then(lit(polars::prelude::Null {}).cast(DataType::Boolean))
+                            .otherwise(text.eq(lit("true"))),
+                        DataType::String => text,
+                        other => text.cast(other.clone()),
+                    };
+                    return Ok(Some((
+                        lf.with_column(typed.alias(name.as_str())),
+                        Some((name.clone(), dtype)),
+                    )));
+                }
+                // A date difference is turned into seconds after the fact: the in-memory
+                // path's to finish.
+                match parsed.to_polars_expr_with(Some(schema.as_ref())) {
+                    Ok(e) => {
+                        let out = lf.with_column(e.alias(name.as_str()));
+                        let mut probe = out.clone();
+                        match probe.collect_schema() {
+                            Ok(s)
+                                if !matches!(s.get(name.as_str()), Some(DataType::Duration(_))) =>
+                            {
+                                out
+                            }
+                            _ => return Ok(None),
+                        }
+                    }
+                    Err(_) => return Ok(None),
+                }
+            }
+            Op::Sort(keys) => {
+                let names: Vec<PlSmallStr> = keys.iter().map(|k| k.col.as_str().into()).collect();
+                let descending: Vec<bool> = keys.iter().map(|k| k.desc).collect();
+                lf.sort(
+                    names,
+                    SortMultipleOptions::new()
+                        .with_order_descending_multi(descending)
+                        .with_nulls_last(true)
+                        .with_maintain_order(true),
+                )
+            }
+            Op::Limit(n) => lf.limit(*n as IdxSize),
+            Op::Unpivot(spec) => crate::data::unpivot::unpivot_lazy(lf, schema.as_ref(), spec)?,
+            _ => return Ok(None),
+        },
+        None,
+    )))
 }
 
 /// Whether a step reads a nested column — those it can only read as the in-memory

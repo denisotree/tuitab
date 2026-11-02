@@ -184,3 +184,54 @@ fn the_guard_refuses_a_result_too_big_to_collect() {
     );
     assert_eq!(out["isError"], json!(false), "{}", out);
 }
+
+/// json_get types its column from every value; streamed, it profiles the same rows
+/// first and gives the same column.
+#[test]
+fn json_get_streams_with_the_type_the_loaded_path_gives() {
+    let path = write(
+        "clients.csv",
+        "id,client\n\
+         1,\"{\"\"cc\"\": \"\"US\"\", \"\"asn\"\": 7922, \"\"lat\"\": 1.5, \"\"m\"\": true, \"\"zip\"\": \"\"00123\"\"}\"\n\
+         2,\"{\"\"cc\"\": \"\"IN\"\", \"\"asn\"\": 55836, \"\"lat\"\": 2, \"\"m\"\": false, \"\"zip\"\": \"\"00456\"\"}\"\n\
+         3,not json\n",
+    );
+    for field in ["cc", "asn", "lat", "m", "zip", "missing"] {
+        let ops = json!([
+            {"compute": {"name": "x", "expr": format!("json_get(client, \"$.{}\")", field)}},
+            {"frequency": {"by": ["x"]}}
+        ]);
+        agree("tuitab_query", json!({"source": path, "ops": ops}));
+        let ops = json!([
+            {"compute": {"name": "x", "expr": format!("json_get(client, \"$.{}\")", field)}}
+        ]);
+        agree("tuitab_query", json!({"source": path, "ops": ops}));
+    }
+}
+
+/// A frequency over a value read out of JSON streams: it is not held to collecting
+/// the table.
+#[test]
+fn json_get_then_frequency_is_not_held_to_the_budget() {
+    let path = write(
+        "clients-budget.csv",
+        "id,client\n1,\"{\"\"cc\"\": \"\"US\"\"}\"\n2,\"{\"\"cc\"\": \"\"IN\"\"}\"\n3,\"{\"\"cc\"\": \"\"IN\"\"}\"\n",
+    );
+    let mut tight = Server {
+        memory_budget: Some(16),
+        ..Server::new()
+    };
+    let out = call(
+        &mut tight,
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"compute": {"name": "cc", "expr": "json_get(client, \"$.cc\")"}},
+            {"frequency": {"by": ["cc"]}}
+        ]}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    assert_eq!(
+        out["structuredContent"]["rows"][0],
+        json!(["IN", 2, 2.0 / 3.0])
+    );
+}

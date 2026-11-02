@@ -294,8 +294,9 @@ A CSV, TSV, Parquet, Arrow or JSONL file — or a pattern of them — is never l
 whole. It is scanned, the pipeline's leading steps become one plan that reads only
 the columns and rows they need, and the plan runs on Polars' streaming engine:
 
-- `filter`, `select`, `compute` (any expression except `json_get` and a date
-  difference), `sort`, `limit` and `unpivot` join the plan;
+- `filter`, `select`, `compute` (any expression but a date difference — a
+  `json_get` first takes one pass to learn its column's type), `sort`, `limit`
+  and `unpivot` join the plan;
 - `group_by`, `aggregate` and `frequency` run the same grouping over the stream and
   collect only the groups;
 - `tuitab_inspect` counts the rows as they stream past and collects the sample;
