@@ -93,6 +93,7 @@ not (status == "closed")
 | `contains(s, regex)` | True when `s` matches the regular expression |
 | `regexp_replace(s, regex, replacement)` | Every match replaced; `$1`, `${name}` or `\1` insert a group, `$$` a literal `$` |
 | `regexp_extract(s, regex)` / `regexp_extract(s, regex, group)` | The first match, or one group of it (0 is the whole match); NULL when nothing matches |
+| `json_get(s, path)` | The value at `path` in the JSON text `s`: `$`, then `.key`, `["key"]` or `[index]`, as `"$.geo.city"`. NULL when nothing is there or `s` is not JSON |
 
 The pattern (and the replacement) must be text in quotes, not a column — it is
 checked, and compiled once, when the expression is read. Flags go inside the
@@ -101,7 +102,13 @@ pattern: `(?i)` for case-insensitive.
 ```text
 regexp_replace(regexp_replace(message, "[0-9a-f]{8,}", "H"), "[0-9]+", "N")   # a log line's template
 regexp_extract(message, "(?i)https?://([A-Za-z0-9.-]+)", 1)                   # the host in a URL
+json_get(application_client, "$.country_code")                                # a field of a JSON column
 ```
+
+`json_get` gives the column the type its values share — whole numbers, numbers,
+`true`/`false` — or keeps it text; a zero-padded value such as `"00123"` stays
+text. JSON's own `"42"` and `42` both read as the number 42. For several keys of
+one JSON column, the `expand_json` operation (`zJ`) parses each cell once.
 
 ### Math
 

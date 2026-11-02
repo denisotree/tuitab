@@ -333,6 +333,7 @@ fn parity(action: &Action) -> Parity {
         Action::IncreasePrecision => Parity::UiOnly("display precision"),
         Action::DecreasePrecision => Parity::UiOnly("display precision"),
         Action::CreatePctColumn => Parity::Shared("window"),
+        Action::ExpandJsonColumn => Parity::Shared("expand_json"),
         Action::OpenPartitionSelect => Parity::UiOnly("opens a picker"),
         Action::ApplyPartitionedPct => Parity::Shared("window"),
         Action::TogglePartitionSelection => Parity::UiOnly("a picker"),
@@ -423,6 +424,7 @@ fn tui_reach(op: &Op) -> Parity {
         Op::Transpose { .. } => Parity::Shared("T, and Enter for one row"),
         Op::Join(_) => Parity::Shared("J"),
         Op::Limit(_) => Parity::Composable("scrolling — a terminal shows what fits"),
+        Op::ExpandJson { .. } => Parity::Shared("zJ"),
     }
     // No `Gap` arm is written above because there is nothing to put in one today.  The
     // test below still has to be able to fail, so it matches on the verdict rather than

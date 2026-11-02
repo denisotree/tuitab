@@ -157,23 +157,8 @@ fn typed_series(name: &str, values: Vec<String>) -> Series {
         })
         .collect();
     let text = Series::new(name.into(), &cells);
-    // A padded number is not a number: `01234` is a postcode, an account, a product
-    // code, and casting it would quietly hand back `1234`.  Nothing that reaches a
-    // spreadsheet cell as an actual number is written that way, so one such value is
-    // enough to say the column is text.
-    let padded = |s: &String| {
-        let b = s.as_bytes();
-        b.len() > 1 && b[0] == b'0' && b[1].is_ascii_digit()
-    };
-    if cells.iter().flatten().any(padded) {
-        return text;
-    }
-    for target in [DataType::Int64, DataType::Float64] {
-        if let Ok(cast) = text.strict_cast(&target) {
-            return cast;
-        }
-    }
-    text
+    // A padded number stays text — see `type_from_text`.
+    crate::data::json_cols::type_from_text(&text, false)
 }
 
 /// One cell as text.

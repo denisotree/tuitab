@@ -179,7 +179,19 @@ pub const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("regexp_extract", 2, 3),
     ("from_epoch", 2, 2),
     ("time_bucket", 2, 2),
+    ("json_get", 2, 2),
 ];
+
+/// `json_get`'s path: a literal in quotes that [`crate::data::json_cols::path_steps`]
+/// accepts.
+fn json_path_of(arg: &Expr) -> Result<(String, Vec<crate::data::json_cols::Step>), String> {
+    match arg {
+        Expr::Literal(Value::String(p)) => {
+            crate::data::json_cols::path_steps(p).map(|steps| (p.clone(), steps))
+        }
+        _ => Err("json_get() needs its path in quotes, as \"$.country_code\"".to_string()),
+    }
+}
 
 /// Which kind of time a sub-expression produces, when the frame's types say.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -406,6 +418,9 @@ impl Expr {
                     }
                     "time_bucket" => {
                         bucket_of(&args[1])?;
+                    }
+                    "json_get" => {
+                        json_path_of(&args[1])?;
                     }
                     _ => {}
                 }
@@ -675,6 +690,14 @@ impl Expr {
                         .cast(polars::prelude::DataType::String)
                         .str()
                         .extract(polars::lazy::dsl::lit(pattern.as_str().to_string()), group))
+                }
+                "json_get" => {
+                    let (path, _) = json_path_of(&args[1])?;
+                    Ok(args[0]
+                        .to_polars_expr_with(schema)?
+                        .cast(polars::prelude::DataType::String)
+                        .str()
+                        .json_path_match(polars::lazy::dsl::lit(path)))
                 }
                 "from_epoch" => {
                     let unit = epoch_unit_of(&args[1])?;
@@ -1066,6 +1089,15 @@ impl Expr {
                                 .and_then(|c| c.get(group))
                                 .map_or(Value::Null, |m| Value::String(m.as_str().to_string()))
                         }
+                    }
+                    "json_get" => {
+                        let (Some(cell), Ok((_, steps))) =
+                            (text_of(&evaluated_args[0]), json_path_of(&args[1]))
+                        else {
+                            return Value::Null;
+                        };
+                        crate::data::json_cols::get_text(&cell, &steps)
+                            .map_or(Value::Null, Value::String)
                     }
                     "from_epoch" => {
                         let (Some(x), Ok(unit)) =

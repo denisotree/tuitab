@@ -66,6 +66,7 @@ pub fn render_help_popup(frame: &mut Frame, area: Rect) {
         Line::from("  zf                Column % of Total"),
         Line::from("  zF                Partitioned Column %"),
         Line::from("  zw                Window column (rank, running total, lag)"),
+        Line::from("  zJ                One column per key of the JSON in this column"),
         Line::from("                    a running total asks what orders the rows;"),
         Line::from("                    the table itself is not re-sorted"),
         Line::from("  z←/→             Move column left/right"),

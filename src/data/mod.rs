@@ -36,6 +36,7 @@ pub mod filter;
 pub mod group;
 pub mod io;
 pub mod join;
+pub mod json_cols;
 pub mod loader;
 pub mod query;
 pub mod sort;

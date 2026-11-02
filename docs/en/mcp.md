@@ -118,6 +118,7 @@ result of the last.
 | `window` | A column computed from the rows around each row. `order_by` sets the window's own order without touching the table's |
 | `transpose` | The table on end, or one row of it |
 | `limit` | The first `n` rows |
+| `expand_json` | One column per top-level key of the JSON objects in a text column: `{"col": "client", "prefix": "client_"}` (`prefix` defaults to `<col>_`). Every cell is parsed once, so several keys cost one pass; types follow the JSON, a nested object or array is its JSON text |
 
 For OR, wrap alternatives in `any_of`:
 

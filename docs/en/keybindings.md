@@ -25,6 +25,7 @@ All keys below are for **Normal mode** unless noted. Many commands act on the
 | `[` | Sort ascending by the cursor column |
 | `]` | Sort descending by the cursor column |
 | `gb` | Group by the pinned columns, computing the aggregates marked with `+` |
+| `zJ` | One column per top-level key of the JSON in this column, named `<column>_<key>` (the `expand_json` operation) |
 | `zw` | Add a window column: rank, running total, lag/lead, group share. A running total asks which column orders the rows — the table itself is not re-sorted — then a direction, then the partitions |
 | `z[` | Add the cursor column as a further sort key, ascending |
 | `z]` | Add the cursor column as a further sort key, descending |

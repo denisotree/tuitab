@@ -1407,6 +1407,22 @@ impl DataFrame {
     ///
     /// Tries the Polars lazy API first for best performance; falls back to a
     /// row-by-row interpreter if the expression contains unsupported constructs.
+    /// `json_get` hands back each value as text, on both paths; the column then takes
+    /// the type every value shares — whole numbers, numbers, booleans — or stays text.
+    fn type_json_get_result(&mut self, expr: &crate::data::expression::Expr, name: &str) {
+        let crate::data::expression::Expr::FunctionCall { name: f, .. } = expr else {
+            return;
+        };
+        if f != "json_get" {
+            return;
+        }
+        if let Ok(column) = self.df.column(name) {
+            let typed =
+                crate::data::json_cols::type_from_text(column.as_materialized_series(), true);
+            let _ = self.df.replace(name, typed.into());
+        }
+    }
+
     pub fn add_computed_column(
         &mut self,
         name: &str,
@@ -1435,6 +1451,7 @@ impl DataFrame {
             {
                 Ok(df) => {
                     self.df = df;
+                    self.type_json_get_result(expr, name);
 
                     let mut dtype = self.df.column(name).unwrap().dtype().clone();
                     if let polars::prelude::DataType::Duration(tu) = dtype {
@@ -1564,6 +1581,7 @@ impl DataFrame {
             .with_column(polars::lazy::dsl::lit(final_series).alias(name))
             .collect()
             .map_err(|e| e.to_string())?;
+        self.type_json_get_result(expr, name);
 
         let mut meta = ColumnMeta::new(name.to_string());
         meta.col_type = crate::data::io::column_type_of(self.df.column(name).unwrap().dtype());

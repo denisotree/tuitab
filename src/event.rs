@@ -417,6 +417,7 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
             KeyCode::Char('x') => Action::StartColSplit,
             KeyCode::Char('o') => Action::OpenAs,
             KeyCode::Char('w') => Action::OpenWindowFnSelect,
+            KeyCode::Char('J') => Action::ExpandJsonColumn,
             // z[ / z] extend the sort instead of replacing it, mirroring [ / ]
             KeyCode::Char('[') => Action::AddSortKeyAscending,
             KeyCode::Char(']') => Action::AddSortKeyDescending,

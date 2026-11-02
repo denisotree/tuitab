@@ -86,6 +86,11 @@ pub enum Op {
     },
     Join(JoinSpec),
     Limit(usize),
+    /// One column per top-level key of the JSON objects in a text column.
+    ExpandJson {
+        col: String,
+        prefix: String,
+    },
 }
 
 pub struct SortKey {
@@ -135,6 +140,7 @@ fn known_keys(op: &str) -> Option<&'static [&'static str]> {
         "transpose" => &["row"],
         "join" => &["source", "path", "left_on", "right_on", "how"],
         "sort" => &["col", "desc", "by"],
+        "expand_json" => &["col", "prefix"],
         _ => return None,
     })
 }
@@ -276,6 +282,15 @@ fn parse_op(value: &Value) -> Result<Op, String> {
             row: body.get("row").and_then(Value::as_u64).map(|n| n as usize),
         }),
         "join" => Ok(Op::Join(parse_join(body)?)),
+        "expand_json" => {
+            let col = required_str(body, "col")?;
+            let prefix = match body.get("prefix") {
+                None => format!("{}_", col),
+                Some(Value::String(p)) => p.clone(),
+                Some(_) => return Err("'prefix' is text".to_string()),
+            };
+            Ok(Op::ExpandJson { col, prefix })
+        }
         "limit" => body
             .as_u64()
             .or_else(|| body.get("n").and_then(Value::as_u64))
@@ -284,7 +299,7 @@ fn parse_op(value: &Value) -> Result<Op, String> {
         other => Err(format!(
             "Unknown operation '{}'. Available: filter, select, sort, compute, \
              group_by, aggregate, frequency, pivot, join, dedup, duplicates, \
-             sample, window, transpose, limit",
+             sample, window, transpose, limit, expand_json",
             other
         )),
     }
@@ -603,6 +618,7 @@ fn apply(mut df: DataFrame, op: &Op, drawn_seed: Option<u64>) -> Result<DataFram
             materialize(df)
         }
         Op::Window(spec) => crate::data::window::add_window_column(&df, spec),
+        Op::ExpandJson { col, prefix } => crate::data::json_cols::expand_json(&df, col, prefix),
         Op::Sample { n, seed } => {
             let seed = seed.or(drawn_seed).unwrap_or(0);
             df.row_order = Arc::new(crate::data::dedup::sample_rows(&df, *n, seed));

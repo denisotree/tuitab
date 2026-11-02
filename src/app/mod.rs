@@ -1060,6 +1060,27 @@ impl App {
     }
 
     /// Share of the column's total, for the whole table (`zf`).
+    /// `zJ`: one column per top-level key of the JSON in the current column, named
+    /// `<column>_<key>` — the shared `expand_json` operation.
+    fn expand_json_column(&mut self) {
+        let s = self.stack.active_mut();
+        let col_idx = s.cursor_col;
+        let Some(col) = s.dataframe.columns.get(col_idx).map(|c| c.name.clone()) else {
+            return;
+        };
+        let prefix = format!("{}_", col);
+        match crate::data::json_cols::expand_json(&s.dataframe, &col, &prefix) {
+            Ok(df) => {
+                let added = df.columns.len() - s.dataframe.columns.len();
+                s.push_undo();
+                s.dataframe = df;
+                self.status_message = format!("{} columns from the JSON in '{}'", added, col);
+            }
+            Err(e) => self.status_message = e,
+        }
+        self.mode = AppMode::Normal;
+    }
+
     fn create_pct_column(&mut self) {
         self.add_window(crate::data::window::WindowFn::PctOfTotal, Vec::new());
     }

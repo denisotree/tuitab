@@ -5356,6 +5356,7 @@ dependencies = [
  "polars",
  "rand 0.10.3",
  "ratatui",
+ "rayon",
  "regex",
  "rusqlite",
  "rust_decimal",

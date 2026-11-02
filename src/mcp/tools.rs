@@ -87,6 +87,7 @@ OPERATIONS for tuitab_query
       Expression syntax: arithmetic, comparisons, and/or/not, if(cond, a, b), \
       concat, substring, len, contains(col, regex), \
       regexp_replace(col, regex, replacement), regexp_extract(col, regex, group), \
+      json_get(col, \"$.path\") (typed: number, boolean or text), \
       year/month/day/hour/minute (whole numbers), from_epoch(x, \"ms\"), \
       time_bucket(dt, \"10m\"), \
       date_format, abs, round(x, places), floor, ceil, sqrt, exp, ln, \
@@ -123,6 +124,11 @@ OPERATIONS for tuitab_query
   {\"sample\": {\"n\":100,\"seed\":42}}   keep n rows at random; the seed makes it repeatable
   {\"transpose\": {}}            stand the table on end; {\"row\": 3} for one row
   {\"limit\": 20}
+  {\"expand_json\": {\"col\":\"client\",\"prefix\":\"client_\"}}
+      One column per top-level key of the JSON objects in a text column, \
+      parsed once — faster than several json_get. Types follow the JSON \
+      (whole numbers, numbers, booleans, text); a nested object or array is \
+      its JSON text. prefix defaults to '<col>_'.
 Aggregate functions: count, distinct, sum, avg, min, max, median, stdev, p5, \
 p25, p50, p75, p95.
 To filter groups (SQL's HAVING), put a filter after group_by.

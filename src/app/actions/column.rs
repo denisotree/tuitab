@@ -219,6 +219,14 @@ impl App {
                 self.create_pct_column();
                 None
             }
+            Action::ExpandJsonColumn if self.stack.active().doc.is_some() => {
+                self.reject_on_doc_sheet("Expanding a JSON column");
+                None
+            }
+            Action::ExpandJsonColumn => {
+                self.expand_json_column();
+                None
+            }
             Action::OpenPartitionSelect if self.stack.active().doc.is_some() => {
                 self.reject_on_doc_sheet("Adding a partitioned % column");
                 None
