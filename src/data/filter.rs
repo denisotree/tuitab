@@ -197,6 +197,21 @@ fn fit(value: &Value, shape: Shape) -> Result<Value, String> {
     })
 }
 
+/// A literal a date or datetime column can be compared with as a moment: a date, or a
+/// date and time to the minute, second or fraction.  `None` keeps the text comparison.
+fn moment(value: &Value) -> Option<Value> {
+    let Value::String(s) = value else {
+        return None;
+    };
+    let s = s.trim();
+    crate::data::expression::parse_temporal(s).or_else(|| {
+        ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"]
+            .iter()
+            .find_map(|f| chrono::NaiveDateTime::parse_from_str(s, f).ok())
+            .map(Value::Datetime)
+    })
+}
+
 /// A column rendered as text, for [`Shape::IsoText`].
 fn as_text(col: &str) -> Expr {
     Expr::FunctionCall {
@@ -209,7 +224,38 @@ impl Predicate {
     /// Turn this predicate into an expression over the frame's columns.
     pub fn to_expr(&self, df: &DataFrame) -> Result<Expr, String> {
         let shape = shape_for(df, &self.col)?;
-        let column = if shape == Shape::IsoText {
+        // A date or datetime column against literals that name moments compares as
+        // moments: its text carries the unit's fraction (`11:10:00.000`), so an equal
+        // instant written `11:10:00` never matched as text.
+        let ordering = matches!(
+            self.op,
+            PredOp::Eq
+                | PredOp::Ne
+                | PredOp::Gt
+                | PredOp::Ge
+                | PredOp::Lt
+                | PredOp::Le
+                | PredOp::Between
+        );
+        let as_moments = shape == Shape::IsoText
+            && ordering
+            && match &self.value {
+                Operand::Literal(v) => moment(v).is_some(),
+                Operand::List(items) => {
+                    !items.is_empty() && items.iter().all(|v| moment(v).is_some())
+                }
+                Operand::Column(other) => matches!(
+                    df.columns[df.column_index(other)?].col_type,
+                    ColumnType::Date | ColumnType::Datetime
+                ),
+            };
+        let fit = |value: &Value, shape: Shape| -> Result<Value, String> {
+            match (as_moments, moment(value)) {
+                (true, Some(m)) => Ok(m),
+                _ => fit(value, shape),
+            }
+        };
+        let column = if shape == Shape::IsoText && !as_moments {
             as_text(&self.col)
         } else {
             Expr::ColumnRef(self.col.clone())
@@ -218,7 +264,7 @@ impl Predicate {
         let operand = |value: &Operand| -> Result<Expr, String> {
             match value {
                 Operand::Literal(v) => Ok(Expr::Literal(fit(v, shape)?)),
-                Operand::Column(name) => Ok(if shape == Shape::IsoText {
+                Operand::Column(name) => Ok(if shape == Shape::IsoText && !as_moments {
                     as_text(name)
                 } else {
                     Expr::ColumnRef(name.clone())

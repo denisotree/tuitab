@@ -1302,7 +1302,7 @@ fn cached_regex(pattern: &str) -> Option<regex::Regex> {
         .clone()
 }
 
-fn parse_temporal(text: &str) -> Option<Value> {
+pub(crate) fn parse_temporal(text: &str) -> Option<Value> {
     if let Ok(d) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
         return Some(Value::Date(d));
     }

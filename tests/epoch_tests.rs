@@ -249,3 +249,70 @@ fn saving_keeps_every_digit_and_the_number_type() {
     assert_eq!(back.columns[0].col_type, ColumnType::Float);
     assert_eq!(back.get_physical(0, 0), "1.23456");
 }
+
+/// A datetime column against a datetime written as text: compared as text, the
+/// column read `2026-08-24 11:10:00.000` (milliseconds) or `.000000` (microseconds),
+/// and `eq "2026-08-24 11:10:00"` matched nothing.
+#[test]
+fn a_datetime_filter_matches_the_moment_it_names() {
+    let ms = csv(
+        "moments.csv",
+        "Time,v\n1787569800000,1\n1787570400000,2\n1787571000000,3\n",
+    );
+    let parquet = tmp("moments-us.parquet");
+    {
+        use polars::prelude::*;
+        let stamps = Series::new(
+            "Time".into(),
+            [1787569800000000i64, 1787570400000000, 1787571000000000],
+        )
+        .cast(&DataType::Datetime(TimeUnit::Microseconds, None))
+        .unwrap();
+        let mut df = polars::prelude::DataFrame::new_infer_height(vec![
+            stamps.into(),
+            Series::new("v".into(), [1i64, 2, 3]).into(),
+        ])
+        .unwrap();
+        let file = std::fs::File::create(&parquet).unwrap();
+        ParquetWriter::new(file).finish(&mut df).unwrap();
+    }
+    for path in [ms, parquet] {
+        let count = |filter: Value| -> Value {
+            call(
+                &mut Server::new(),
+                "tuitab_query",
+                json!({"source": path, "ops": [{"filter": filter}, {"aggregate": [{"col": "*", "fn": "count"}]}]}),
+            )["rows"][0][0]
+                .clone()
+        };
+        assert_eq!(
+            count(json!({"col": "Time", "op": "eq", "value": "2026-08-24 11:10:00"})),
+            json!(1),
+            "{}",
+            path.display()
+        );
+        assert_eq!(
+            count(json!({"col": "Time", "op": "ne", "value": "2026-08-24 11:10:00"})),
+            json!(2)
+        );
+        assert_eq!(
+            count(json!({"col": "Time", "op": "ge", "value": "2026-08-24 11:20"})),
+            json!(2)
+        );
+        assert_eq!(
+            count(
+                json!({"col": "Time", "op": "between", "value": ["2026-08-24 11:15", "2026-08-24 11:30:00"]})
+            ),
+            json!(2)
+        );
+        assert_eq!(
+            count(json!({"col": "Time", "op": "lt", "value": "2026-08-25"})),
+            json!(3)
+        );
+        // Not a moment at all: still the text comparison it always was.
+        assert_eq!(
+            count(json!({"col": "Time", "op": "contains", "value": "11:20"})),
+            json!(1)
+        );
+    }
+}
