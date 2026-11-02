@@ -329,3 +329,104 @@ fn larger_samples_match_scipy() {
         );
     }
 }
+
+fn steps(out: &Value) -> Vec<Value> {
+    out["structuredContent"]["steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Large samples answer in moments: the exact distribution is used while it can be
+/// computed, and `auto` turns to the asymptotic one where it cannot.
+#[test]
+fn large_samples_answer_quickly() {
+    let column = |name: &str, values: Vec<f64>| {
+        let mut text = String::from("v\n");
+        for v in values {
+            text.push_str(&format!("{:?}\n", v));
+        }
+        csv(name, &text)
+    };
+    let few = column(
+        "few.csv",
+        (0..5).map(|i| i as f64 * 40_000.0 + 0.5).collect(),
+    );
+    let many = column("many.csv", (0..200_000).map(|i| i as f64).collect());
+    let a = column("a3000.csv", (0..3000).map(|i| i as f64 / 3000.0).collect());
+    let b = column(
+        "b4000.csv",
+        (0..4000).map(|i| i as f64 / 4000.0 + 0.01).collect(),
+    );
+    let started = std::time::Instant::now();
+    let out = calc(
+        &mut Server::new(),
+        json!({
+            "lists": {"few": {"source": few, "col": "v"}, "many": {"source": many, "col": "v"},
+                      "a": {"source": a, "col": "v"}, "b": {"source": b, "col": "v"}},
+            "steps": [
+                {"expr": "mannwhitney(few, many, greater, exact)"},
+                {"expr": "mannwhitney(few, many, greater, asymptotic)"},
+                {"expr": "mannwhitney(few, many, greater)"},
+                {"expr": "ks2(a, b, greater, auto)"},
+                {"expr": "ks2(a, b, greater, asymp)"},
+                {"expr": "mannwhitney(a, b, less, asymptotic)"}
+            ]
+        }),
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    let p: Vec<f64> = steps(&out)
+        .iter()
+        .map(|s| s["value"].as_str().unwrap().parse().unwrap())
+        .collect();
+    // Five against many: U / n2 tends to the sum of five uniforms (Irwin–Hall), and
+    // U here is 2·n2, so P(U >= u) -> 1 − 27/120 = 0.775.  The normal approximation
+    // is off in the third digit.
+    assert!((p[0] - 0.775).abs() < 1e-4, "exact {}", p[0]);
+    assert!((p[1] - 0.775).abs() > 1e-3, "asymptotic {}", p[1]);
+    assert_eq!(p[0], p[2], "auto is exact for five against many");
+    assert_eq!(
+        p[3], p[4],
+        "ks2 auto falls back to asymp past what floats hold"
+    );
+
+    // Exact over two large samples is refused rather than left to run for hours.
+    let started = std::time::Instant::now();
+    let out = calc(
+        &mut Server::new(),
+        json!({"lists": {"a": {"source": a, "col": "v"}, "b": {"source": b, "col": "v"}},
+               "expr": "mannwhitney(a, b, less, exact)"}),
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    assert!(
+        out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("asymptotic"),
+        "{}",
+        out
+    );
+}
+
+#[test]
+fn mannwhitney_over_samples_all_equal_says_so() {
+    let out = calc(
+        &mut Server::new(),
+        json!({"expr": "mannwhitney([1, 1, 1], [1, 1], two_sided, asymptotic)"}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    assert!(
+        out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("every value is the same"),
+        "{}",
+        out
+    );
+}

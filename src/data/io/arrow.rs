@@ -15,9 +15,7 @@ pub(super) fn load_arrow(path: &Path) -> Result<DataFrame> {
 }
 
 pub(super) fn save_arrow(df: &DataFrame, path: &Path) -> Result<()> {
-    let mut out_df = df
-        .get_visible_df()
-        .map_err(|e| color_eyre::eyre::eyre!(e))?;
+    let mut out_df = super::with_zones(df)?;
     let mut file = File::create(path)?;
     IpcWriter::new(&mut file).finish(&mut out_df)?;
     Ok(())

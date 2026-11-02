@@ -237,8 +237,11 @@ pub fn load_pattern(
     // does not match means the pattern caught a file it should not have, and saying so
     // is worth more than a sparse frame.
     let names: Vec<&str> = head.columns.iter().map(|c| c.name.as_str()).collect();
-    let head_epochs: Vec<Option<crate::data::column::EpochUnit>> =
-        head.columns.iter().map(|c| c.epoch_unit).collect();
+    let head_epochs: Vec<(Option<crate::data::column::EpochUnit>, Option<String>)> = head
+        .columns
+        .iter()
+        .map(|c| (c.epoch_unit, c.time_zone.clone()))
+        .collect();
     let mut frames = vec![head.df.clone()];
     for path in rest {
         let next = one(path)?;
@@ -281,13 +284,13 @@ pub fn load_pattern(
     };
     let mut df = wrap_polars_df(combined)
         .map_err(|e| eyre!("{} matched {} files: {}", pattern, files.len(), e))?;
-    // The files were read one by one, each with its epoch columns shown as datetimes;
-    // the stacked frame keeps the units so it saves back the way a single file does.
-    for (meta, first_meta) in df.columns.iter_mut().zip(&head_epochs) {
-        if let Some(unit) = first_meta {
-            if meta.col_type == ColumnType::Datetime {
-                meta.epoch_unit = Some(*unit);
-            }
+    // The files were read one by one, each with its epoch columns shown as datetimes
+    // and its zones set aside; the stacked frame keeps both so it saves back the way a
+    // single file does.
+    for (meta, (unit, zone)) in df.columns.iter_mut().zip(&head_epochs) {
+        if meta.col_type == ColumnType::Datetime {
+            meta.epoch_unit = *unit;
+            meta.time_zone = zone.clone();
         }
     }
     Ok((df, files.len()))
@@ -396,6 +399,18 @@ pub fn load_file_as_opts(
 /// their table is rebuilt from the tree after every edit and a column would change type
 /// under the user.
 pub(crate) fn load_tabular(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
+    // A tsv is tab-separated unless told otherwise: sniffing a file whose text holds
+    // commas would split it on them.
+    let tabbed;
+    let opts = if ext == "tsv" && opts.delimiter.is_none() {
+        tabbed = LoadOpts {
+            delimiter: Some(b'\t'),
+            ..opts.clone()
+        };
+        &tabbed
+    } else {
+        opts
+    };
     let mut df = load_tabular_raw(path, opts, ext)?;
     if matches!(ext, "csv" | "tsv") {
         numeric_despite_tokens(&mut df);
@@ -684,7 +699,8 @@ pub(crate) fn column_type_of(dtype: &DataType) -> ColumnType {
     }
 }
 
-pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
+pub(crate) fn wrap_polars_df(mut pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
+    let zones = without_zones(&mut pdf);
     let col_count = pdf.width();
     let mut columns = Vec::with_capacity(col_count);
 
@@ -693,6 +709,10 @@ pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFram
         let mut col_meta = ColumnMeta::new(name);
 
         col_meta.col_type = column_type_of(series.dtype());
+        col_meta.time_zone = zones
+            .iter()
+            .find(|(n, _)| *n == col_meta.name)
+            .map(|(_, z)| z.clone());
 
         columns.push(col_meta);
     }
@@ -700,6 +720,64 @@ pub(crate) fn wrap_polars_df(pdf: polars::prelude::DataFrame) -> Result<DataFram
     let mut df = DataFrame::from_parts(pdf, columns);
     df.calc_widths(40, 1000);
     Ok(df)
+}
+
+/// Datetime columns with a time zone, the zone set aside: the same instants as UTC
+/// without one.  Polars without its zone database cannot show, compare or format a
+/// zoned value — some of it panics — and UTC is what tuitab shows anyway.  Returns
+/// each column's zone.
+pub(crate) fn without_zones(pdf: &mut polars::prelude::DataFrame) -> Vec<(String, String)> {
+    use polars::prelude::{DataType, IntoSeries};
+    let zoned: Vec<(String, polars::prelude::TimeUnit, String)> = pdf
+        .columns()
+        .iter()
+        .filter_map(|c| match c.dtype() {
+            DataType::Datetime(tu, Some(tz)) => Some((c.name().to_string(), *tu, tz.to_string())),
+            _ => None,
+        })
+        .collect();
+    for (name, tu, _) in &zoned {
+        let Ok(column) = pdf.column(name) else {
+            continue;
+        };
+        let physical = column.as_materialized_series().to_physical_repr();
+        if let Ok(ints) = physical.i64() {
+            let naive = ints.clone().into_datetime(*tu, None).into_series();
+            let _ = pdf.replace(name, naive.with_name(name.as_str().into()).into());
+        }
+    }
+    zoned.into_iter().map(|(n, _, z)| (n, z)).collect()
+}
+
+/// The visible rows with each zoned column's zone put back, for a format that
+/// stores one (Parquet, Arrow).
+pub(super) fn with_zones(df: &DataFrame) -> Result<polars::prelude::DataFrame> {
+    use polars::prelude::{DataType, IntoSeries, TimeZone};
+    let mut out = df.get_visible_df().map_err(|e| eyre!(e))?;
+    for meta in &df.columns {
+        let Some(zone) = &meta.time_zone else {
+            continue;
+        };
+        let Ok(column) = out.column(&meta.name) else {
+            continue;
+        };
+        let DataType::Datetime(tu, None) = column.dtype() else {
+            continue;
+        };
+        let tu = *tu;
+        let physical = column.as_materialized_series().to_physical_repr();
+        if let Ok(ints) = physical.i64() {
+            let zoned = ints
+                .clone()
+                .into_datetime(tu, TimeZone::opt_try_new(Some(zone.as_str()))?)
+                .into_series();
+            out.replace(
+                &meta.name,
+                zoned.with_name(meta.name.as_str().into()).into(),
+            )?;
+        }
+    }
+    Ok(out)
 }
 
 fn save_csv(df: &DataFrame, path: &Path, delimiter: u8) -> Result<()> {

@@ -1059,7 +1059,6 @@ impl App {
         self.mode = AppMode::Normal;
     }
 
-    /// Share of the column's total, for the whole table (`zf`).
     /// `zJ`: one column per top-level key of the JSON in the current column, named
     /// `<column>_<key>` — the shared `expand_json` operation.
     fn expand_json_column(&mut self) {
@@ -1117,6 +1116,7 @@ impl App {
         }
     }
 
+    /// Share of the column's total, for the whole table (`zf`).
     fn create_pct_column(&mut self) {
         self.add_window(crate::data::window::WindowFn::PctOfTotal, Vec::new());
     }

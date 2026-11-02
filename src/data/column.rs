@@ -71,6 +71,11 @@ pub struct ColumnMeta {
     /// retyping to Integer restores them, so reading a file never changes what it holds.
     #[serde(default)]
     pub epoch_unit: Option<EpochUnit>,
+    /// A datetime read with a time zone: held, shown and compared as UTC without one
+    /// (this build has no zone database), and written back with it by the formats
+    /// that store one.
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 /// The unit of an integer epoch column.
@@ -193,6 +198,7 @@ impl ColumnMeta {
             db_origin: None,
             db_retype: None,
             epoch_unit: None,
+            time_zone: None,
         }
     }
 }

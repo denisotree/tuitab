@@ -105,8 +105,8 @@ impl DataFrame {
     /// [`ColumnType`] through [`crate::data::aggregator::AggregatorKind::preserves_col_type`],
     /// which is written for the TUI, where the average of an Integer column is
     /// still formatted like that column.  As a *type*, though, it is a lie: the
-    /// mean of integers comes back fractional.  The frame knows better, so ask
-    /// it.
+    /// mean of integers comes back fractional, and the sum of booleans is a
+    /// count.  The frame knows better, so ask it.
     pub fn from_parts(pdf: polars::prelude::DataFrame, columns: Vec<ColumnMeta>) -> Self {
         Self::from_parts_ordered(pdf, columns, None)
     }
@@ -119,10 +119,14 @@ impl DataFrame {
         order: Option<RowOrders>,
     ) -> Self {
         for (meta, column) in columns.iter_mut().zip(pdf.columns()) {
-            if meta.col_type == ColumnType::Integer
-                && matches!(column.dtype(), DataType::Float32 | DataType::Float64)
-            {
-                meta.col_type = ColumnType::Float;
+            let dtype = column.dtype();
+            match meta.col_type {
+                ColumnType::Integer | ColumnType::Boolean if dtype.is_float() => {
+                    meta.col_type = ColumnType::Float;
+                }
+                // The sum of a boolean column counts its trues.
+                ColumnType::Boolean if dtype.is_integer() => meta.col_type = ColumnType::Integer,
+                _ => {}
             }
         }
 

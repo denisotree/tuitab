@@ -236,6 +236,8 @@ impl Predicate {
                 | PredOp::Lt
                 | PredOp::Le
                 | PredOp::Between
+                | PredOp::In
+                | PredOp::NotIn
         );
         let as_moments = shape == Shape::IsoText
             && ordering
@@ -312,6 +314,19 @@ impl Predicate {
                 _ => Err("'between' takes a two-element [low, high] array".to_string()),
             },
             PredOp::In | PredOp::NotIn => match &self.value {
+                // Moments as a chain of equalities: an IN list holds numbers and text.
+                Operand::List(items) if as_moments => {
+                    let any = items
+                        .iter()
+                        .map(|v| Ok(binop(Op::Eq, column.clone(), Expr::Literal(fit(v, shape)?))))
+                        .reduce(|a: Result<Expr, String>, b| Ok(binop(Op::Or, a?, b?)))
+                        .expect("as_moments needs a non-empty list")?;
+                    Ok(if self.op == PredOp::In {
+                        any
+                    } else {
+                        Expr::Not(Box::new(any))
+                    })
+                }
                 Operand::List(items) => {
                     let list = Expr::InList {
                         left: Box::new(column),

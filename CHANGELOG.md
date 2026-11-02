@@ -51,15 +51,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vectorised on date and datetime columns.
 - A datetime shows a fraction of a second only when it has one.
 - `frequency` and `group_by` run on Polars' streaming engine in the terminal too.
+- **Saving writes the values, not their display.** A percentage column goes to
+  the file as its fraction (`0.3`, not `30%`), a currency column without its
+  symbol, a file size in bytes — so the file reads back as numbers. The MCP
+  answer no longer says the file was formatted.
 
 ### Fixed
 
 - **A filter on a date or datetime column matches the moment it names.** The
   column was compared as text, which carries the unit's fraction (`11:10:00.000`),
-  so `eq "2026-08-24 11:10:00"` never matched.
+  so `eq "2026-08-24 11:10:00"` never matched. The same holds for `in`, `not_in`
+  and `between`, and `contains` reads the text the table shows.
+- **A datetime with a time zone opens and saves.** A named zone
+  (`Europe/Moscow`) crashed the MCP server and the terminal, a filter on a zoned
+  column failed, and saving dropped the zone. The column is shown and compared in
+  UTC, as before, `tuitab_inspect` names its zone, and Parquet and Arrow get it
+  back on save.
+- **A `.tsv` is split on tabs.** Its separator was guessed, so a TSV whose text
+  holds commas was split on them.
 - **Saving no longer rounds numbers to the screen's precision.** A float column
   went to a CSV with two decimals (1.23456 became 1.23), and to Parquet, Arrow and
   xlsx as text.
+- `contains` with a pattern that is not a valid regex is refused when the
+  expression is read, instead of filling the column with NULLs.
 - A misspelt function in an expression filled the column with NULLs and
   reported success; it is now an error naming the functions there are, and a
   call with the wrong number of arguments — which could crash — is refused.

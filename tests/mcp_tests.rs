@@ -2485,15 +2485,16 @@ fn a_query_with_no_ops_is_the_table_itself() {
     );
     std::fs::remove_file(&out).unwrap();
 
-    // A file a person opens still says so.
+    // Nor does a file: it holds the values the rows carry.
     let csv = tmp("copy-no-ops.csv");
+    let _ = std::fs::remove_file(&csv);
     let written = call(
         &mut server,
         "tuitab_query",
         json!({"source": "test_data/sample.csv",
                "output": {"path": csv.to_string_lossy()}}),
     );
-    assert!(written["note"].as_str().unwrap().contains("formatted"));
+    assert!(written.get("note").is_none(), "{}", written);
     std::fs::remove_file(&csv).unwrap();
 }
 

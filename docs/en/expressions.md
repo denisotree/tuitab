@@ -160,6 +160,10 @@ restores them. In the MCP server `tuitab_inspect` notes such a column, and
 `"detect_epoch": false` on the source keeps the integers. JSON, YAML, TOML and
 markdown are left as they are.
 
+A datetime that carries a time zone (Parquet, Arrow) is shown, compared and
+computed in UTC — write a filter's moment in UTC. Saving to Parquet or Arrow puts
+the zone back; `tuitab_inspect` names it.
+
 ### Conditionals
 
 | Function | Result |

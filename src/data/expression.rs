@@ -219,6 +219,20 @@ fn is_text(e: &Expr, schema: Option<&polars::prelude::Schema>) -> bool {
     }
 }
 
+/// A value as the text the row-by-row path makes of it.  A datetime cast to text
+/// carries its unit's fraction (`11:10:00.000`); chrono's `%.f` shows one only when
+/// there is one, as the table does.
+fn as_text(
+    e: &Expr,
+    schema: Option<&polars::prelude::Schema>,
+) -> Result<polars::lazy::dsl::Expr, String> {
+    let x = e.to_polars_expr_with(schema)?;
+    Ok(match temporal_kind(e, schema) {
+        Some(Temporal::Datetime) => x.dt().to_string("%Y-%m-%d %H:%M:%S%.f"),
+        _ => x.cast(polars::prelude::DataType::String),
+    })
+}
+
 /// A whole-number literal at least zero, for `substring`'s start and length.
 fn count_literal(e: &Expr) -> Option<u64> {
     match e {
@@ -263,48 +277,60 @@ fn epoch_unit_of(arg: &Expr) -> Result<crate::data::column::EpochUnit, String> {
 }
 
 /// `time_bucket`'s width: a whole number of seconds, minutes, hours or days in quotes,
-/// as `"10m"`, `"1h"`, `"1d"`.  Returned in the form Polars reads.
+/// as `"10m"`, `"1h"`, `"1d"`, and no wider than a datetime spans.  Returned in the
+/// form Polars reads.
 fn bucket_of(arg: &Expr) -> Result<String, String> {
-    let ok = |w: &str| {
-        let (n, unit) = w.split_at(w.len().saturating_sub(1));
-        !n.is_empty()
-            && n.bytes().all(|b| b.is_ascii_digit())
-            && n.parse::<u32>().is_ok_and(|v| v > 0)
-            && matches!(unit, "s" | "m" | "h" | "d")
-    };
     match arg {
-        Expr::Literal(Value::String(w)) if ok(w) => Ok(w.clone()),
+        Expr::Literal(Value::String(w)) if w.is_ascii() && bucket_nanos(w).is_some() => {
+            Ok(w.clone())
+        }
         _ => Err(
-            "time_bucket() takes a width in quotes: a whole number of s, m, h or d, as \"10m\" or \"1h\""
+            "time_bucket() takes a width in quotes: a whole number of s, m, h or d, as \"10m\" or \"1h\", \
+             no wider than about 290 years"
                 .to_string(),
         ),
     }
 }
 
-/// The bucket width in nanoseconds, for the row-by-row path.
-fn bucket_nanos(w: &str) -> i64 {
-    let (n, unit) = w.split_at(w.len() - 1);
-    let n: i64 = n.parse().unwrap_or(1);
-    n * match unit {
+/// The bucket width in nanoseconds; `None` for a width that is not one, or does not
+/// fit a datetime.
+fn bucket_nanos(w: &str) -> Option<i64> {
+    let (n, unit) = w.split_at(w.len().checked_sub(1)?);
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: i64 = n.parse().ok().filter(|v| *v > 0)?;
+    n.checked_mul(match unit {
         "s" => 1_000_000_000,
         "m" => 60_000_000_000,
         "h" => 3_600_000_000_000,
-        _ => 86_400_000_000_000,
-    }
+        "d" => 86_400_000_000_000,
+        _ => return None,
+    })
 }
 
+/// `integral`: `x` is whole numbers already, scaled and cast in integers — a float
+/// holds only 15–16 digits, and a nanosecond epoch has 19.
 pub(crate) fn epoch_to_datetime(
     x: polars::lazy::dsl::Expr,
     unit: crate::data::column::EpochUnit,
+    integral: bool,
 ) -> polars::lazy::dsl::Expr {
     use crate::data::column::EpochUnit;
     use polars::prelude::{DataType, RoundMode, TimeUnit};
     let whole = |e: polars::lazy::dsl::Expr| {
-        e.cast(DataType::Float64)
-            .round(0, RoundMode::HalfAwayFromZero)
-            .cast(DataType::Int64)
+        if integral {
+            e.cast(DataType::Int64)
+        } else {
+            e.cast(DataType::Float64)
+                .round(0, RoundMode::HalfAwayFromZero)
+                .cast(DataType::Int64)
+        }
     };
+    let x = if integral { x.cast(DataType::Int64) } else { x };
     match unit {
+        EpochUnit::Seconds if integral => (x * polars::lazy::dsl::lit(1000i64))
+            .cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
         EpochUnit::Seconds => whole(x * polars::lazy::dsl::lit(1000.0))
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
         EpochUnit::Millis => whole(x).cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
@@ -443,6 +469,9 @@ impl Expr {
                     }
                     "from_epoch" => {
                         epoch_unit_of(&args[1])?;
+                    }
+                    "contains" if matches!(args.get(1), Some(Expr::Literal(Value::String(_)))) => {
+                        regex_literal(name, &args[1])?;
                     }
                     "time_bucket" => {
                         bucket_of(&args[1])?;
@@ -654,15 +683,11 @@ impl Expr {
                     .cast(polars::prelude::DataType::Float64)),
                 // Casting to text so a value of any type can be compared with
                 // a string — polars refuses `numeric == ""` outright.
-                "text" if args.len() == 1 => Ok(args[0]
-                    .to_polars_expr_with(schema)?
-                    .cast(polars::prelude::DataType::String)),
+                "text" if args.len() == 1 => as_text(&args[0], schema),
                 // The pattern has to be a literal: a per-row regex would mean
                 // recompiling it for every row, and no caller wants that.
                 "contains" if args.len() == 2 => match &args[1] {
-                    Expr::Literal(Value::String(pattern)) => Ok(args[0]
-                        .to_polars_expr_with(schema)?
-                        .cast(polars::prelude::DataType::String)
+                    Expr::Literal(Value::String(pattern)) => Ok(as_text(&args[0], schema)?
                         .str()
                         .contains(polars::lazy::dsl::lit(pattern.clone()), true)),
                     _ => {
@@ -770,9 +795,19 @@ impl Expr {
                 "from_epoch" => {
                     let unit = epoch_unit_of(&args[1])?;
                     let x = args[0].to_polars_expr_with(schema)?;
-                    Ok(epoch_to_datetime(x, unit))
+                    // Whole numbers stay in integers: what the argument is, asked of
+                    // a frame with the columns and no rows.
+                    let integral = schema.is_some_and(|s| {
+                        polars::prelude::IntoLazy::lazy(
+                            polars::prelude::DataFrame::empty_with_schema(s),
+                        )
+                        .select([x.clone()])
+                        .collect_schema()
+                        .is_ok_and(|out| out.iter_values().all(|t| t.is_integer()))
+                    });
+                    Ok(epoch_to_datetime(x, unit, integral))
                 }
-                "time_bucket" => {
+                "time_bucket" if temporal_kind(&args[0], schema).is_some() => {
                     let every = bucket_of(&args[1])?;
                     let dt = args[0].to_polars_expr_with(schema)?;
                     Ok(dt.dt().truncate(polars::lazy::dsl::lit(every)))
@@ -1192,10 +1227,12 @@ impl Expr {
                         }
                     }
                     "time_bucket" => {
-                        let Ok(every) = bucket_of(&args[1]) else {
+                        let Some((every, step)) = bucket_of(&args[1])
+                            .ok()
+                            .and_then(|w| bucket_nanos(&w).map(|step| (w, step)))
+                        else {
                             return Value::Null;
                         };
-                        let step = bucket_nanos(&every);
                         match &evaluated_args[0] {
                             Value::Datetime(dt) => match dt.and_utc().timestamp_nanos_opt() {
                                 Some(ns) => Value::Datetime(

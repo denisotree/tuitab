@@ -637,7 +637,7 @@ fn inspect(server: &mut Server, args: &Value) -> Result<Value, CallError> {
                 .memory_budget
                 .unwrap_or_else(super::lazy::default_budget);
             if let super::lazy::Outcome::Head { df, row_count } =
-                super::lazy::run(&scanned, &[], sample, false, budget).map_err(CallError::Failed)?
+                super::lazy::run(&scanned, &[], sample, None, budget).map_err(CallError::Failed)?
             {
                 let table = render::table_of(&df, sample, row_count)?;
                 return Ok(json!({
@@ -725,6 +725,15 @@ fn columns_json_with_schema(
             obj.insert(
                 "note".into(),
                 json!(format!("epoch {} → datetime (UTC)", unit.label())),
+            );
+        }
+        if let (Some(obj), Some(zone)) = (entry.as_object_mut(), &meta.time_zone) {
+            obj.insert(
+                "note".into(),
+                json!(format!(
+                    "time zone {}: shown and compared in UTC, written back with the zone",
+                    zone
+                )),
             );
         }
     }
@@ -879,9 +888,13 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
             .unwrap_or_else(|| format!("pipeline_{}", index));
         let outcome = match (ops, &scanned, &base) {
             (Err(why), _, _) => Err(why.clone()),
-            (Ok(ops), Some(scanned), _) => {
-                run_streamed(scanned, ops, output.limit, output.path.is_some(), budget)
-            }
+            (Ok(ops), Some(scanned), _) => run_streamed(
+                scanned,
+                ops,
+                output.limit,
+                output.path.is_some().then_some("writing the result"),
+                budget,
+            ),
             (Ok(ops), None, Some(base)) => pipeline::apply_all_reporting_seeds(base.clone(), ops)
                 .map(|(df, seeds)| Answer::Table(df, seeds)),
             (Ok(_), None, None) => Err("nothing was loaded".to_string()),
@@ -969,7 +982,7 @@ fn run_streamed(
     scanned: &super::lazy::Scanned,
     ops: &[pipeline::Op],
     limit: usize,
-    whole: bool,
+    whole: Option<&str>,
     budget: u64,
 ) -> Result<Answer, String> {
     match super::lazy::run(scanned, ops, limit, whole, budget)? {
@@ -1109,10 +1122,7 @@ fn write_result(
         "row_count": df.row_order.len(),
         "columns": render::columns_json(df),
     });
-    // A spreadsheet or a csv is written for a person to read, and the currency symbols
-    // and fixed decimals in it say so.  A database is written for the next query: the
-    // columns are typed, NULL stays NULL, and telling the caller otherwise makes a
-    // perfectly good table look unfit to query.
+    // Every format is written from the typed frame: the values the rows carry.
     if let Some(kind) = db {
         written["table"] = json!(table);
         // Named like a file, the target was a database all along: the caller asked for a
@@ -1130,10 +1140,6 @@ fn write_result(
                 table
             ));
         }
-    } else {
-        written["note"] = json!(
-            "Values in the file are formatted for reading (currency symbols, fixed decimals)."
-        );
     }
     Ok(written)
 }
@@ -1168,7 +1174,13 @@ fn describe_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> 
             let budget = server
                 .memory_budget
                 .unwrap_or_else(super::lazy::default_budget);
-            match run_streamed(&scanned, &select, usize::MAX, true, budget)? {
+            match run_streamed(
+                &scanned,
+                &select,
+                usize::MAX,
+                Some("tuitab_describe"),
+                budget,
+            )? {
                 Answer::Table(df, _) => df,
                 Answer::Shown(_) => unreachable!("a whole run is never shown from its head"),
             }
@@ -1220,7 +1232,15 @@ fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
                     let budget = server
                         .memory_budget
                         .unwrap_or_else(super::lazy::default_budget);
-                    match run_streamed(&scanned, &ops, usize::MAX, true, budget).map_err(&fail)? {
+                    match run_streamed(
+                        &scanned,
+                        &ops,
+                        usize::MAX,
+                        Some("tuitab_calc lists"),
+                        budget,
+                    )
+                    .map_err(&fail)?
+                    {
                         Answer::Table(df, _) => df,
                         Answer::Shown(_) => {
                             unreachable!("a whole run is never shown from its head")

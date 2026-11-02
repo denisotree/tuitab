@@ -68,38 +68,47 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
     if !lines && !table {
         return Ok(None);
     }
+    // A pattern's schema, when its files agree on one: the CSV scan takes it rather
+    // than inferring it a second time.
+    let mut pattern_schema: Option<Schema> = None;
     let first = if pattern {
         let files = match crate::data::io::glob_matches(&text) {
             Ok(files) if !files.is_empty() => files,
             _ => return Ok(None),
         };
-        // A pattern reads files that hold one table.  One whose columns differ is the
-        // in-memory path's to name, as it always has.
-        let names = |file: &Path| -> Option<Vec<String>> {
+        // A pattern reads files that hold one table.  One whose columns or their types
+        // differ — each typed from all its rows, as the in-memory reader types it — is
+        // the in-memory path's to name, as it always has.
+        let schema_of = |file: &Path| -> Option<Schema> {
             let one = PlRefPath::try_from_path(file).ok()?;
             let mut lf = match ext.as_str() {
                 "csv" | "tsv" => LazyCsvReader::new(one)
-                    .with_separator(
-                        src.delimiter
-                            .unwrap_or_else(|| crate::data::loader::detect_delimiter(file)),
-                    )
+                    .with_separator(delimiter_of(src, file))
                     .with_has_header(true)
-                    .with_infer_schema_length(Some(10))
+                    .with_infer_schema_length(None)
                     .finish()
                     .ok()?,
                 "parquet" => LazyFrame::scan_parquet(one, ScanArgsParquet::default()).ok()?,
                 "arrow" | "feather" | "ipc" => {
                     LazyFrame::scan_ipc(one, Default::default(), Default::default()).ok()?
                 }
-                _ => LazyJsonLineReader::new(one).finish().ok()?,
+                _ => LazyJsonLineReader::new(one)
+                    .with_infer_schema_length(None)
+                    .finish()
+                    .ok()?,
             };
-            let schema = lf.collect_schema().ok()?;
-            Some(schema.iter_names().map(|n| n.to_string()).collect())
+            Some((*lf.collect_schema().ok()?).clone())
         };
-        let head = names(&files[0]);
-        if head.is_none() || files[1..].iter().any(|f| names(f) != head) {
+        let schema_of = |file: &Path| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| schema_of(file)))
+                .ok()
+                .flatten()
+        };
+        let head = schema_of(&files[0]);
+        if head.is_none() || files[1..].iter().any(|f| schema_of(f) != head) {
             return Ok(None);
         }
+        pattern_schema = head;
         files[0].clone()
     } else {
         src.path.clone()
@@ -123,10 +132,13 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
     };
     let mut lf = match ext.as_str() {
         "csv" | "tsv" => {
-            let schema = cached(&SCHEMAS, &key, || {
-                inferred(scan_csv(src, path.clone(), &first, None)?)
-            })
-            .map_err(named)?;
+            let schema = match pattern_schema {
+                Some(schema) => schema,
+                None => cached(&SCHEMAS, &key, || {
+                    inferred(scan_csv(src, path.clone(), &first, None)?)
+                })
+                .map_err(named)?,
+            };
             scan_csv(src, path, &first, Some(schema)).map_err(named)?
         }
         "parquet" => LazyFrame::scan_parquet(path, ScanArgsParquet::default())
@@ -136,15 +148,35 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
                 .map_err(|e| named(e.to_string()))?
         }
         _ => {
-            let schema = cached(&SCHEMAS, &key, || {
-                inferred(
-                    LazyJsonLineReader::new(path.clone())
+            // Lines whose fields change shape, arrays per line, numbers past 64 bits:
+            // the scan cannot type them (and Polars may panic trying), the in-memory
+            // reader can.  The answer is remembered, so the passes are paid once.
+            let schema = cached(&LINE_SCHEMAS, &key, || {
+                let p = path.clone();
+                Ok(std::panic::catch_unwind(move || {
+                    let lf = LazyJsonLineReader::new(p.clone())
                         .with_infer_schema_length(None)
                         .finish()
-                        .map_err(|e| e.to_string())?,
-                )
+                        .ok()?;
+                    let schema = inferred(lf).ok()?;
+                    // A type that fits every line is not yet a type every value
+                    // decodes into: a field that is a number here and an object there
+                    // types as the object, then fails.  Decode every column once.
+                    let decoded = LazyJsonLineReader::new(p)
+                        .with_schema(Some(std::sync::Arc::new(schema.clone())))
+                        .finish()
+                        .ok()?
+                        .select([all().as_expr().null_count()]);
+                    crate::data::collect(decoded).ok()?;
+                    Some(schema)
+                })
+                .ok()
+                .flatten())
             })
             .map_err(named)?;
+            let Some(schema) = schema else {
+                return Ok(None);
+            };
             LazyJsonLineReader::new(path)
                 .with_schema(Some(std::sync::Arc::new(schema)))
                 .finish()
@@ -153,6 +185,32 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
     };
 
     let mut schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
+
+    // A zoned datetime as the in-memory loader holds it: UTC, the zone set aside.
+    let zones: Vec<(String, String)> = schema
+        .iter()
+        .filter_map(|(n, t)| match t {
+            DataType::Datetime(_, Some(tz)) => Some((n.to_string(), tz.to_string())),
+            _ => None,
+        })
+        .collect();
+    if !zones.is_empty() {
+        lf = lf.with_columns(
+            schema
+                .iter()
+                .filter_map(|(n, t)| match t {
+                    DataType::Datetime(tu, Some(_)) => Some(
+                        col(n.as_str())
+                            .to_physical()
+                            .cast(DataType::Datetime(*tu, None))
+                            .alias(n.as_str()),
+                    ),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+        schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
+    }
 
     // The in-memory CSV reader turns `undefined` and friends into NULL in a column
     // that is otherwise numbers; the scan does the same, from one profiling pass.
@@ -178,7 +236,7 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
                 epochs
                     .iter()
                     .map(|(name, unit)| {
-                        crate::data::expression::epoch_to_datetime(col(name.as_str()), *unit)
+                        crate::data::expression::epoch_to_datetime(col(name.as_str()), *unit, true)
                             .alias(name.as_str())
                     })
                     .collect::<Vec<_>>(),
@@ -204,12 +262,25 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
             shell.columns[i].epoch_unit = Some(*unit);
         }
     }
+    for (name, zone) in zones {
+        if let Ok(i) = shell.column_index(&name) {
+            shell.columns[i].time_zone = Some(zone);
+        }
+    }
     Ok(Some(Scanned {
         reading,
         lf,
         shell,
         nested,
     }))
+}
+
+/// The separator the in-memory reader would use: the one given, a tab for a tsv, or
+/// what the file's first lines suggest.
+fn delimiter_of(src: &Source, file: &Path) -> u8 {
+    src.delimiter
+        .or((super::source::extension_of(src) == "tsv").then_some(b'\t'))
+        .unwrap_or_else(|| crate::data::loader::detect_delimiter(file))
 }
 
 fn scan_csv(
@@ -219,9 +290,7 @@ fn scan_csv(
     schema: Option<Schema>,
 ) -> Result<LazyFrame, String> {
     let opts = src.load_opts();
-    let sep = opts
-        .delimiter
-        .unwrap_or_else(|| crate::data::loader::detect_delimiter(first));
+    let sep = delimiter_of(src, first);
     let mut reader = LazyCsvReader::new(path)
         .with_separator(sep)
         .with_has_header(true)
@@ -244,7 +313,11 @@ type Key = String;
 /// Per file version: what one profiling pass found.
 type Store<T> = OnceLock<Mutex<HashMap<Key, T>>>;
 
+/// Profiles kept per store; past that the store starts over.
+const PROFILES_KEPT: usize = 64;
+
 static SCHEMAS: Store<Schema> = OnceLock::new();
+static LINE_SCHEMAS: Store<Option<Schema>> = OnceLock::new();
 static TOKEN_CASTS: Store<Vec<(String, DataType)>> = OnceLock::new();
 static EPOCHS: Store<Vec<(String, EpochUnit)>> = OnceLock::new();
 
@@ -262,8 +335,9 @@ fn profile_key(src: &Source, first: &Path, pattern: bool) -> Option<Key> {
         .ok()?
         .as_nanos();
     Some(format!(
-        "{}|{}|{}|{:?}",
+        "{}|{}|{}|{}|{:?}",
         first.display(),
+        super::source::extension_of(src),
         stamp,
         meta.len(),
         src.load_opts()
@@ -283,10 +357,13 @@ fn cached<T: Clone>(
     }
     let value = compute()?;
     if let Some(k) = key {
-        store
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(k.clone(), value.clone());
+        let mut kept = store.lock().unwrap_or_else(|e| e.into_inner());
+        // ponytail: starts over when full rather than evicting the oldest; an LRU if
+        // a server ever cycles through more files than this.
+        if kept.len() >= PROFILES_KEPT {
+            kept.clear();
+        }
+        kept.insert(k.clone(), value.clone());
     }
     Ok(value)
 }
@@ -413,13 +490,14 @@ fn epoch_columns(lf: &LazyFrame, schema: &Schema) -> Result<Vec<(String, EpochUn
 // ── Running a pipeline ──────────────────────────────────────────────────────────────
 
 /// Run `ops` over the scan.  `limit` is how many rows the caller will show when the
-/// whole pipeline is a plan; `whole` asks for every row (a file is being written);
-/// `budget` is how many bytes may be collected.
+/// whole pipeline is a plan; `whole` asks for every row, naming what wants them (a
+/// file being written, a describe) for the guard to say; `budget` is how many bytes
+/// may be collected.
 pub fn run(
     scanned: &Scanned,
     ops: &[Op],
     limit: usize,
-    whole: bool,
+    whole: Option<&str>,
     budget: u64,
 ) -> Result<Outcome, String> {
     let mut lf = scanned.lf.clone();
@@ -489,7 +567,7 @@ pub fn run(
 
     // The step's columns, in the step's order and types.
     let lf = conform(lf, &shell, &scanned.nested);
-    if i == ops.len() && !whole {
+    if i == ops.len() && whole.is_none() {
         let counted = crate::data::collect(lf.clone().select([len().alias("n")]))
             .map_err(|e| format!("{}: {}", scanned.reading, e))?;
         let row_count = counted
@@ -506,7 +584,8 @@ pub fn run(
 
     guard(
         &lf,
-        ops.get(i).map_or("writing the result", op_name),
+        ops.get(i)
+            .map_or(whole.unwrap_or("collecting the result"), |op| op_name(op)),
         budget,
     )
     .map_err(|e| match e {
@@ -626,22 +705,27 @@ fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<Lowered>, S
                         Some((name.clone(), dtype)),
                     )));
                 }
-                // A date difference is turned into seconds after the fact: the in-memory
-                // path's to finish.
-                match parsed.to_polars_expr_with(Some(schema.as_ref())) {
-                    Ok(e) => {
-                        let out = lf.with_column(e.alias(name.as_str()));
-                        let mut probe = out.clone();
-                        match probe.collect_schema() {
-                            Ok(s)
-                                if !matches!(s.get(name.as_str()), Some(DataType::Duration(_))) =>
-                            {
-                                out
-                            }
-                            _ => return Ok(None),
-                        }
+                // A date difference is turned into seconds after the fact, and a form
+                // Polars rejects for these types (`len` of a number) is computed row by
+                // row: both the in-memory path's to finish.  Run on no rows, the form
+                // meets its types without reading the file.
+                let Ok(e) = parsed.to_polars_expr_with(Some(schema.as_ref())) else {
+                    return Ok(None);
+                };
+                let probe = polars::prelude::DataFrame::empty_with_schema(schema.as_ref())
+                    .lazy()
+                    .with_column(e.clone().alias(name.as_str()))
+                    .collect();
+                match probe {
+                    Ok(df)
+                        if !matches!(
+                            df.column(name.as_str()).map(|c| c.dtype()),
+                            Ok(DataType::Duration(_))
+                        ) =>
+                    {
+                        lf.with_column(e.alias(name.as_str()))
                     }
-                    Err(_) => return Ok(None),
+                    _ => return Ok(None),
                 }
             }
             Op::Sort(keys) => {
@@ -890,4 +974,20 @@ pub fn default_budget() -> u64 {
         }
     }
     8 * 1024 * 1024 * 1024
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long-running server reading many files keeps a bounded number of profiles.
+    #[test]
+    fn profiles_are_bounded() {
+        static STORE: Store<usize> = OnceLock::new();
+        for i in 0..PROFILES_KEPT * 3 {
+            cached(&STORE, &Some(format!("file-{}", i)), || Ok(i)).unwrap();
+        }
+        let kept = STORE.get().unwrap().lock().unwrap().len();
+        assert!(kept <= PROFILES_KEPT, "{} profiles kept", kept);
+    }
 }

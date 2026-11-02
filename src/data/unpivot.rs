@@ -39,6 +39,12 @@ pub fn unpivot_lazy(lf: LazyFrame, schema: &Schema, spec: &Spec) -> Result<LazyF
                 if !has(c) {
                     return Err(format!("unpivot: no column '{}'", c));
                 }
+                if spec.index.contains(c) {
+                    return Err(format!(
+                        "unpivot: '{}' is an index column; it cannot also be turned into rows",
+                        c
+                    ));
+                }
             }
             list.clone()
         }
@@ -103,21 +109,41 @@ fn common_type(schema: &Schema, columns: &[String]) -> Result<DataType, String> 
             DataType::Float64
         });
     }
-    let text: Vec<&str> = types
+    if types
         .iter()
-        .filter(|(_, t)| !t.is_primitive_numeric())
-        .map(|(c, _)| c.as_str())
-        .collect();
-    let numbers: Vec<&str> = types
+        .all(|(_, t)| matches!(t, DataType::Datetime(_, None)))
+    {
+        // The finest unit among them, so no value loses digits.
+        let unit = types
+            .iter()
+            .filter_map(|(_, t)| match t {
+                DataType::Datetime(u, _) => Some(*u),
+                _ => None,
+            })
+            .max_by_key(|u| match u {
+                TimeUnit::Milliseconds => 0,
+                TimeUnit::Microseconds => 1,
+                TimeUnit::Nanoseconds => 2,
+            })
+            .unwrap_or(TimeUnit::Microseconds);
+        return Ok(DataType::Datetime(unit, None));
+    }
+    let kind = |t: &DataType| match t {
+        t if t.is_primitive_numeric() => "a number",
+        DataType::Boolean => "true/false",
+        DataType::Date => "a date",
+        DataType::Datetime(_, _) => "a datetime",
+        DataType::String => "text",
+        _ => "nested",
+    };
+    let each: Vec<String> = types
         .iter()
-        .filter(|(_, t)| t.is_primitive_numeric())
-        .map(|(c, _)| c.as_str())
+        .map(|(c, t)| format!("{} is {}", c, kind(t)))
         .collect();
     Err(format!(
-        "unpivot: {} hold text and {} hold numbers; one value column cannot be both. \
-         Unpivot them separately, or name only one kind in 'columns'",
-        text.join(", "),
-        numbers.join(", ")
+        "unpivot: {}; one value column cannot hold them all. Unpivot each kind \
+         separately, naming only it in 'columns'",
+        each.join(", ")
     ))
 }
 

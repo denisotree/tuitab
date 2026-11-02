@@ -140,3 +140,51 @@ fn gw_without_a_pinned_column_says_what_to_do() {
     assert_eq!(app.stack.depth(), sheets);
     assert!(app.status_message.contains("Pin"), "{}", app.status_message);
 }
+
+/// Columns of kinds that do not mix are named by their kinds.
+#[test]
+fn unpivot_names_the_kinds_it_cannot_mix() {
+    let out = call(json!([
+        {"compute": {"name": "when", "expr": "from_epoch(Time, \"s\")"}},
+        {"compute": {"name": "big", "expr": "US > 20"}},
+        {"compute": {"name": "label", "expr": "concat('t', Time)"}},
+        {"unpivot": {"index": ["Time"], "columns": ["when", "big", "label"]}}
+    ]));
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    let text = out["content"][0]["text"].as_str().unwrap();
+    for part in ["when is a datetime", "big is true/false", "label is text"] {
+        assert!(text.contains(part), "{}: {}", part, text);
+    }
+}
+
+/// A column cannot be both an index and one of the unpivoted.
+#[test]
+fn unpivot_refuses_an_index_column_among_the_unpivoted() {
+    let out = call(json!([{"unpivot": {"index": ["Time"], "columns": ["Time", "IN"]}}]));
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    let text = out["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("'Time'") && text.contains("index"),
+        "{}",
+        text
+    );
+}
+
+/// Datetimes in different units unpivot into one datetime column.
+#[test]
+fn unpivot_datetimes_of_different_units() {
+    let out = ok(json!([
+        {"compute": {"name": "a", "expr": "from_epoch(Time, \"ms\")"}},
+        {"compute": {"name": "b", "expr": "from_epoch(Time + 1787569800000000000, \"ns\")"}},
+        {"unpivot": {"index": ["Time"], "columns": ["a", "b"]}}
+    ]));
+    // The nanosecond column keeps its digits next to the millisecond one.
+    assert_eq!(
+        out["rows"][3][2],
+        json!("2026-08-24 11:10:00.000000001"),
+        "{}",
+        out
+    );
+    assert_eq!(out["columns"][2]["type"], json!("datetime"), "{}", out);
+    assert_eq!(out["row_count"], json!(6), "{}", out);
+}

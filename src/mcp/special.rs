@@ -359,55 +359,49 @@ fn average_ranks(values: &[f64]) -> (Vec<f64>, Vec<f64>) {
     (ranks, ties)
 }
 
-/// P(U = 0..=maxu) under the null for samples of `n1 <= n2`, by the recurrence scipy
-/// uses (`_MWU.build_u_freqs_array`).
-fn mwu_pmf(n1: usize, n2: usize, maxu: usize) -> Vec<f64> {
-    let mut sigma = vec![0.0f64; maxu + 1];
-    for d in 1..=n1 {
-        let mut a = d;
-        while a <= maxu {
-            sigma[a] += d as f64;
-            a += d;
-        }
-    }
-    for d in (n2 + 1)..=(n2 + n1) {
-        let mut a = d;
-        while a <= maxu {
-            sigma[a] -= d as f64;
-            a += d;
-        }
-    }
-    let mut configurations = vec![0.0f64; maxu + 1];
-    configurations[0] = 1.0;
-    for u in 1..=maxu {
-        let mut total = 0.0;
-        for (i, c) in configurations[..u].iter().enumerate() {
-            total += c * sigma[u - i];
-        }
-        configurations[u] = total / u as f64;
-    }
+/// Most multiply-adds the exact distribution of U may cost.
+const MWU_WORK: usize = 50_000_000;
+
+/// P(U = 0..=maxu) under the null for samples of `n1 <= n2`: the coefficients of the
+/// Gaussian binomial ∏ᵢ (1 − q^(n2+i)) / (1 − q^i), i = 1..=n1, truncated at q^maxu —
+/// the distribution scipy's recurrence gives, in `n1 · maxu` steps rather than
+/// `maxu²`.  `None` when that is past [`MWU_WORK`] or the counts overflow a float.
+fn mwu_pmf(n1: usize, n2: usize, maxu: usize) -> Option<Vec<f64>> {
     let all = binom((n1 + n2) as f64, n1 as f64);
-    configurations.into_iter().map(|c| c / all).collect()
+    if !all.is_finite() || n1.saturating_mul(maxu) > MWU_WORK {
+        return None;
+    }
+    let mut counts = vec![0.0f64; maxu + 1];
+    counts[0] = 1.0;
+    for i in 1..=n1 {
+        let s = n2 + i;
+        for u in (s..=maxu).rev() {
+            counts[u] -= counts[u - s];
+        }
+        for u in i..=maxu {
+            counts[u] += counts[u - i];
+        }
+    }
+    Some(counts.into_iter().map(|c| c / all).collect())
 }
 
 /// P(U >= k) under the null, from the side of the distribution nearer zero.
-fn mwu_sf(n1: usize, n2: usize, k: i64) -> f64 {
+fn mwu_sf(n1: usize, n2: usize, k: i64) -> Option<f64> {
     let (n1, n2) = (n1.min(n2), n1.max(n2));
     let top = (n1 * n2) as i64;
     if k <= 0 {
-        return 1.0;
+        return Some(1.0);
     }
     if k > top {
-        return 0.0;
+        return Some(0.0);
     }
     let kc = top - k;
     if k < kc {
-        let pmf = mwu_pmf(n1, n2, k as usize);
+        let pmf = mwu_pmf(n1, n2, k as usize)?;
         let below: f64 = pmf[..k as usize].iter().sum();
-        1.0 - below
+        Some(1.0 - below)
     } else {
-        let pmf = mwu_pmf(n1, n2, kc as usize);
-        pmf.iter().sum()
+        Some(mwu_pmf(n1, n2, kc as usize)?.iter().sum())
     }
 }
 
@@ -435,30 +429,42 @@ pub fn mannwhitney(
     let method = match method {
         Method::Auto if n1 > 8 && n2 > 8 => Method::Asymptotic,
         Method::Auto if has_ties => Method::Asymptotic,
-        Method::Auto => Method::Exact,
+        // Exact, unless the distribution is out of reach.
         m => m,
     };
-    let p = match method {
-        Method::Exact => {
-            if n1.saturating_mul(n2) > 2_000_000 {
-                return Err(
-                    "mannwhitney(): the exact distribution of samples this large is out of \
-                     reach; use asymptotic"
-                        .into(),
-                );
-            }
+    let exact = match method {
+        Method::Exact | Method::Auto => {
             let (u, factor) = match alternative {
                 Alternative::Greater => (u1, 1.0),
                 Alternative::Less => (u2, 1.0),
                 Alternative::TwoSided => (u1.max(u2), 2.0),
             };
-            mwu_sf(n1, n2, u as i64) * factor
+            match mwu_sf(n1, n2, u as i64) {
+                Some(p) => Some(p * factor),
+                None if method == Method::Exact => {
+                    return Err(
+                        "mannwhitney(): the exact distribution of samples this large is out \
+                         of reach; use asymptotic"
+                            .into(),
+                    )
+                }
+                None => None,
+            }
         }
-        _ => {
+        Method::Asymptotic => None,
+    };
+    let p = match exact {
+        Some(p) => p,
+        None => {
             let (n1f, n2f) = (n1 as f64, n2 as f64);
             let n = n1f + n2f;
             let tie_term: f64 = ties.iter().map(|t| t * t * t - t).sum();
             let s = (n1f * n2f / 12.0 * ((n + 1.0) - tie_term / (n * (n - 1.0)))).sqrt();
+            if s.is_nan() || s <= 0.0 {
+                return Err(
+                    "mannwhitney(): every value is the same, so there is nothing to rank".into(),
+                );
+            }
             let mut numerator = u1 - n1f * n2f / 2.0;
             let sign = match alternative {
                 Alternative::Greater => 1.0,
@@ -624,8 +630,13 @@ fn ks_exact(n1: usize, n2: usize, d: f64, alternative: Alternative) -> Option<f6
             .map(|j| (n1 - j) as f64 / (n1 + j + 1) as f64)
             .product(),
         _ => {
-            let paths = count_paths_outside(n1, n2, g, h);
+            // Past what a float holds the count is thrown away anyway: do not spend
+            // the cubic count finding that out.
             let all = binom((n1 + n2) as f64, n1 as f64);
+            if !all.is_finite() {
+                return None;
+            }
+            let paths = count_paths_outside(n1, n2, g, h);
             if !paths.is_finite() || !all.is_finite() || paths > all {
                 return None;
             }
