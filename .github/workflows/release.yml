@@ -31,9 +31,9 @@ jobs:
             archive: tar.gz
             deb: true
             cargo_build_jobs: "2"
-          # Intel builds on an Intel runner: macos-latest is arm64, and its pool ran
-          # out twice for v0.11.1 before this job could start.
-          - os: macos-15-intel
+          # Intel is cross-compiled on arm64: a cold build on macos-15-intel ran past
+          # the 90-minute limit for v0.11.1, while arm64 finishes in about 40.
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
             cargo_build_jobs: "2"
