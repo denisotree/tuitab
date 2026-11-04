@@ -1257,10 +1257,10 @@ fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
                     .get("source")
                     .ok_or_else(|| fail("needs a 'source'".into()))?,
             )
-            .map_err(&fail)?;
+            .map_err(fail)?;
             let ops = match entry.get("ops") {
                 None | Some(Value::Null) => Vec::new(),
-                Some(ops) => pipeline::parse_ops(ops).map_err(&fail)?,
+                Some(ops) => pipeline::parse_ops(ops).map_err(fail)?,
             };
             let col = entry
                 .get("col")
@@ -1269,8 +1269,8 @@ fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
             // Only the column taken, so a wide table is not collected whole for it.
             let mut ops = ops;
             ops.push(pipeline::Op::Select(vec![col.to_string()]));
-            let df = whole_table(server, &src, &ops, "tuitab_calc lists").map_err(&fail)?;
-            lists.push((name.clone(), numbers_of(&df, col).map_err(&fail)?));
+            let df = whole_table(server, &src, &ops, "tuitab_calc lists").map_err(fail)?;
+            lists.push((name.clone(), numbers_of(&df, col).map_err(fail)?));
         }
     }
     super::calc::run_with(args, lists).map_err(CallError::Failed)
