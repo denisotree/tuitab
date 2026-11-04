@@ -46,7 +46,7 @@ fn both(arguments: Value) -> Value {
     let streamed = call(&mut Server::new(), "tuitab_query", arguments.clone());
     let loaded = call(
         &mut Server {
-            eager_only: true,
+            stream_from: Some(u64::MAX),
             ..Server::new()
         },
         "tuitab_query",
@@ -77,7 +77,7 @@ fn a_zoned_column_is_written_with_its_zone() {
             let _ = std::fs::remove_file(&out);
             let wrote = call(
                 &mut Server {
-                    eager_only: eager,
+                    stream_from: Some(if eager { u64::MAX } else { 0 }),
                     ..Server::new()
                 },
                 "tuitab_query",
@@ -102,7 +102,7 @@ fn a_zoned_column_is_written_with_its_zone() {
         let _ = std::fs::remove_file(&out);
         let wrote = call(
             &mut Server {
-                eager_only: eager,
+                stream_from: Some(if eager { u64::MAX } else { 0 }),
                 ..Server::new()
             },
             "tuitab_query",
@@ -139,7 +139,7 @@ fn a_pattern_of_zoned_files_keeps_the_zone() {
     let _ = std::fs::remove_file(&out);
     let wrote = call(
         &mut Server {
-            eager_only: true,
+            stream_from: Some(u64::MAX),
             ..Server::new()
         },
         "tuitab_query",

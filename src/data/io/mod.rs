@@ -1,5 +1,6 @@
 use crate::data::column::ColumnMeta;
 use crate::data::dataframe::DataFrame;
+use crate::data::profile;
 use crate::types::ColumnType;
 use color_eyre::{eyre::eyre, Result};
 use polars::prelude::*;
@@ -15,6 +16,7 @@ mod excel;
 mod markdown;
 
 mod parquet;
+mod sample;
 mod sqlite;
 mod txt;
 
@@ -30,6 +32,7 @@ pub use sqlite::{
 };
 
 pub use directory::format_file_size_pub;
+pub use sample::{columns_of, jsonl_table, Growth, Sample, Sampling, Tail};
 
 /// One table or view of a database, as the catalogue describes it.
 ///
@@ -85,6 +88,36 @@ pub struct Opened {
     pub sqlite_db_path: Option<std::path::PathBuf>,
     pub duckdb_db_path: Option<std::path::PathBuf>,
     pub xlsx_db_path: Option<std::path::PathBuf>,
+    /// Set when only the head of the file was read.
+    pub sample: Option<Sample>,
+    /// The rest of the file, arriving in the background.
+    pub tail: Option<Tail>,
+}
+
+/// Where a file stops being loaded whole: a sixteenth of the memory `budget`.  The MCP
+/// server streams past it, the terminal reads a JSON Lines file a piece at a time past
+/// it, and a sheet underneath others stays in memory past it rather than being
+/// written out — one threshold, so the three cannot drift apart.
+pub fn stream_from(budget: u64) -> u64 {
+    budget / 16
+}
+
+/// Half the machine's physical memory: what may be held in memory by default.
+pub fn memory_budget() -> u64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: sysconf reads a system constant and has no preconditions.
+        let (pages, size) = unsafe {
+            (
+                libc::sysconf(libc::_SC_PHYS_PAGES),
+                libc::sysconf(libc::_SC_PAGESIZE),
+            )
+        };
+        if pages > 0 && size > 0 {
+            return (pages as u64).saturating_mul(size as u64) / 2;
+        }
+    }
+    8 * 1024 * 1024 * 1024
 }
 
 impl Default for Opened {
@@ -95,6 +128,8 @@ impl Default for Opened {
             sqlite_db_path: None,
             duckdb_db_path: None,
             xlsx_db_path: None,
+            sample: None,
+            tail: None,
         }
     }
 }
@@ -112,12 +147,35 @@ impl Default for Opened {
 /// format, a database, or any tabular name `load_tabular` knows, the same set the MCP
 /// server's `format` takes.
 pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> Result<Opened> {
+    open_target_from(path, delimiter, forced, Sampling::default())
+}
+
+/// [`open_target`], sampling as `sampling` says.
+pub fn open_target_from(
+    path: &Path,
+    delimiter: Option<u8>,
+    forced: Option<&str>,
+    sampling: Sampling,
+) -> Result<Opened> {
+    open_target_opts(path, &LoadOpts::with_delimiter(delimiter), forced, sampling)
+}
+
+/// [`open_target_from`], reading as `opts` says.
+pub fn open_target_opts(
+    path: &Path,
+    opts: &LoadOpts,
+    forced: Option<&str>,
+    sampling: Sampling,
+) -> Result<Opened> {
     let forced = forced.map(str::to_lowercase);
+    if let Some(opened) = sample::jsonl_of(path, forced.as_deref(), sampling)? {
+        return Ok(opened);
+    }
     if let Some(fmt) = forced
         .as_deref()
         .and_then(crate::data::doc::Format::from_name)
     {
-        let (df, doc) = load_file_as(path, delimiter, Some(fmt))?;
+        let (df, doc) = load_file_as_opts(path, opts, Some(fmt))?;
         return Ok(Opened {
             df,
             doc,
@@ -165,11 +223,11 @@ pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> 
     // A named format is read as exactly that, with no sniffing: the user has said what
     // the file is, which is the whole point of `--type csv export.dat`.
     let (df, doc) = if forced.is_some() {
-        let df = load_tabular(path, &LoadOpts::with_delimiter(delimiter), &ext)
+        let df = load_tabular(path, opts, &ext)
             .map_err(|e| eyre!("Could not read {} as {}: {}", path.display(), ext, e))?;
         (df, None)
     } else {
-        load_file_as(path, delimiter, None)?
+        load_file_as_opts(path, opts, None)?
     };
     Ok(Opened {
         df,
@@ -183,11 +241,12 @@ pub fn open_target(path: &Path, delimiter: Option<u8>, forced: Option<&str>) -> 
 /// `Path::exists` is false for `db/*.csv` however many files it would match, so a
 /// pattern has to be recognised before anything asks the filesystem about it — which is
 /// what used to answer "No such file" to the very form tuitab's own error advised.
-/// Ask it only about a path that is not there: `report[1].csv` is a real name a browser
-/// hands out, and a file that exists is never a pattern.
+/// A path that exists is never one: `report[1].csv` is a real name a browser hands
+/// out, and it is read as that file.
 pub fn is_pattern(path: &Path) -> bool {
     path.to_string_lossy()
         .contains(['*', '?', '[', ']'].as_slice())
+        && !path.exists()
 }
 
 /// Every file a pattern names, in a fixed order.
@@ -209,14 +268,17 @@ pub(crate) fn glob_matches(pattern: &str) -> Result<Vec<std::path::PathBuf>> {
 /// is not an answer, it is a mess with a row count.  Which file broke the agreement is
 /// named, because that is the one to look at.
 ///
-/// `records` unions instead of stacking — a page is a record and records differ.
-/// `one` is how the caller opens a single file: the MCP server honours the container
-/// and format it was handed, the terminal goes through [`open_target`].  That is the
-/// only thing the two surfaces disagree about, so it is the only thing passed in.
+/// `records` unions instead of stacking — a page is a record and records differ — and
+/// JSON Lines files meet field by field, as the pieces of one file do.  `ext` is the
+/// format the files are read as, and `opts` how; `one` is how the caller opens a single
+/// file, with the options it is handed: the MCP server honours the container and format
+/// it was asked for, the terminal goes through [`open_target_opts`].
 pub fn load_pattern(
     pattern: &str,
     records: bool,
-    one: impl Fn(&Path) -> Result<DataFrame>,
+    ext: &str,
+    opts: &LoadOpts,
+    one: impl Fn(&Path, &LoadOpts) -> Result<DataFrame>,
 ) -> Result<(DataFrame, usize)> {
     let files = glob_matches(pattern)?;
     let Some((first, rest)) = files.split_first() else {
@@ -224,10 +286,44 @@ pub fn load_pattern(
         // for different next moves.
         return Err(eyre!("glob matched no files: {}", pattern));
     };
-
-    let head = one(first)?;
+    // Each file read as it is; what the values say about their types is asked of all
+    // of them at once, as a scan of the pattern asks it — an epoch column in one file
+    // and small integers in another are one column of integers, not two that will not
+    // stack.
+    let raw = LoadOpts {
+        profile: false,
+        ..opts.clone()
+    };
+    let lines = matches!(ext, "jsonl" | "ndjson" | "ldjson")
+        || crate::data::doc::Format::of_file(first) == Some(crate::data::doc::Format::Jsonl);
+    let head = one(first, &raw)?;
+    let profiled = |df: DataFrame| {
+        if opts.profile && !lines && !records {
+            profile_table(df, ext, opts)
+        } else {
+            df
+        }
+    };
     if rest.is_empty() {
-        return Ok((head, 1));
+        return Ok((profiled(head), 1));
+    }
+
+    // JSON Lines files meet as the pieces of one file do: by field, a field one file
+    // lacks NULL in it, two kinds of value in one field held as JSON.
+    if lines {
+        let mut stacked = head;
+        for path in rest {
+            stacked.push_rows(one(path, &raw)?).map_err(|e| {
+                eyre!(
+                    "{} could not be stacked onto {}: {}",
+                    path.display(),
+                    first.display(),
+                    e
+                )
+            })?;
+        }
+        stacked.calc_widths(40, 1000);
+        return Ok((stacked, files.len()));
     }
 
     // A page is a record, and records differ: one has `tags`, the next has not, and a
@@ -237,14 +333,9 @@ pub fn load_pattern(
     // does not match means the pattern caught a file it should not have, and saying so
     // is worth more than a sparse frame.
     let names: Vec<&str> = head.columns.iter().map(|c| c.name.as_str()).collect();
-    let head_epochs: Vec<(Option<crate::data::column::EpochUnit>, Option<String>)> = head
-        .columns
-        .iter()
-        .map(|c| (c.epoch_unit, c.time_zone.clone()))
-        .collect();
     let mut frames = vec![head.df.clone()];
     for path in rest {
-        let next = one(path)?;
+        let next = one(path, &raw)?;
         let next_names: Vec<&str> = next.columns.iter().map(|c| c.name.as_str()).collect();
         if !records && next_names != names {
             return Err(eyre!(
@@ -284,26 +375,23 @@ pub fn load_pattern(
     };
     let mut df = wrap_polars_df(combined)
         .map_err(|e| eyre!("{} matched {} files: {}", pattern, files.len(), e))?;
-    // The files were read one by one, each with its epoch columns shown as datetimes
-    // and its zones set aside; the stacked frame keeps both so it saves back the way a
-    // single file does.
-    for (meta, (unit, zone)) in df.columns.iter_mut().zip(&head_epochs) {
-        if meta.col_type == ColumnType::Datetime {
-            meta.epoch_unit = *unit;
-            meta.time_zone = zone.clone();
-        }
-    }
-    Ok((df, files.len()))
+    // Zones the files set aside are the stacked frame's too, so it saves back the way
+    // a single file does.
+    df.inherit_meta(&head.columns, |n| n);
+    Ok((profiled(df), files.len()))
 }
 
 /// How a file is read: the CSV delimiter, and whether integer epoch columns are shown
 /// as datetimes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LoadOpts {
     pub delimiter: Option<u8>,
     pub detect_epoch: bool,
     /// Text read as NULL in every column of a CSV, before its types are worked out.
     pub null_values: Vec<String>,
+    /// Whether the columns' values settle their types — null tokens, epochs.  Off for
+    /// the files of a pattern, which are profiled once, stacked.
+    pub profile: bool,
 }
 
 impl Default for LoadOpts {
@@ -312,6 +400,7 @@ impl Default for LoadOpts {
             delimiter: None,
             detect_epoch: true,
             null_values: Vec::new(),
+            profile: true,
         }
     }
 }
@@ -351,7 +440,11 @@ pub fn load_file_as_opts(
         .unwrap_or("csv")
         .to_lowercase();
 
-    if let Some(fmt) = forced.or_else(|| crate::data::doc::Format::from_ext(&ext)) {
+    if let Some(fmt) = forced.or_else(|| crate::data::doc::Format::of_file(path)) {
+        // JSON Lines is a table, read as one wherever it is opened: see `sample`.
+        if fmt == crate::data::doc::Format::Jsonl {
+            return Ok((sample::jsonl_file(path)?, None));
+        }
         let (df, state) = doc_io::DocState::open(path, fmt)?;
         return Ok((df, Some(state)));
     }
@@ -394,73 +487,69 @@ pub fn load_file_as_opts(
 
 /// Read a file as `ext` says, whatever it happens to be called.
 ///
-/// Integer epoch columns of a table file are shown as datetimes here (see
-/// [`detect_epoch`]); documents — JSON, YAML, TOML, markdown — are not touched, because
-/// their table is rebuilt from the tree after every edit and a column would change type
-/// under the user.
+/// A CSV's text column that would be numeric but for [`profile::NULL_TOKENS`] becomes
+/// numeric, the tokens NULL.  Integer columns named like a time whose every value is an
+/// epoch in one unit become datetimes (UTC); the unit is kept on the column, so a save
+/// writes the integers back and retyping to Integer restores them.  Documents — JSON,
+/// YAML, TOML, markdown — are not touched, because their table is rebuilt from the tree
+/// after every edit and a column would change type under the user.
 pub(crate) fn load_tabular(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
-    // A tsv is tab-separated unless told otherwise: sniffing a file whose text holds
-    // commas would split it on them.
-    let tabbed;
-    let opts = if ext == "tsv" && opts.delimiter.is_none() {
-        tabbed = LoadOpts {
-            delimiter: Some(b'\t'),
-            ..opts.clone()
-        };
-        &tabbed
+    let df = load_tabular_raw(path, opts, ext)?;
+    Ok(if opts.profile {
+        profile_table(df, ext, opts)
     } else {
-        opts
-    };
-    let mut df = load_tabular_raw(path, opts, ext)?;
-    if matches!(ext, "csv" | "tsv") {
-        numeric_despite_tokens(&mut df);
-    }
-    if opts.detect_epoch
+        df
+    })
+}
+
+/// What a table's values say about its types, applied: null tokens of a CSV cast away,
+/// epoch columns shown as datetimes.  The same rules, and the same code, as a scan of a
+/// file too large to load.
+fn profile_table(df: DataFrame, ext: &str, opts: &LoadOpts) -> DataFrame {
+    let tokens = matches!(ext, "csv" | "tsv");
+    let epochs = opts.detect_epoch
         && matches!(
             ext,
             "csv" | "tsv" | "parquet" | "arrow" | "feather" | "ipc" | "xlsx" | "xls"
-        )
-    {
-        detect_epoch(&mut df);
+        );
+    if !tokens && !epochs {
+        return df;
     }
-    Ok(df)
-}
-
-/// Integer columns named like a time whose every value is an epoch in one unit become
-/// datetimes (UTC); the unit is kept on the column, so a save writes the integers back
-/// and retyping to Integer restores them.
-pub fn detect_epoch(df: &mut DataFrame) {
-    use crate::data::column::{names_a_time, EpochUnit};
-    for idx in 0..df.columns.len() {
-        if df.columns[idx].col_type != ColumnType::Integer || !names_a_time(&df.columns[idx].name) {
-            continue;
+    let profiled = || -> Result<Option<DataFrame>> {
+        let mut lf = df.df.clone().lazy();
+        let nan = tokens
+            && df.df.columns().iter().any(|c| {
+                c.dtype().is_float() && c.as_materialized_series().is_nan().is_ok_and(|m| m.any())
+            });
+        if nan {
+            lf = profile::without_nan(lf, df.df.schema());
         }
-        let series = df.df.columns()[idx].as_materialized_series().clone();
-        let Ok(ints) = series.cast(&DataType::Int64) else {
-            continue;
+        let casts = if tokens {
+            profile::token_casts(&lf, df.df.schema())?
+        } else {
+            Vec::new()
         };
-        let Ok(ca) = ints.i64() else { continue };
-        let (Some(min), Some(max)) = (ca.min(), ca.max()) else {
-            continue;
+        lf = profile::with_casts(lf, &casts);
+        let found = if epochs {
+            profile::epoch_columns(&lf, &*lf.clone().collect_schema()?)?
+        } else {
+            Vec::new()
         };
-        let Some(unit) = EpochUnit::of_range(min, max) else {
-            continue;
-        };
-        let Ok(stamps) = unit.to_datetime(&series) else {
-            continue;
-        };
-        let name = df.columns[idx].name.clone();
-        if df
-            .df
-            .replace(&name, stamps.with_name(name.as_str().into()).into())
-            .is_err()
-        {
-            continue;
+        if !nan && casts.is_empty() && found.is_empty() {
+            return Ok(None);
         }
-        df.columns[idx].col_type = ColumnType::Datetime;
-        df.columns[idx].epoch_unit = Some(unit);
-    }
-    df.calc_widths(40, 1000);
+        let pdf = crate::data::collect(profile::with_epochs(lf, &found))?;
+        let mut out = wrap_polars_df(pdf)?;
+        out.inherit_meta(&df.columns, |n| n);
+        for (name, unit) in found {
+            if let Ok(i) = out.column_index(&name) {
+                out.columns[i].epoch_unit = Some(unit);
+            }
+        }
+        Ok(Some(out))
+    };
+    // A profile that cannot be taken leaves the columns as they were read.
+    profiled().ok().flatten().unwrap_or(df)
 }
 
 /// The frame with every detected epoch column back to the integers it was read from —
@@ -471,71 +560,16 @@ pub fn with_epoch_restored(df: &DataFrame) -> std::borrow::Cow<'_, DataFrame> {
     }
     let mut out = df.clone();
     for idx in 0..out.columns.len() {
-        let Some(unit) = out.columns[idx].epoch_unit else {
-            continue;
-        };
-        let series = out.df.columns()[idx].as_materialized_series().clone();
-        if let Ok(ints) = unit.to_integers(&series) {
-            let name = out.columns[idx].name.clone();
-            if out
-                .df
-                .replace(&name, ints.with_name(name.as_str().into()).into())
-                .is_ok()
-            {
-                out.columns[idx].col_type = ColumnType::Integer;
-                out.columns[idx].epoch_unit = None;
-            }
+        if out.columns[idx].epoch_unit.is_some() {
+            let _ = out.set_column_type(idx, ColumnType::Integer);
         }
     }
     std::borrow::Cow::Owned(out)
 }
 
-/// What a CSV writes for "no value" without saying so: `undefined` from a Grafana
-/// export, `null`, `NaN`, `None`, `N/A`.  Not `NA` — it is Namibia's country code.
-const NULL_TOKENS: &[&str] = &["undefined", "null", "NULL", "NaN", "None", "N/A", "n/a"];
-
-/// A text column that would be numeric but for [`NULL_TOKENS`] becomes numeric, the
-/// tokens NULL.  A column whose other values are text keeps every value as written: a
-/// name `None` stays `None`.
-fn numeric_despite_tokens(df: &mut DataFrame) {
-    for idx in 0..df.columns.len() {
-        if df.columns[idx].col_type != ColumnType::String {
-            continue;
-        }
-        let series = df.df.columns()[idx].as_materialized_series().clone();
-        let Ok(ca) = series.str() else { continue };
-        if !ca
-            .into_iter()
-            .flatten()
-            .any(|v| NULL_TOKENS.contains(&v.trim()))
-        {
-            continue;
-        }
-        let cleaned: StringChunked = ca
-            .into_iter()
-            .map(|v| {
-                v.map(str::trim)
-                    .filter(|v| !v.is_empty() && !NULL_TOKENS.contains(v))
-            })
-            .collect();
-        let cleaned = cleaned.with_name(series.name().clone()).into_series();
-        if cleaned.null_count() == cleaned.len() {
-            continue;
-        }
-        let typed = crate::data::json_cols::type_from_text(&cleaned, false);
-        if typed.dtype() == &DataType::String {
-            continue;
-        }
-        let name = df.columns[idx].name.clone();
-        if df.df.replace(&name, typed.clone().into()).is_ok() {
-            df.columns[idx].col_type = column_type_of(typed.dtype());
-        }
-    }
-}
-
 fn load_tabular_raw(path: &Path, opts: &LoadOpts, ext: &str) -> Result<DataFrame> {
     match ext {
-        "csv" | "tsv" => crate::data::loader::load_csv_opts(path, opts),
+        "csv" | "tsv" => crate::data::loader::load_csv_as(path, opts, ext),
         "txt" => txt::load_txt(path),
         "parquet" => parquet::load_parquet(path),
         "arrow" | "feather" | "ipc" => arrow::load_arrow(path),
@@ -570,6 +604,23 @@ pub fn save_file_as(
     shape: doc_io::Shape,
     sheet_name: &str,
 ) -> Result<()> {
+    let format = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(crate::data::doc::Format::from_ext);
+    save_file_in(df, doc, path, format, shape, sheet_name)
+}
+
+/// [`save_file_as`] with the document format given rather than read off the extension —
+/// a `.json` of JSON Lines saved back onto itself is written as lines.
+pub fn save_file_in(
+    df: &DataFrame,
+    doc: Option<&doc_io::DocState>,
+    path: &Path,
+    format: Option<crate::data::doc::Format>,
+    shape: doc_io::Shape,
+    sheet_name: &str,
+) -> Result<()> {
     let restored = with_epoch_restored(df);
     let df: &DataFrame = &restored;
     // First, before any writer the name would pick: an existing database gets a table
@@ -585,7 +636,7 @@ pub fn save_file_as(
         .unwrap_or("csv")
         .to_lowercase();
 
-    if let Some(fmt) = crate::data::doc::Format::from_ext(&ext) {
+    if let Some(fmt) = format {
         let opts = crate::data::doc::SaveOpts::default();
         return match doc {
             Some(state) => state.save_wrapped(path, fmt, &opts, sheet_name),
@@ -637,36 +688,36 @@ pub fn load_from_stdin_with_doc(
     data_type: &str,
     delimiter: Option<u8>,
 ) -> Result<(DataFrame, Option<doc_io::DocState>)> {
-    use std::io::{Read, Write};
-    use tempfile::NamedTempFile;
-
+    use std::io::Read;
     let mut buf = Vec::new();
     std::io::stdin().read_to_end(&mut buf)?;
+    load_from_bytes(buf, data_type, delimiter)
+}
+
+/// Data handed over whole — stdin — read as `data_type`, by the rules a file of that
+/// type is read by.
+pub fn load_from_bytes(
+    buf: Vec<u8>,
+    data_type: &str,
+    delimiter: Option<u8>,
+) -> Result<(DataFrame, Option<doc_io::DocState>)> {
+    use std::io::Write;
 
     if let Some(fmt) = crate::data::doc::Format::from_name(data_type) {
+        use crate::data::doc::{holds_lines, Format};
         let text = String::from_utf8(buf)?;
+        // A table, not a tree: see `sample::jsonl_of`. `-t json` on JSON Lines
+        // content gets the check a `.json` file gets.
+        if fmt == Format::Jsonl || (fmt == Format::Json && holds_lines(&text)) {
+            return Ok((jsonl_table(&text)?, None));
+        }
         let (df, state) = doc_io::DocState::from_doc(crate::data::doc::Doc::from_str(&text, fmt)?)?;
         return Ok((df, Some(state)));
     }
 
-    let mut temp_file = NamedTempFile::new()?;
-    temp_file.write_all(&buf)?;
-    let temp_path = temp_file.path().to_path_buf();
-
-    let pdf = match data_type.to_lowercase().as_str() {
-        "csv" | "txt" => {
-            let sep = delimiter.unwrap_or(b',');
-            polars::prelude::CsvReadOptions::default()
-                .with_has_header(true)
-                .map_parse_options(|o| o.with_separator(sep))
-                .try_into_reader_with_file_path(Some(temp_path))?
-                .finish()?
-        }
-        "tsv" => polars::prelude::CsvReadOptions::default()
-            .with_has_header(true)
-            .map_parse_options(|o| o.with_separator(b'\t'))
-            .try_into_reader_with_file_path(Some(temp_path))?
-            .finish()?,
+    let ext = match data_type.to_lowercase().as_str() {
+        "csv" | "txt" => "csv",
+        "tsv" => "tsv",
         _ => {
             return Err(eyre!(
                 "Unsupported stdin data type: {}. stdin takes csv, tsv, txt, json, jsonl, \
@@ -675,12 +726,30 @@ pub fn load_from_stdin_with_doc(
             ))
         }
     };
-
-    drop(temp_file);
-    wrap_polars_df(pdf).map(|df| (df, None))
+    // Through a file, by the reader a file of this type gets: its null tokens, its
+    // epochs, its types from every row.
+    let mut temp_file = tempfile::NamedTempFile::new()?;
+    temp_file.write_all(&buf)?;
+    let df = load_tabular(temp_file.path(), &LoadOpts::with_delimiter(delimiter), ext)?;
+    Ok((df, None))
 }
 
 /// The column type a Polars dtype is shown as.
+/// DECIMAL columns — DuckDB, Spark and Arrow write them — as floats, and the places
+/// each was written with: every statistic and every writer reads a float.
+fn as_floats(pdf: &mut polars::prelude::DataFrame) -> Result<Vec<(String, u8)>> {
+    let mut found = Vec::new();
+    for i in 0..pdf.width() {
+        if let DataType::Decimal(_, scale) = pdf.columns()[i].dtype() {
+            let scale = *scale;
+            let cast = pdf.columns()[i].cast(&DataType::Float64)?;
+            found.push((cast.name().to_string(), scale.min(u8::MAX as usize) as u8));
+            pdf.replace_column(i, cast)?;
+        }
+    }
+    Ok(found)
+}
+
 pub(crate) fn column_type_of(dtype: &DataType) -> ColumnType {
     match dtype {
         DataType::Int8
@@ -701,6 +770,7 @@ pub(crate) fn column_type_of(dtype: &DataType) -> ColumnType {
 
 pub(crate) fn wrap_polars_df(mut pdf: polars::prelude::DataFrame) -> Result<DataFrame> {
     let zones = without_zones(&mut pdf);
+    let decimals = as_floats(&mut pdf)?;
     let col_count = pdf.width();
     let mut columns = Vec::with_capacity(col_count);
 
@@ -709,6 +779,9 @@ pub(crate) fn wrap_polars_df(mut pdf: polars::prelude::DataFrame) -> Result<Data
         let mut col_meta = ColumnMeta::new(name);
 
         col_meta.col_type = column_type_of(series.dtype());
+        if let Some((_, scale)) = decimals.iter().find(|(n, _)| *n == col_meta.name) {
+            col_meta.precision = *scale;
+        }
         col_meta.time_zone = zones
             .iter()
             .find(|(n, _)| *n == col_meta.name)
@@ -722,31 +795,16 @@ pub(crate) fn wrap_polars_df(mut pdf: polars::prelude::DataFrame) -> Result<Data
     Ok(df)
 }
 
-/// Datetime columns with a time zone, the zone set aside: the same instants as UTC
-/// without one.  Polars without its zone database cannot show, compare or format a
-/// zoned value — some of it panics — and UTC is what tuitab shows anyway.  Returns
-/// each column's zone.
+/// Datetime columns with a time zone as UTC without one (see [`profile::zone_free`]);
+/// returns each column's zone.
 pub(crate) fn without_zones(pdf: &mut polars::prelude::DataFrame) -> Vec<(String, String)> {
-    use polars::prelude::{DataType, IntoSeries};
-    let zoned: Vec<(String, polars::prelude::TimeUnit, String)> = pdf
-        .columns()
-        .iter()
-        .filter_map(|c| match c.dtype() {
-            DataType::Datetime(tu, Some(tz)) => Some((c.name().to_string(), *tu, tz.to_string())),
-            _ => None,
-        })
-        .collect();
-    for (name, tu, _) in &zoned {
-        let Ok(column) = pdf.column(name) else {
-            continue;
-        };
-        let physical = column.as_materialized_series().to_physical_repr();
-        if let Ok(ints) = physical.i64() {
-            let naive = ints.clone().into_datetime(*tu, None).into_series();
-            let _ = pdf.replace(name, naive.with_name(name.as_str().into()).into());
+    let (exprs, zones) = profile::zone_free(pdf.schema());
+    if !exprs.is_empty() {
+        if let Ok(out) = pdf.clone().lazy().with_columns(exprs).collect() {
+            *pdf = out;
         }
     }
-    zoned.into_iter().map(|(n, _, z)| (n, z)).collect()
+    zones
 }
 
 /// The visible rows with each zoned column's zone put back, for a format that

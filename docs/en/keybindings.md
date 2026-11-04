@@ -2,7 +2,8 @@
 
 > 🇷🇺 [Эта страница на русском](../ru/keybindings.md) · [← Documentation index](README.md)
 
-The complete command reference. Press `?` in tuitab for a built-in summary.
+The complete command reference. Press `?` in tuitab for a built-in summary. A prefix
+key — `g`, `z`, `y`, `Shift+S` — lists the keys it takes while it waits for the second one.
 All keys below are for **Normal mode** unless noted. Many commands act on the
 **cursor column** or the **selected rows**.
 
@@ -24,10 +25,6 @@ All keys below are for **Normal mode** unless noted. Many commands act on the
 |-----|--------|
 | `[` | Sort ascending by the cursor column |
 | `]` | Sort descending by the cursor column |
-| `gW` | Unpivot, the reverse of `W`: the unpinned columns become rows of (`variable`, `value`), the pinned ones repeated on each, onto a new sheet |
-| `gb` | Group by the pinned columns, computing the aggregates marked with `+` |
-| `zJ` | One column per top-level key of the JSON in this column, named `<column>_<key>` (the `expand_json` operation) |
-| `zw` | Add a window column: rank, running total, lag/lead, group share. A running total asks which column orders the rows — the table itself is not re-sorted — then a direction, then the partitions |
 | `z[` | Add the cursor column as a further sort key, ascending |
 | `z]` | Add the cursor column as a further sort key, descending |
 | `r` | Reset to the original row order |
@@ -82,6 +79,8 @@ See [Expressions](expressions.md) for the `|!=` filter language.
 | `zr` | Find & replace text in the column |
 | `zg` | Find & replace with a regex |
 | `zx` | Split the column by a delimiter |
+| `zw` | Add a window column: rank, running total, lag/lead, group share. A running total asks which column orders the rows — the table itself is not re-sorted — then a direction, then the partitions |
+| `zJ` | One column per top-level key of the JSON in this column, named `<column>_<key>` (the `expand_json` operation) |
 | `zo` | On a directory listing: reopen the selected file as a chosen format |
 | `zEnter` | Dive into the node in the current cell (JSON/YAML/TOML) |
 
@@ -94,6 +93,8 @@ See [Expressions](expressions.md) for the `|!=` filter language.
 | `I` | Describe sheet — per-column statistics |
 | `F` | Frequency table for the cursor column |
 | `gF` | Multi-column frequency table (groups by the pinned columns) |
+| `gb` | Group by the pinned columns, computing the aggregates marked with `+` |
+| `gW` | Unpivot, the reverse of `W`: the unpinned columns become rows of (`variable`, `value`), the pinned ones repeated on each, onto a new sheet |
 | `gD` / `gd` / `gU` | Deduplicate by the pinned columns (keeps the first row per group) |
 | `V` | [Chart](charts.md) the cursor column |
 | `W` | [Pivot table](pivot.md) |
@@ -139,7 +140,7 @@ marked with `zs`.
 | `R` | Reload what the sheet shows from disk — the file, table or workbook sheet; on a drill-down or search results, go back to the sheet they came from first |
 | `U` / `Shift+U` | Undo (up to 50 steps) |
 | `Ctrl+R` | Redo |
-| `?` | Toggle the help overlay |
+| `?` | Help: every key in Normal mode; `j` `k`, `Ctrl+F` `Ctrl+B`, `g` `G` scroll it, any other key closes it |
 
 Saving a plain table (CSV, Parquet, SQL, a pivot) to JSON/YAML/TOML asks which shape to
 produce — `[{col: val}, …]`, `{col: [val, …]}`, or `{a: b}` for a two-column table — and

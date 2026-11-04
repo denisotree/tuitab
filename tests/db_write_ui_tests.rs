@@ -1540,3 +1540,35 @@ fn reloading_search_results_saved_as_a_table_rereads_the_table() {
     );
     assert!(app.stack.active().doc_hits.is_none());
 }
+
+/// An epoch column shown as datetimes goes into a new table as the integers the file
+/// held, as every other save writes it.
+#[test]
+fn a_table_created_from_an_epoch_column_holds_its_integers() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("db-write-ui-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("events-epoch.csv");
+    std::fs::write(&source, "id,created_at\n1,1730000000\n2,1730000600\n").unwrap();
+    let dest = dir.join("events-epoch.sqlite");
+    let _ = std::fs::remove_file(&dest);
+
+    let mut app = App::new_as(&source, None, None).unwrap();
+    save_key(&mut app);
+    app.save.input =
+        tuitab::ui::text_input::TextInput::with_value(dest.to_string_lossy().into_owned());
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.mode, AppMode::TableNameInput, "{:?}", app.save.error);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.mode, AppMode::Normal, "{:?}", app.save.error);
+    let conn = rusqlite::Connection::open(&dest).unwrap();
+    let held: i64 = conn
+        .query_row(
+            "SELECT created_at FROM \"events-epoch\" WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|e| panic!("{}", e));
+    assert_eq!(held, 1730000000);
+}

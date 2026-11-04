@@ -1,4 +1,4 @@
-//! Actions for sheets backed by a document tree (JSON/JSONL/YAML/TOML): diving into
+//! Actions for sheets backed by a document tree (JSON/YAML/TOML): diving into
 //! nodes and switching how the anchored node is projected.
 //!
 //! Editing lives elsewhere: scalar cells go through [`super::edit`], and whole nodes go

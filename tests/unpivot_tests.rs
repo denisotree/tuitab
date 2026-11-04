@@ -188,3 +188,37 @@ fn unpivot_datetimes_of_different_units() {
     assert_eq!(out["columns"][2]["type"], json!("datetime"), "{}", out);
     assert_eq!(out["row_count"], json!(6), "{}", out);
 }
+
+/// JSON a column holds stays JSON through an unpivot and a join: saved, the values come
+/// back as the objects and strings they were.
+#[test]
+fn json_columns_stay_json_through_unpivot_and_join() {
+    use tuitab::data::io::jsonl_table;
+    let wide = jsonl_table("{\"id\":1,\"a\":{\"x\":1},\"b\":\"s\"}\n").unwrap();
+    let long = tuitab::data::unpivot::unpivot(
+        &wide,
+        &tuitab::data::unpivot::Spec {
+            index: vec!["id".into()],
+            columns: None,
+            name: "key".into(),
+            value: "val".into(),
+            drop_nulls: false,
+        },
+    )
+    .unwrap();
+    let val = long.column_index("val").unwrap();
+    assert!(long.columns[val].json);
+    let cells: Vec<String> = (0..2).map(|r| long.get_physical(r, val)).collect();
+    assert_eq!(cells, ["{\"x\":1}", "\"s\""]);
+
+    let right = jsonl_table("{\"id\":1,\"n\":5}\n").unwrap();
+    let joined = tuitab::data::join::join_dataframes(
+        &wide,
+        &right,
+        &["id".to_string()],
+        &["id".to_string()],
+        tuitab::data::join::JoinType::Left,
+    )
+    .unwrap();
+    assert!(joined.columns[joined.column_index("a").unwrap()].json);
+}

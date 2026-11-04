@@ -157,8 +157,8 @@ fn typed_series(name: &str, values: Vec<String>) -> Series {
         })
         .collect();
     let text = Series::new(name.into(), &cells);
-    // A padded number stays text — see `type_from_text`.
-    crate::data::json_cols::type_from_text(&text, false)
+    // A padded number stays text — see `profile::typed_text`.
+    crate::data::profile::typed_text(&text, false)
 }
 
 /// One cell as text.

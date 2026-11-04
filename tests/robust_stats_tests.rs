@@ -139,3 +139,17 @@ fn median_and_mad_windows_refuse_an_order() {
     let response = handle_message(&mut Server::new(), &message.to_string()).unwrap();
     assert_eq!(response["result"]["isError"], json!(true));
 }
+
+/// The footer's min and max read a percentage column as numbers, as every other
+/// numeric column is read — not as text, where 10 sorts before 9.
+#[test]
+fn footer_min_and_max_read_percentages_as_numbers() {
+    use tuitab::data::aggregator::AggregatorKind;
+    use tuitab::types::ColumnType;
+    // As text, "10" comes before "2".
+    let values: Vec<String> = ["2", "10"].iter().map(|s| s.to_string()).collect();
+    let min = AggregatorKind::Min.compute(&values, ColumnType::Percentage, 0, None);
+    let max = AggregatorKind::Max.compute(&values, ColumnType::Percentage, 0, None);
+    assert!(min.starts_with("200"), "min {}", min);
+    assert!(max.starts_with("1000"), "max {}", max);
+}

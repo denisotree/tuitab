@@ -117,3 +117,93 @@ fn the_new_row_form_reaches_the_screen() {
         "the reason did not reach the screen"
     );
 }
+
+/// A key's explanation follows the key it explains: the window column's note on
+/// running totals sits under `zw`, not under whatever line was added after it.
+#[test]
+fn the_help_keeps_each_note_under_its_key() {
+    let mut terminal = Terminal::new(TestBackend::new(100, 400)).unwrap();
+    terminal
+        .draw(|f| tuitab::ui::popup::render_help_popup(f, f.area(), &mut 0))
+        .unwrap();
+    let cells: Vec<String> = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol().to_string())
+        .collect();
+    let rows: Vec<String> = cells.chunks(100).map(|r| r.concat()).collect();
+    let at = rows
+        .iter()
+        .position(|r| r.contains("zw ") && r.contains("Window column"))
+        .expect("zw is in the help");
+    assert!(
+        rows[at + 1].contains("a running total asks"),
+        "{}\n{}",
+        rows[at],
+        rows[at + 1]
+    );
+}
+
+/// A cell holding several lines — pretty-printed JSON in a log — showed only its
+/// first line, `{`. The line breaks fold to spaces so the value reads on one row.
+#[test]
+fn a_cell_with_line_breaks_shows_past_the_first_line() {
+    let mut app = open("test_data/multiline.jsonl", "client");
+    let text = screen(&mut app);
+    assert!(
+        text.contains(r#"{ "country_code": "US", "city_name""#),
+        "the cell stopped at its first line:\n{text}"
+    );
+}
+
+/// Pressing `z` lists every z-command on screen — `zJ` was missing from the old
+/// one-line hint, which could not hold them all at a hundred columns anyway.
+#[test]
+fn the_z_hint_lists_every_z_command_on_screen() {
+    let mut app = open(SAMPLE, "salary");
+    press(&mut app, "z");
+    let text = screen(&mut app);
+    let rows: Vec<String> = text
+        .chars()
+        .collect::<Vec<_>>()
+        .chunks(100)
+        .map(|r| r.iter().collect())
+        .collect();
+    for (key, what) in [
+        ("J", "One column per key"),
+        ("w", "Window column"),
+        ("[ ]", "Add another sort key"),
+    ] {
+        let row = rows.iter().find(|r| r.contains(what));
+        assert!(
+            row.is_some_and(|r| r.contains(&format!("│{key} "))),
+            "{key} {what:?} is not in the z hint:\n{}",
+            rows.join("\n")
+        );
+    }
+}
+
+/// The help is longer than a terminal; its end is reachable by scrolling.
+#[test]
+fn the_help_scrolls_to_its_last_line() {
+    let mut app = open(SAMPLE, "salary");
+    press(&mut app, "?");
+    assert!(
+        !screen(&mut app).contains("This help"),
+        "the help fits; nothing to scroll"
+    );
+    key(&mut app, KeyCode::End);
+    assert!(
+        screen(&mut app).contains("This help"),
+        "End did not reach the last line"
+    );
+    press(&mut app, "g");
+    assert!(
+        screen(&mut app).contains("── Navigation"),
+        "g did not go back to the top"
+    );
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(app.mode, tuitab::types::AppMode::Normal);
+}

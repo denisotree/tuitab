@@ -198,3 +198,29 @@ fn zj_expands_the_current_column() {
         "Jio"
     );
 }
+
+/// `expand_json` types a key's values by the rule `json_get` uses — `"42"` and `42`
+/// both read as 42 — and keeps a nested value as JSON that saves back as itself.
+#[test]
+fn expand_json_types_its_values_as_json_get_does() {
+    let df = tuitab::data::io::jsonl_table(
+        "{\"c\":\"{\\\"code\\\":\\\"42\\\",\\\"x\\\":null,\\\"o\\\":{\\\"a\\\":1}}\"}\n",
+    )
+    .unwrap();
+    let out = tuitab::data::json_cols::expand_json(&df, "c", "c_").unwrap();
+    let dtype = |n: &str| out.df.column(n).unwrap().dtype().clone();
+    assert_eq!(dtype("c_code"), polars::prelude::DataType::Int64);
+    assert_eq!(dtype("c_x"), polars::prelude::DataType::String);
+    let o = out.column_index("c_o").unwrap();
+    assert!(out.columns[o].json);
+    assert_eq!(out.get_physical(0, o), "{\"a\":1}");
+}
+
+/// A path that matches nothing is no evidence of numbers.
+#[test]
+fn json_get_of_a_path_that_matches_nothing_is_text() {
+    let out = query(json!([
+        {"compute": {"name": "m", "expr": "json_get(client, \"$.missing\")"}}
+    ]));
+    assert_eq!(column(&out, "m").0, column(&out, "client").0);
+}

@@ -316,3 +316,75 @@ fn a_datetime_filter_matches_the_moment_it_names() {
         );
     }
 }
+
+/// A join keeps what each side knew about its columns: an epoch column joined in is
+/// still written back as the integers it was read from.
+#[test]
+fn a_joined_epoch_column_saves_as_its_integers() {
+    use tuitab::data::join::{join_dataframes, JoinType};
+    let left = load_file(&csv("join-left.csv", "k,Time\na,1787569800000\n"), None).unwrap();
+    let right = load_file(&csv("join-right.csv", "k,sent_at\na,1787569800\n"), None).unwrap();
+    let joined = join_dataframes(
+        &left,
+        &right,
+        &["k".to_string()],
+        &["k".to_string()],
+        JoinType::Left,
+    )
+    .unwrap();
+    let out = tmp("join-out.csv");
+    save_file_as(
+        &joined,
+        None,
+        &out,
+        tuitab::data::io::doc_io::Shape::Records,
+        "t",
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(
+        text.contains("1787569800000") && text.contains(",1787569800\n"),
+        "{}",
+        text
+    );
+}
+
+/// An epoch past 2262 — `9999999999`, the "never expires" sentinel — saves back as the
+/// integer it was, in seconds and in milliseconds.
+#[test]
+fn an_epoch_past_2262_saves_back_as_its_integer() {
+    for (name, big) in [
+        ("expires_at", "9999999999"),
+        ("expires_ts", "9999999999999"),
+    ] {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join("epoch-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}.csv", name));
+        let small = if big.len() == 10 {
+            "1704092400"
+        } else {
+            "1704092400000"
+        };
+        std::fs::write(&path, format!("id,{}\n1,{}\n2,{}\n", name, small, big)).unwrap();
+        let df = tuitab::data::io::open_target(&path, None, None).unwrap().df;
+        let c = df.column_index(name).unwrap();
+        assert!(
+            df.columns[c].epoch_unit.is_some(),
+            "{} is read as an epoch",
+            name
+        );
+        let out = dir.join(format!("{}-out.csv", name));
+        tuitab::data::io::save_file_as(
+            &df,
+            None,
+            &out,
+            tuitab::data::io::doc_io::Shape::Records,
+            "t",
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert!(text.contains(&format!("2,{}", big)), "{}", text);
+    }
+}

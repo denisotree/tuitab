@@ -45,6 +45,84 @@ pub struct DataFrame {
     pub db_rows: Option<crate::data::io::db_write::DbRows>,
 }
 
+/// The column of `metas` that `meta` is: by name, but the column of non-object JSON
+/// Lines lines by that alone, so a field called `value` is never mistaken for it.
+fn same_column(metas: &[ColumnMeta], meta: &ColumnMeta) -> Option<usize> {
+    metas
+        .iter()
+        .position(|m| m.line == meta.line && (meta.line || m.name == meta.name))
+}
+
+/// One column's two sides, made to agree, and whether they hold JSON text.
+fn meet(a: Column, a_json: bool, b: Column, b_json: bool) -> PolarsResult<(Column, Column, bool)> {
+    let empty = |c: &Column| c.null_count() == c.len();
+    if a.dtype() == b.dtype() && a_json == b_json {
+        return Ok((a, b, a_json));
+    }
+    if empty(&b) {
+        let b = b.cast(a.dtype())?;
+        return Ok((a, b, a_json));
+    }
+    if empty(&a) {
+        let a = a.cast(b.dtype())?;
+        return Ok((a, b, b_json));
+    }
+    let number =
+        |c: &Column, json: bool| !json && matches!(c.dtype(), DataType::Int64 | DataType::Float64);
+    if number(&a, a_json) && number(&b, b_json) {
+        return Ok((
+            a.cast(&DataType::Float64)?,
+            b.cast(&DataType::Float64)?,
+            false,
+        ));
+    }
+    Ok((json_text(a, a_json)?, json_text(b, b_json)?, true))
+}
+
+/// A column as the JSON text of its values: strings quoted, the rest as written.
+pub(crate) fn json_text(c: Column, json: bool) -> PolarsResult<Column> {
+    if json {
+        return Ok(c);
+    }
+    if c.dtype() == &DataType::String {
+        let quoted: StringChunked = c
+            .str()?
+            .into_iter()
+            .map(|v| v.map(|s| serde_json::Value::from(s).to_string()))
+            .collect();
+        return Ok(quoted.with_name(c.name().clone()).into_column());
+    }
+    c.cast(&DataType::String)
+}
+
+/// A cell's text as one table row: each run of whitespace that holds a line break
+/// or a tab becomes one space, so a pretty-printed JSON value reads as
+/// `{ "a": 1, "b": 2 }` instead of stopping at its first line.
+pub fn one_line(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains(['\n', '\r', '\t']) {
+        return text.into();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !c.is_whitespace() {
+            out.push(c);
+            continue;
+        }
+        let mut run = String::from(c);
+        while let Some(&n) = chars.peek().filter(|n| n.is_whitespace()) {
+            run.push(n);
+            chars.next();
+        }
+        if run.contains(['\n', '\r', '\t']) {
+            out.push(' ');
+        } else {
+            out.push_str(&run);
+        }
+    }
+    out.into()
+}
+
 /// What a user types to mean SQL NULL rather than an empty string.
 ///
 /// The two are different values in a database, and there has to be *some* way to type
@@ -144,6 +222,36 @@ impl DataFrame {
             aggregates_cache: None,
             transposed: false,
             db_rows: None,
+        }
+    }
+
+    /// Each column takes what `from` knew about the column `base` names — its label
+    /// (currency, percentage…), precision, epoch unit and zone — while its values are
+    /// still stored the same way.  A table built by Polars from other tables (a join,
+    /// an unpivot, a stack of files) otherwise knows only the storage types.
+    pub(crate) fn inherit_meta(
+        &mut self,
+        from: &[ColumnMeta],
+        base: impl for<'s> Fn(&'s str) -> &'s str,
+    ) {
+        let storage = |t: ColumnType| match t {
+            ColumnType::Percentage | ColumnType::Currency => ColumnType::Float,
+            ColumnType::FileSize => ColumnType::Integer,
+            t => t,
+        };
+        for meta in self.columns.iter_mut() {
+            let wanted = base(&meta.name);
+            if let Some(src) = from.iter().find(|c| c.name == wanted) {
+                if storage(meta.col_type) == storage(src.col_type) {
+                    meta.col_type = src.col_type;
+                    meta.currency = src.currency;
+                    meta.precision = src.precision;
+                    meta.epoch_unit = src.epoch_unit;
+                    meta.time_zone = src.time_zone.clone();
+                    meta.json = src.json;
+                    meta.line = src.line;
+                }
+            }
         }
     }
 
@@ -666,15 +774,118 @@ impl DataFrame {
             block.push(series.into());
         }
 
-        let first = self.df.height();
         let block = polars::prelude::DataFrame::new(n, block).map_err(|e| e.to_string())?;
-        self.df.vstack_mut(&block).map_err(|e| e.to_string())?;
-        for k in 0..n {
-            Arc::make_mut(&mut self.row_order).push(first + k);
-            Arc::make_mut(&mut self.original_order).push(first + k);
-        }
+        self.push_block(block)?;
         self.record_added_rows(n);
         self.modified = true;
+        Ok(())
+    }
+
+    /// The rows of `block` added at the end, matched to the columns by name — how a
+    /// table read a piece at a time grows.  A column the rows bring is added, empty for
+    /// the rows before them; one they lack is empty for them.  Where the two sides of a
+    /// column differ, an empty side takes the other's type, integers and floats meet
+    /// as floats, and anything else meets as JSON text.
+    pub fn push_rows(&mut self, block: DataFrame) -> Result<(), String> {
+        let n = block.df.height();
+        let height = self.df.height();
+        // Every column of `self` with its rows, the two sides made to agree — worked
+        // out whole before anything changes, so a failure leaves the table as it was.
+        let mut met = Vec::with_capacity(self.columns.len());
+        for (c, meta) in self.columns.iter().enumerate() {
+            let have = self.df.columns()[c].clone();
+            let (add, add_json) = match same_column(&block.columns, meta) {
+                Some(j) => (
+                    block.df.columns()[j].clone().with_name(have.name().clone()),
+                    block.columns[j].json,
+                ),
+                None => (
+                    Column::full_null(have.name().clone(), n, have.dtype()),
+                    meta.json,
+                ),
+            };
+            met.push(meet(have, meta.json, add, add_json).map_err(|e| e.to_string())?);
+        }
+        // Columns the rows bring, empty for the rows before them.
+        let mut taken: indexmap::IndexSet<String> =
+            self.columns.iter().map(|m| m.name.clone()).collect();
+        let mut fresh = Vec::new();
+        for (j, meta) in block.columns.iter().enumerate() {
+            if same_column(&self.columns, meta).is_none() {
+                let mut meta = meta.clone();
+                if taken.contains(&meta.name) {
+                    meta.name = crate::data::view::unique_name(&meta.name, &taken);
+                }
+                taken.insert(meta.name.clone());
+                let add = block.df.columns()[j]
+                    .clone()
+                    .with_name(meta.name.as_str().into());
+                fresh.push((meta, add));
+            }
+        }
+        let mut rows = Vec::with_capacity(met.len() + fresh.len());
+        for (c, (have, add, json)) in met.into_iter().enumerate() {
+            if have.dtype() != self.df.columns()[c].dtype() || json != self.columns[c].json {
+                self.df.replace_column(c, have).map_err(|e| e.to_string())?;
+                self.columns[c].json = json;
+                self.columns[c].col_type =
+                    crate::data::io::column_type_of(self.df.columns()[c].dtype());
+            }
+            rows.push(add);
+        }
+        for (meta, add) in fresh {
+            self.df
+                .with_column(Column::full_null(
+                    meta.name.as_str().into(),
+                    height,
+                    add.dtype(),
+                ))
+                .map_err(|e| e.to_string())?;
+            self.columns.push(meta);
+            rows.push(add);
+        }
+        let block = polars::prelude::DataFrame::new(n, rows).map_err(|e| e.to_string())?;
+        self.push_block(block)
+    }
+
+    /// Bytes [`Self::push_rows`] would add for `block`: its own, and an empty column as
+    /// tall as this table for each column it brings.
+    pub fn growth_cost(&self, block: &DataFrame) -> u64 {
+        let fresh = block
+            .columns
+            .iter()
+            .filter(|m| same_column(&self.columns, m).is_none())
+            .count() as u64;
+        block.df.estimated_size() as u64 + fresh * self.df.height() as u64 * 16
+    }
+
+    /// Rows added at the end, shown after the rows already there.  A column of `block`
+    /// with nothing in it takes this frame's type; any other difference is refused.
+    pub fn push_block(&mut self, block: polars::prelude::DataFrame) -> Result<(), String> {
+        let n = block.height();
+        let columns = self
+            .df
+            .columns()
+            .iter()
+            .zip(block.columns())
+            .map(|(have, add)| {
+                if add.dtype() != have.dtype() && add.null_count() == add.len() {
+                    add.cast(have.dtype())
+                } else {
+                    Ok(add.clone())
+                }
+            })
+            .collect::<PolarsResult<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        if columns.len() != block.width() {
+            return Err("the rows have other columns".to_string());
+        }
+        let block = polars::prelude::DataFrame::new(n, columns).map_err(|e| e.to_string())?;
+        let first = self.df.height();
+        self.df.vstack_mut(&block).map_err(|e| e.to_string())?;
+        let order = Arc::make_mut(&mut self.row_order);
+        order.extend(first..first + n);
+        Arc::make_mut(&mut self.original_order).extend(first..first + n);
         self.aggregates_cache = None;
         Ok(())
     }
@@ -1421,11 +1632,6 @@ impl DataFrame {
 
     // ── Computed columns ──────────────────────────────────────────────────────
 
-    /// Evaluate `expr` against every row and append the result as a new column named `name`,
-    /// inserted immediately after `insert_after_col`.
-    ///
-    /// Tries the Polars lazy API first for best performance; falls back to a
-    /// row-by-row interpreter if the expression contains unsupported constructs.
     /// `json_get` hands back each value as text, on both paths; the column then takes
     /// the type every value shares — whole numbers, numbers, booleans — or stays text.
     fn type_json_get_result(&mut self, expr: &crate::data::expression::Expr, name: &str) {
@@ -1436,12 +1642,16 @@ impl DataFrame {
             return;
         }
         if let Ok(column) = self.df.column(name) {
-            let typed =
-                crate::data::json_cols::type_from_text(column.as_materialized_series(), true);
+            let typed = crate::data::profile::typed_text(column.as_materialized_series(), true);
             let _ = self.df.replace(name, typed.into());
         }
     }
 
+    /// Evaluate `expr` against every row and append the result as a new column named `name`,
+    /// inserted immediately after `insert_after_col`.
+    ///
+    /// Tries the Polars lazy API first for best performance; falls back to a
+    /// row-by-row interpreter if the expression contains unsupported constructs.
     pub fn add_computed_column(
         &mut self,
         name: &str,
@@ -1470,48 +1680,31 @@ impl DataFrame {
             {
                 Ok(df) => {
                     self.df = df;
-                    self.type_json_get_result(expr, name);
-
-                    let mut dtype = self.df.column(name).unwrap().dtype().clone();
-                    if let polars::prelude::DataType::Duration(tu) = dtype {
-                        if let Ok(series) = self.df.column(name) {
-                            let divisor = match tu {
-                                polars::datatypes::TimeUnit::Nanoseconds => 1_000_000_000.0,
-                                polars::datatypes::TimeUnit::Microseconds => 1_000_000.0,
-                                polars::datatypes::TimeUnit::Milliseconds => 1000.0,
-                            };
-                            if let Ok(int_series) = series.cast(&polars::prelude::DataType::Int64) {
-                                if let Ok(float_series) =
-                                    int_series.cast(&polars::prelude::DataType::Float64)
-                                {
-                                    if let Ok(f64_ca) = float_series.f64() {
-                                        let new_series_arr = f64_ca.apply_values(|v| v / divisor);
-                                        let new_series =
-                                            new_series_arr.into_series().with_name(name.into());
-                                        let _ = self.df.replace(name, new_series.into());
-                                        dtype = polars::prelude::DataType::Float64;
-                                    }
-                                }
-                            }
+                    if let Ok(polars::prelude::DataType::Duration(tu)) =
+                        self.df.column(name).map(|c| c.dtype().clone())
+                    {
+                        // A difference of moments is shown in seconds.
+                        let divisor = match tu {
+                            polars::datatypes::TimeUnit::Nanoseconds => 1_000_000_000.0,
+                            polars::datatypes::TimeUnit::Microseconds => 1_000_000.0,
+                            polars::datatypes::TimeUnit::Milliseconds => 1000.0,
+                        };
+                        let seconds = self
+                            .df
+                            .column(name)
+                            .and_then(|c| c.cast(&polars::prelude::DataType::Int64))
+                            .and_then(|c| c.cast(&polars::prelude::DataType::Float64))
+                            .and_then(|c| {
+                                Ok(c.f64()?
+                                    .apply_values(|v| v / divisor)
+                                    .into_series()
+                                    .with_name(name.into()))
+                            });
+                        if let Ok(seconds) = seconds {
+                            let _ = self.df.replace(name, seconds.into());
                         }
                     }
-
-                    let mut meta = ColumnMeta::new(name.to_string());
-                    // Map the polars data type to our ColumnType if possible
-                    meta.col_type = crate::data::io::column_type_of(&dtype);
-                    meta.expression = Some(expr.clone());
-                    self.columns.push(meta);
-                    self.aggregates_cache = None;
-                    self.calc_widths(40, 1000);
-
-                    // Move to the requested position
-                    let target_idx = insert_after_col + 1;
-                    let mut curr_idx = self.columns.len() - 1;
-                    while curr_idx > target_idx {
-                        self.swap_columns(curr_idx - 1, curr_idx)?;
-                        curr_idx -= 1;
-                    }
-                    return Ok(());
+                    return self.place_computed(name, expr, insert_after_col);
                 }
                 Err(_) => {
                     // Fast path failed (e.g. column not found in lazy API), fall through to slow path
@@ -1600,23 +1793,31 @@ impl DataFrame {
             .with_column(polars::lazy::dsl::lit(final_series).alias(name))
             .collect()
             .map_err(|e| e.to_string())?;
-        self.type_json_get_result(expr, name);
+        self.place_computed(name, expr, insert_after_col)
+    }
 
+    /// A computed column just added to the frame, described and moved to sit after
+    /// `insert_after_col`.
+    fn place_computed(
+        &mut self,
+        name: &str,
+        expr: &crate::data::expression::Expr,
+        insert_after_col: usize,
+    ) -> Result<(), String> {
+        self.type_json_get_result(expr, name);
         let mut meta = ColumnMeta::new(name.to_string());
-        meta.col_type = crate::data::io::column_type_of(self.df.column(name).unwrap().dtype());
+        meta.col_type = crate::data::io::column_type_of(
+            self.df.column(name).map_err(|e| e.to_string())?.dtype(),
+        );
         meta.expression = Some(expr.clone());
         self.columns.push(meta);
         self.aggregates_cache = None;
-        self.calc_widths(40, 1000);
-
-        // Move to the requested position
-        let target_idx = insert_after_col + 1;
-        let mut curr_idx = self.columns.len() - 1;
-        while curr_idx > target_idx {
-            self.swap_columns(curr_idx - 1, curr_idx)?;
-            curr_idx -= 1;
+        let mut at = self.columns.len() - 1;
+        self.calc_column_width(at, 40, 1000);
+        while at > insert_after_col + 1 {
+            self.swap_columns(at - 1, at)?;
+            at -= 1;
         }
-
         Ok(())
     }
 
@@ -1646,10 +1847,7 @@ impl DataFrame {
         let max_val_width: u16 = (0..sample_end)
             .map(|physical_row| {
                 let text = self.format_display(physical_row, col_idx);
-                text.lines()
-                    .map(|line| UnicodeWidthStr::width(line) as u16)
-                    .max()
-                    .unwrap_or(0)
+                UnicodeWidthStr::width(one_line(&text).as_ref()) as u16
             })
             .max()
             .unwrap_or(0);

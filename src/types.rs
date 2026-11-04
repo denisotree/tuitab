@@ -493,6 +493,8 @@ pub enum Action {
     // ── Help overlay ───────────────────────────────────────────────────────────
     ShowHelp,
     CloseHelp,
+    /// Scroll the `?` popup by this many lines; the render clamps it.
+    HelpScroll(i32),
 
     // ── JOIN wizard ───────────────────────────────────────────────────────────
     OpenJoin,
@@ -637,6 +639,22 @@ impl ColumnType {
             Self::Currency,
             Self::FileSize,
         ]
+    }
+
+    /// Whether the column holds numbers a statistic reads: integers, floats,
+    /// percentages, money.
+    pub fn is_numeric(self) -> bool {
+        matches!(
+            self,
+            Self::Integer | Self::Float | Self::Percentage | Self::Currency
+        )
+    }
+
+    /// Whether a sum, an average or a median reads the column: numbers, and booleans
+    /// as 1 and 0 — the share of `true` is an average worth having.  One rule for the
+    /// group aggregates and the window functions alike.
+    pub fn sums(self) -> bool {
+        self.is_numeric() || self == Self::Boolean
     }
 
     /// The type's name in prose: lower case, no icon.

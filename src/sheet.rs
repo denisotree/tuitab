@@ -8,7 +8,8 @@
 //! pivot table, filtered selection) pushes a new sheet; pressing `Esc`/`q` pops it and
 //! restores the previous view.  To keep memory usage bounded, any sheet that is not on
 //! top of the stack is transparently serialised to a temporary directory via
-//! [`crate::data::swap`] and swapped back in when it becomes active again.
+//! [`crate::data::swap`] and swapped back in when it becomes active again — all but a
+//! frame too large to be worth it (see `SheetStack::keep_from`).
 
 use crate::data::dataframe::DataFrame;
 use crate::data::doc::Node;
@@ -45,8 +46,9 @@ pub struct Sheet {
     pub title: String,
     /// The actual data
     pub dataframe: DataFrame,
-    /// Document tree behind this sheet, for JSON/JSONL/YAML/TOML sources.  Sheets in a
-    /// dive chain share one tree, so an edit made deep down is visible when popping back.
+    /// Document tree behind this sheet, for JSON/YAML/TOML sources (JSON Lines is read
+    /// as a table and has none).  Sheets in a dive chain share one tree, so an edit made
+    /// deep down is visible when popping back.
     pub doc: Option<DocState>,
     /// Set on a document-search result sheet; `Enter` uses it to jump to the hit.
     pub doc_hits: Option<DocHits>,
@@ -122,6 +124,10 @@ pub struct Sheet {
     pub duckdb_db_path: Option<std::path::PathBuf>,
     /// Full path of the file or directory that was loaded to produce this sheet.
     pub source_path: Option<std::path::PathBuf>,
+    /// Set when the sheet holds — or was made from — only the head of its file.
+    pub sample: Option<crate::data::io::Sample>,
+    /// The rest of the file, still arriving.  Read only while the sheet is on top.
+    pub tail: Option<crate::data::io::Tail>,
     /// Per-row absolute paths for synthetic file-list sheets (multi-file CLI arg).
     pub explicit_row_paths: Option<Vec<std::path::PathBuf>>,
     /// SQLite DB path this table was drilled-into from (set on table sheets, not overview).
@@ -202,6 +208,8 @@ impl Sheet {
             sqlite_db_path: None,
             duckdb_db_path: None,
             source_path: None,
+            sample: None,
+            tail: None,
             source_delimiter: None,
             forced_type: None,
             derived_view: false,
@@ -351,6 +359,94 @@ impl Sheet {
         }
     }
 
+    /// A sheet of what `open_target` read: the rows, the tree, the container paths and
+    /// how much of the file it holds.
+    pub fn from_opened(title: String, opened: crate::data::io::Opened) -> Self {
+        let mut sheet = Sheet::new(title, opened.df);
+        sheet.doc = opened.doc;
+        sheet.sqlite_db_path = opened.sqlite_db_path;
+        sheet.duckdb_db_path = opened.duckdb_db_path;
+        sheet.xlsx_db_path = opened.xlsx_db_path;
+        sheet.sample = opened.sample;
+        sheet.tail = opened.tail;
+        sheet
+    }
+
+    /// Add the next piece of the file, when one has arrived.  What to tell the user when
+    /// the reading ended — finished, stopped or failed.
+    pub fn take_growth(&mut self) -> Option<String> {
+        use std::sync::mpsc::TryRecvError;
+        let tail = self.tail.as_ref()?;
+        // Saved into a database table, the sheet is that table: the file is not its rows
+        // any more, nor is it a sample of them.
+        if self.table_source.is_some() {
+            self.tail = None;
+            self.sample = None;
+            return None;
+        }
+        let label = self.sample.as_ref().map(|s| s.label()).unwrap_or_default();
+        // The first change to the sheet ends the reading: rows arriving after it would
+        // land outside a sort, a filter, an edit's undo or a column the user changed.
+        let changed = if self.dataframe.original_order.len() != self.dataframe.df.height() {
+            Some("rows were filtered out or deleted")
+        } else if crate::data::io::columns_of(&self.dataframe) != tail.columns {
+            Some("the columns were changed")
+        } else if !self.sort_keys.is_empty() {
+            Some("the sheet was sorted")
+        } else if !self.undo_stack.is_empty() {
+            Some("the sheet was edited")
+        } else {
+            None
+        };
+        if let Some(why) = changed {
+            self.tail = None;
+            return Some(format!("Reading stopped at the {}: {}", label, why));
+        }
+        let full = || format!("Read the {} — the rest would not fit in memory", label);
+        let size = self.dataframe.df.estimated_size() as u64;
+        if size >= tail.cap {
+            self.tail = None;
+            return Some(full());
+        }
+        let growth = match tail.rx.try_recv() {
+            Ok(Ok(growth)) => growth,
+            Ok(Err(e)) => {
+                self.tail = None;
+                return Some(format!("Reading stopped at the {}: {}", label, e));
+            }
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => {
+                self.tail = None;
+                return Some(format!("Reading stopped at the {}", label));
+            }
+        };
+        if let Some(block) = growth.block {
+            // What the piece would cost, the columns it brings at full height included.
+            if size + self.dataframe.growth_cost(&block) >= tail.cap {
+                self.tail = None;
+                return Some(full());
+            }
+            if let Err(e) = self.dataframe.push_rows(block) {
+                self.tail = None;
+                return Some(format!("Reading stopped at the {}: {}", label, e));
+            }
+            if let Some(tail) = self.tail.as_mut() {
+                tail.columns = crate::data::io::columns_of(&self.dataframe);
+            }
+        }
+        let vis = self.dataframe.visible_row_count();
+        let at = self.table_state.selected().unwrap_or(0);
+        self.scroll_state = ScrollbarState::new(vis.saturating_sub(1)).position(at);
+        let sample = self.sample.as_mut()?;
+        sample.read = growth.read;
+        if sample.read < sample.size {
+            return None;
+        }
+        self.sample = None;
+        self.tail = None;
+        Some(format!("Loaded {} rows", vis))
+    }
+
     /// Put freshly read contents in place of the old: the rows, the tree and the container
     /// paths together, the cursor on `row` (or the last row).  The undo history goes —
     /// its frames address rows the new data does not have.  The sort order and the search
@@ -370,6 +466,9 @@ impl Sheet {
         self.sqlite_db_path = opened.sqlite_db_path;
         self.duckdb_db_path = opened.duckdb_db_path;
         self.xlsx_db_path = opened.xlsx_db_path;
+        self.sample = opened.sample;
+        // A reader still filling the old contents stops when its receiver goes.
+        self.tail = opened.tail;
         // A listing is not a file among siblings, so it offers none.
         if is_container {
             self.dir_source_path = None;
@@ -449,6 +548,10 @@ pub struct SheetStack {
     swap_root: PathBuf,
     /// Maps sheet stack index → path of its serialized DataFrame swap file.
     swapped: HashMap<usize, PathBuf>,
+    /// Frames of this many bytes or more stay in memory: writing one out takes as much
+    /// memory again on the way — Polars serialises through a buffer — and seconds per
+    /// gigabyte each way, so it would raise the peak it is there to lower.
+    keep_from: u64,
 }
 
 impl SheetStack {
@@ -461,6 +564,7 @@ impl SheetStack {
             _swap_dir: swap_dir,
             swap_root,
             swapped: HashMap::new(),
+            keep_from: crate::data::io::stream_from(crate::data::io::memory_budget()),
         }
     }
 
@@ -488,8 +592,17 @@ impl SheetStack {
 
     /// Push a new sheet on top.
     /// The previous top sheet's DataFrame is offloaded to disk to free memory.
-    pub fn push(&mut self, sheet: Sheet) {
+    ///
+    /// A sheet made from a sample — one of no file or of the sample's own — is a
+    /// sample too: it says so, and is not saved over the file.
+    pub fn push(&mut self, mut sheet: Sheet) {
         let prev_idx = self.sheets.len() - 1;
+        let prev = &self.sheets[prev_idx];
+        if sheet.sample.is_none()
+            && (sheet.source_path.is_none() || sheet.source_path == prev.source_path)
+        {
+            sheet.sample = prev.sample.clone();
+        }
         self.swap_out(prev_idx);
         self.sheets.push(sheet);
     }
@@ -562,8 +675,10 @@ impl SheetStack {
     // ── Disk swap internals ───────────────────────────────────────────────────
 
     fn swap_out(&mut self, idx: usize) {
-        if self.swapped.contains_key(&idx) {
-            return; // already on disk
+        if self.swapped.contains_key(&idx)
+            || self.sheets[idx].dataframe.df.estimated_size() as u64 >= self.keep_from
+        {
+            return; // already on disk, or better kept
         }
         let path = self.swap_root.join(format!("sheet_{}.bin", idx));
         swap::swap_out(&self.sheets[idx].dataframe, &path)
@@ -579,5 +694,36 @@ impl SheetStack {
             self.sheets[idx].dataframe = df;
             let _ = std::fs::remove_file(&path);
         }
+    }
+}
+
+#[cfg(test)]
+mod swap_tests {
+    use super::*;
+
+    fn sheet_of(rows: usize) -> Sheet {
+        let pdf = polars::prelude::df!("a" => (0..rows as i64).collect::<Vec<_>>()).unwrap();
+        Sheet::new("t".into(), crate::data::io::wrap_polars_df(pdf).unwrap())
+    }
+
+    /// Writing a large frame out takes as much memory again on the way and seconds per
+    /// gigabyte each way, so it stays where it is; a small one still goes to disk.
+    #[test]
+    fn a_frame_past_the_threshold_stays_in_memory() {
+        let mut stack = SheetStack::new(sheet_of(1000));
+        stack.keep_from = 1;
+        stack.push(sheet_of(1));
+        assert!(stack.swapped.is_empty());
+        assert_eq!(stack.sheets[0].dataframe.df.height(), 1000);
+
+        let mut stack = SheetStack::new(sheet_of(1000));
+        stack.keep_from = u64::MAX;
+        stack.push(sheet_of(1));
+        assert!(
+            stack.swapped.contains_key(&0),
+            "a small frame is swapped out"
+        );
+        stack.pop();
+        assert_eq!(stack.active().dataframe.df.height(), 1000);
     }
 }

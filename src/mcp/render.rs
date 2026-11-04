@@ -56,11 +56,8 @@ pub fn columns_json(df: &DataFrame) -> Vec<Value> {
         .collect()
 }
 
-/// Render up to `limit` rows.
-///
-/// Returns the rows and whether anything was left out, so callers can decide
-/// what to say about it.
-fn rows_json(df: &DataFrame, limit: usize) -> Result<(Vec<Value>, bool), String> {
+/// Render up to `limit` rows, fewer when they pass [`MAX_BYTES`].
+fn rows_json(df: &DataFrame, limit: usize) -> Result<Vec<Value>, String> {
     let visible = df.get_visible_df()?;
     let height = visible.height();
     let series: Vec<_> = visible.columns().iter().collect();
@@ -82,8 +79,7 @@ fn rows_json(df: &DataFrame, limit: usize) -> Result<(Vec<Value>, bool), String>
         }
     }
 
-    let truncated = rows.len() < height;
-    Ok((rows, truncated))
+    Ok(rows)
 }
 
 /// The standard table payload every tool returns.
@@ -94,7 +90,7 @@ pub fn table(df: &DataFrame, limit: usize) -> Result<Value, String> {
 /// [`table`] for the first rows of a longer result — a streamed pipeline collects only
 /// what it shows, and counts the rest.
 pub fn table_of(df: &DataFrame, limit: usize, row_count: usize) -> Result<Value, String> {
-    let (rows, _) = rows_json(df, limit)?;
+    let rows = rows_json(df, limit)?;
     let truncated = rows.len() < row_count;
 
     let mut out = Map::new();

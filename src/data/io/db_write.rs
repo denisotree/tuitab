@@ -1320,6 +1320,10 @@ pub fn create_plan(
     table: &str,
     df: &DataFrame,
 ) -> Result<(WritePlan, TableSource)> {
+    // Epoch columns go back to the integers the file held, as every save writes them —
+    // here, so that no caller can create a table of their datetimes instead.
+    let restored = crate::data::io::with_epoch_restored(df);
+    let df: &DataFrame = &restored;
     let cols = new_columns(kind, df)?;
     let quoted = quote_ident(table);
     let mut plan = WritePlan {

@@ -135,3 +135,49 @@ fn only_toml_keeps_its_source_text() {
     let toml = Doc::from_str("# c\na = 1\n", Format::Toml).unwrap();
     assert!(toml.source_text.is_some());
 }
+
+/// Rows added at the end: a column the new rows leave empty takes the table's type, so
+/// a sparse field does not make the table be built again.
+#[test]
+fn rows_pushed_at_the_end_take_the_types_of_the_table() {
+    use polars::prelude::*;
+    let mut df = tuitab::data::dataframe::DataFrame::from_parts(
+        df!("a" => [1i64, 2], "b" => [10i64, 20]).unwrap(),
+        Vec::new(),
+    );
+    let block = polars::prelude::DataFrame::new(
+        1,
+        vec![
+            Column::new("a".into(), [3i64]),
+            Column::new("b".into(), [None::<String>]),
+        ],
+    )
+    .unwrap();
+    df.push_block(block).unwrap();
+    assert_eq!(df.visible_row_count(), 3);
+    assert_eq!(df.df.column("b").unwrap().dtype(), &DataType::Int64);
+
+    let text = polars::prelude::DataFrame::new(
+        1,
+        vec![
+            Column::new("a".into(), [4i64]),
+            Column::new("b".into(), ["x"]),
+        ],
+    )
+    .unwrap();
+    assert!(
+        df.push_block(text).is_err(),
+        "a value of another type is refused"
+    );
+    assert_eq!(df.visible_row_count(), 3);
+}
+
+/// A cell's line breaks fold to one space; the spaces a value holds stay as written.
+#[test]
+fn one_line_folds_only_breaks_and_tabs() {
+    use tuitab::data::dataframe::one_line;
+    assert_eq!(one_line("a  b"), "a  b");
+    assert_eq!(one_line("{\r\n    \"a\": 1\n}"), "{ \"a\": 1 }");
+    assert_eq!(one_line("x\ty"), "x y");
+    assert_eq!(one_line("end\n"), "end ");
+}

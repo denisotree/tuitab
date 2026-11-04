@@ -430,6 +430,93 @@ fn node_series(name: &str, col: &[Option<&Node>]) -> Column {
     Column::new(name.into(), v)
 }
 
+/// Records as a table that keeps no tree — how JSON Lines is read.  Keys in order of
+/// first sighting, as a records view has them; a column of one kind of scalar is
+/// typed as the view types it, and any other holds each value's JSON text.
+pub fn records_table(rows: &[Node]) -> Result<DataFrame> {
+    let mut keys: IndexSet<String> = IndexSet::new();
+    for r in rows {
+        if let Node::Obj(m) = r {
+            for k in m.keys() {
+                keys.insert(k.clone());
+            }
+        }
+    }
+    let mut names = Vec::with_capacity(keys.len() + 1);
+    let mut cells: Vec<Vec<Option<&Node>>> = Vec::with_capacity(keys.len() + 1);
+    if rows.iter().any(|r| !matches!(r, Node::Obj(_))) || keys.is_empty() {
+        names.push(unique_name(DEFAULT_COLNAME, &keys));
+        cells.push(
+            rows.iter()
+                .map(|r| (!matches!(r, Node::Obj(_))).then_some(r))
+                .collect(),
+        );
+    }
+    let bare = !names.is_empty();
+    // A key names its column as written: this is a table, saved by column name.
+    for key in &keys {
+        names.push(key.clone());
+        cells.push(
+            rows.iter()
+                .map(|r| match r {
+                    Node::Obj(m) => m.get(key),
+                    _ => None,
+                })
+                .collect(),
+        );
+    }
+    let (columns, json): (Vec<Column>, Vec<bool>) = names
+        .iter()
+        .zip(&cells)
+        .map(|(name, col)| value_column(name, col))
+        .unzip();
+    let mut df = wrap(polars::prelude::DataFrame::new(rows.len(), columns)?)?;
+    for (meta, json) in df.columns.iter_mut().zip(json) {
+        meta.json = json;
+    }
+    if bare {
+        df.columns[0].line = true;
+    }
+    Ok(df)
+}
+
+/// One column of record values, and whether it holds JSON text.
+fn value_column(name: &str, col: &[Option<&Node>]) -> (Column, bool) {
+    let (mut bools, mut ints, mut floats, mut strs, mut other) =
+        (false, false, false, false, false);
+    for n in col.iter().flatten() {
+        match n {
+            Node::Null => {}
+            Node::Bool(_) => bools = true,
+            Node::Int(_) => ints = true,
+            Node::Float(_) => floats = true,
+            Node::Str(_) => strs = true,
+            _ => other = true,
+        }
+    }
+    if !(other || strs) && !(bools && (ints || floats)) {
+        return (node_series(name, col), false);
+    }
+    if strs && !(other || bools || ints || floats) {
+        let v: Vec<Option<&str>> = col
+            .iter()
+            .map(|n| match n {
+                Some(Node::Str(s)) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        return (Column::new(name.into(), v), false);
+    }
+    let v: Vec<Option<String>> = col
+        .iter()
+        .map(|n| match n {
+            None | Some(Node::Null) => None,
+            Some(node) => Some(node.json_text()),
+        })
+        .collect();
+    (Column::new(name.into(), v), true)
+}
+
 /// Upper bound on how much of a container is rendered into a cell.  The table view
 /// clips to the real column width; this only keeps a huge subtree from being
 /// materialised into a string in the first place.

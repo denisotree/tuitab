@@ -1,7 +1,6 @@
 use crate::data::dataframe::DataFrame;
 use crate::data::io::wrap_polars_df;
 use crate::data::view::unique_name;
-use crate::types::ColumnType;
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use indexmap::IndexSet;
@@ -194,7 +193,12 @@ pub fn join_dataframes(
         .collect();
     result.set_column_names(&names)?;
 
-    wrap_polars_df(result)
+    let mut out = wrap_polars_df(result)?;
+    out.inherit_meta(&right.columns, |n| {
+        n.strip_suffix(RIGHT_SUFFIX).unwrap_or(n)
+    });
+    out.inherit_meta(&left.columns, |n| n);
+    Ok(out)
 }
 
 /// What polars appends to a clashing right column, renamed away by [`join_dataframes`].
@@ -247,15 +251,6 @@ fn refuse_repeated_keys(
         ));
     }
     Ok(())
-}
-
-/// The type a column is stored as, without the display flavour on top.
-fn storage(t: ColumnType) -> ColumnType {
-    match t {
-        ColumnType::Percentage | ColumnType::Currency => ColumnType::Float,
-        ColumnType::FileSize => ColumnType::Integer,
-        t => t,
-    }
 }
 
 /// The left table compared with the right one row by row, like `git diff`.
@@ -403,17 +398,7 @@ pub fn diff_dataframes(
     let result = joined.select(order)?;
 
     let mut out = wrap_polars_df(result)?;
-    // Keep each column's own type label (currency, percentage…) where it survived.
-    for meta in out.columns.iter_mut() {
-        let base = meta.name.strip_suffix(RIGHT_SUFFIX).unwrap_or(&meta.name);
-        if let Some(src) = left.columns.iter().find(|c| c.name == base) {
-            if storage(meta.col_type) == storage(src.col_type) {
-                meta.col_type = src.col_type;
-                meta.currency = src.currency;
-                meta.precision = src.precision;
-            }
-        }
-    }
+    out.inherit_meta(&left.columns, |n| n.strip_suffix(RIGHT_SUFFIX).unwrap_or(n));
     if let Some(first) = out.columns.first_mut() {
         first.pinned = true;
     }

@@ -105,21 +105,8 @@ impl AggregatorKind {
             | Self::Random
             | Self::List
             | Self::Set => true,
-            Self::Sum | Self::Avg | Self::Median | Self::Stdev => matches!(
-                col_type,
-                ColumnType::Integer
-                    | ColumnType::Float
-                    | ColumnType::Boolean
-                    | ColumnType::Percentage
-                    | ColumnType::Currency
-            ),
-            _ => matches!(
-                col_type,
-                ColumnType::Integer
-                    | ColumnType::Float
-                    | ColumnType::Percentage
-                    | ColumnType::Currency
-            ),
+            Self::Sum | Self::Avg | Self::Median | Self::Stdev => col_type.sums(),
+            _ => col_type.is_numeric(),
         }
     }
 
@@ -214,10 +201,7 @@ impl AggregatorKind {
             }
 
             Self::Min => {
-                if matches!(
-                    col_type,
-                    ColumnType::Integer | ColumnType::Float | ColumnType::Currency
-                ) {
+                if col_type.is_numeric() {
                     values
                         .iter()
                         .filter_map(|s| s.parse::<f64>().ok())
@@ -234,10 +218,7 @@ impl AggregatorKind {
             }
 
             Self::Max => {
-                if matches!(
-                    col_type,
-                    ColumnType::Integer | ColumnType::Float | ColumnType::Currency
-                ) {
+                if col_type.is_numeric() {
                     values
                         .iter()
                         .filter_map(|s| s.parse::<f64>().ok())
@@ -267,21 +248,14 @@ impl AggregatorKind {
             }
 
             Self::Median => {
-                let mut nums: Vec<f64> = values
+                let nums: Vec<f64> = values
                     .iter()
                     .filter_map(|s| s.parse::<f64>().ok())
                     .collect();
                 if nums.is_empty() {
                     return String::new();
                 }
-                nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let mid = nums.len() / 2;
-                let median = if nums.len().is_multiple_of(2) {
-                    (nums[mid - 1] + nums[mid]) / 2.0
-                } else {
-                    nums[mid]
-                };
-                format_numeric(median, col_type, precision, currency)
+                format_numeric(median_of(nums), col_type, precision, currency)
             }
 
             Self::Stdev => {

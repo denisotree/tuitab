@@ -226,11 +226,31 @@ fn as_text(
     e: &Expr,
     schema: Option<&polars::prelude::Schema>,
 ) -> Result<polars::lazy::dsl::Expr, String> {
+    use polars::prelude::DataType;
     let x = e.to_polars_expr_with(schema)?;
+    let float = matches!(e, Expr::ColumnRef(name)
+        if matches!(schema.and_then(|s| s.get(name.as_str())), Some(DataType::Float32 | DataType::Float64)));
     Ok(match temporal_kind(e, schema) {
         Some(Temporal::Datetime) => x.dt().to_string("%Y-%m-%d %H:%M:%S%.f"),
-        _ => x.cast(polars::prelude::DataType::String),
+        // A whole float without its `.0`, as the row-by-row path writes one.
+        _ if float => polars::lazy::dsl::when(
+            x.clone().eq(x.clone().floor()).and(
+                x.clone()
+                    .abs()
+                    .lt(polars::lazy::dsl::lit(9_007_199_254_740_992.0)),
+            ),
+        )
+        .then(x.clone().cast(DataType::Int64).cast(DataType::String))
+        .otherwise(x.cast(DataType::String)),
+        _ => x.cast(DataType::String),
     })
+}
+
+/// Whether a text function can be vectorised over `e`: text, or a date or datetime,
+/// which [`as_text`] writes as the row-by-row path does.  A number is written
+/// differently by the two engines, so a regex over one runs row by row.
+fn reads_as_text(e: &Expr, schema: Option<&polars::prelude::Schema>) -> bool {
+    is_text(e, schema) || temporal_kind(e, schema).is_some()
 }
 
 /// A whole-number literal at least zero, for `substring`'s start and length.
@@ -311,6 +331,20 @@ fn bucket_nanos(w: &str) -> Option<i64> {
 
 /// `integral`: `x` is whole numbers already, scaled and cast in integers — a float
 /// holds only 15–16 digits, and a nanosecond epoch has 19.
+/// The type a Polars expression comes out as over a table of `schema` — run on one
+/// with no rows, so nothing is read.  `None` when it cannot run on those types.
+pub(crate) fn output_type(
+    e: &polars::lazy::dsl::Expr,
+    schema: &polars::prelude::Schema,
+) -> Option<polars::prelude::DataType> {
+    let out =
+        polars::prelude::IntoLazy::lazy(polars::prelude::DataFrame::empty_with_schema(schema))
+            .select([e.clone().alias("__out")])
+            .collect()
+            .ok()?;
+    out.columns().first().map(|c| c.dtype().clone())
+}
+
 pub(crate) fn epoch_to_datetime(
     x: polars::lazy::dsl::Expr,
     unit: crate::data::column::EpochUnit,
@@ -328,13 +362,25 @@ pub(crate) fn epoch_to_datetime(
         }
     };
     let x = if integral { x.cast(DataType::Int64) } else { x };
+    // A count of ticks past what a datetime can hold is NULL — beyond it Polars cannot
+    // show the value, and panics trying.
+    let held = |ticks: polars::lazy::dsl::Expr, per_second: i64| {
+        let most = chrono::DateTime::<chrono::Utc>::MAX_UTC.timestamp() * per_second;
+        polars::lazy::dsl::when(ticks.clone().abs().lt_eq(polars::lazy::dsl::lit(most)))
+            .then(ticks)
+            .otherwise(polars::lazy::dsl::lit(polars::prelude::Null {}).cast(DataType::Int64))
+    };
     match unit {
-        EpochUnit::Seconds if integral => (x * polars::lazy::dsl::lit(1000i64))
+        EpochUnit::Seconds if integral => (held(x, 1) * polars::lazy::dsl::lit(1000i64))
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
-        EpochUnit::Seconds => whole(x * polars::lazy::dsl::lit(1000.0))
+        EpochUnit::Seconds => held(whole(x * polars::lazy::dsl::lit(1000.0)), 1000)
             .cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
-        EpochUnit::Millis => whole(x).cast(DataType::Datetime(TimeUnit::Milliseconds, None)),
-        EpochUnit::Micros => whole(x).cast(DataType::Datetime(TimeUnit::Microseconds, None)),
+        EpochUnit::Millis => {
+            held(whole(x), 1000).cast(DataType::Datetime(TimeUnit::Milliseconds, None))
+        }
+        EpochUnit::Micros => {
+            held(whole(x), 1_000_000).cast(DataType::Datetime(TimeUnit::Microseconds, None))
+        }
         EpochUnit::Nanos => whole(x).cast(DataType::Datetime(TimeUnit::Nanoseconds, None)),
     }
 }
@@ -479,6 +525,23 @@ impl Expr {
                     "json_get" => {
                         json_path_of(&args[1])?;
                     }
+                    "round" => {
+                        round_places(args)?;
+                    }
+                    // A pattern chrono cannot read is refused here rather than answered
+                    // with NULLs on one path and an error on the other.
+                    "date_format" => {
+                        if let Some(Expr::Literal(Value::String(fmt))) = args.get(1) {
+                            use chrono::format::{Item, StrftimeItems};
+                            if StrftimeItems::new(fmt).any(|i| matches!(i, Item::Error)) {
+                                return Err(format!(
+                                    "date_format(): '{}' holds a directive that is not one; \
+                                     see the strftime directives, as %Y-%m-%d %H:%M",
+                                    fmt
+                                ));
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 args.iter().try_for_each(|a| a.check_functions())
@@ -512,6 +575,39 @@ impl Expr {
     /// nulls and no error at all — the worst thing a query engine can do.  Only the
     /// arithmetic operators are checked: a string against `==` or `in` is the ordinary
     /// way to compare, whatever the columns happen to be called.
+    /// Every column the expression reads, by name.
+    pub fn columns(&self) -> Vec<&str> {
+        let mut found = Vec::new();
+        self.collect_columns(&mut found);
+        found
+    }
+
+    fn collect_columns<'a>(&'a self, found: &mut Vec<&'a str>) {
+        match self {
+            Expr::ColumnRef(name) => found.push(name),
+            Expr::Literal(_) => {}
+            Expr::BinOp { left, right, .. } => {
+                left.collect_columns(found);
+                right.collect_columns(found);
+            }
+            Expr::FunctionCall { args, .. } => args.iter().for_each(|a| a.collect_columns(found)),
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => {
+                cond.collect_columns(found);
+                then_branch.collect_columns(found);
+                else_branch.collect_columns(found);
+            }
+            Expr::InList { left, list } => {
+                left.collect_columns(found);
+                list.iter().for_each(|e| e.collect_columns(found));
+            }
+            Expr::Not(e) | Expr::IsNull(e) => e.collect_columns(found),
+        }
+    }
+
     pub fn check_text_arithmetic(&self, is_column: &dyn Fn(&str) -> bool) -> Result<(), String> {
         let complain = |s: &String| -> Result<(), String> {
             if s.parse::<f64>().is_ok() {
@@ -566,14 +662,10 @@ impl Expr {
         }
     }
 
-    /// Try to translate AST into Polars lazy expression.
-    /// Returns Err if the operation is not supported (triggers fallback execution).
-    pub fn to_polars_expr(&self) -> Result<polars::lazy::dsl::Expr, String> {
-        self.to_polars_expr_with(None)
-    }
-
-    /// The column types of the frame let the date functions lower too: `hour(ts)` on a
-    /// datetime column is vectorised, while on text it still parses row by row.
+    /// The expression as a Polars one; `Err` when it is not supported there, which
+    /// sends the caller to the row-by-row path.  The column types of the frame let the
+    /// date functions lower too: `hour(ts)` on a datetime column is vectorised, while
+    /// on text it still parses row by row.
     pub fn to_polars_expr_with(
         &self,
         schema: Option<&polars::prelude::Schema>,
@@ -592,7 +684,13 @@ impl Expr {
                 Value::String(s) => Ok(polars::lazy::dsl::lit(s.clone())),
                 Value::Boolean(b) => Ok(polars::lazy::dsl::lit(*b)),
                 Value::Date(d) => Ok(polars::lazy::dsl::lit(*d)),
-                Value::Datetime(dt) => Ok(polars::lazy::dsl::lit(*dt)),
+                // In microseconds: a nanosecond literal, Polars' own, cannot hold a moment
+                // past 2262 or before 1677, and an SCD's `9999-12-31` is one.
+                Value::Datetime(dt) => Ok(polars::lazy::dsl::lit(dt.and_utc().timestamp_micros())
+                    .cast(polars::prelude::DataType::Datetime(
+                        polars::prelude::TimeUnit::Microseconds,
+                        None,
+                    ))),
                 Value::Null => Ok(polars::lazy::dsl::lit(polars::prelude::Null {})),
             },
             Expr::BinOp { op, left, right } => {
@@ -618,13 +716,43 @@ impl Expr {
             }
             Expr::Not(inner) => Ok(inner.to_polars_expr_with(schema)?.not()),
             Expr::IsNull(inner) => Ok(inner.to_polars_expr_with(schema)?.is_null()),
+            // Dates and datetimes as equalities, each lowered against the column's
+            // own unit: an IN list as a Series holds numbers and text.
+            Expr::InList { left, list }
+                if list
+                    .iter()
+                    .any(|e| matches!(e, Expr::Literal(Value::Date(_) | Value::Datetime(_)))) =>
+            {
+                list.iter()
+                    .map(|item| {
+                        Expr::BinOp {
+                            op: Op::Eq,
+                            left: left.clone(),
+                            right: Box::new(item.clone()),
+                        }
+                        .to_polars_expr_with(schema)
+                    })
+                    .reduce(|a, b| Ok(a?.or(b?)))
+                    .unwrap_or_else(|| Ok(polars::lazy::dsl::lit(false)))
+            }
             Expr::InList { left, list } => {
                 let l = left.to_polars_expr_with(schema)?;
+                // Whole numbers as integers, as a literal on its own is: an integer
+                // column compared as floats loses its neighbours past 2^53.
+                let whole = list.iter().all(|e| match e {
+                    Expr::Literal(Value::Number(n)) => {
+                        n.fract() == 0.0 && n.abs() <= i64::MAX as f64
+                    }
+                    _ => true,
+                });
                 let mut polars_list = Vec::new();
                 for item in list {
                     // Only support literals in Polars is_in for now
                     if let Expr::Literal(v) = item {
                         match v {
+                            Value::Number(n) if whole => {
+                                polars_list.push(polars::prelude::AnyValue::Int64(*n as i64))
+                            }
                             Value::Number(n) => {
                                 polars_list.push(polars::prelude::AnyValue::Float64(*n))
                             }
@@ -727,25 +855,19 @@ impl Expr {
                         }
                     }))
                 }
-                "regexp_replace" => {
+                "regexp_replace" if reads_as_text(&args[0], schema) => {
                     let pattern = regex_literal(name, &args[1])?;
                     let rep = replacement_of(name, &args[2])?;
-                    Ok(args[0]
-                        .to_polars_expr_with(schema)?
-                        .cast(polars::prelude::DataType::String)
-                        .str()
-                        .replace_all(
-                            polars::lazy::dsl::lit(pattern.as_str().to_string()),
-                            polars::lazy::dsl::lit(rep),
-                            false,
-                        ))
+                    Ok(as_text(&args[0], schema)?.str().replace_all(
+                        polars::lazy::dsl::lit(pattern.as_str().to_string()),
+                        polars::lazy::dsl::lit(rep),
+                        false,
+                    ))
                 }
-                "regexp_extract" => {
+                "regexp_extract" if reads_as_text(&args[0], schema) => {
                     let pattern = regex_literal(name, &args[1])?;
                     let group = group_of(args, &pattern)?;
-                    Ok(args[0]
-                        .to_polars_expr_with(schema)?
-                        .cast(polars::prelude::DataType::String)
+                    Ok(as_text(&args[0], schema)?
                         .str()
                         .extract(polars::lazy::dsl::lit(pattern.as_str().to_string()), group))
                 }
@@ -784,11 +906,10 @@ impl Expr {
                 "date" if temporal_kind(&args[0], schema).is_some() => {
                     Ok(args[0].to_polars_expr_with(schema)?.dt().date())
                 }
-                "json_get" => {
+                "json_get" if is_text(&args[0], schema) => {
                     let (path, _) = json_path_of(&args[1])?;
                     Ok(args[0]
                         .to_polars_expr_with(schema)?
-                        .cast(polars::prelude::DataType::String)
                         .str()
                         .json_path_match(polars::lazy::dsl::lit(path)))
                 }
@@ -797,14 +918,9 @@ impl Expr {
                     let x = args[0].to_polars_expr_with(schema)?;
                     // Whole numbers stay in integers: what the argument is, asked of
                     // a frame with the columns and no rows.
-                    let integral = schema.is_some_and(|s| {
-                        polars::prelude::IntoLazy::lazy(
-                            polars::prelude::DataFrame::empty_with_schema(s),
-                        )
-                        .select([x.clone()])
-                        .collect_schema()
-                        .is_ok_and(|out| out.iter_values().all(|t| t.is_integer()))
-                    });
+                    let integral = schema
+                        .and_then(|s| output_type(&x, s))
+                        .is_some_and(|t| t.is_integer());
                     Ok(epoch_to_datetime(x, unit, integral))
                 }
                 "time_bucket" if temporal_kind(&args[0], schema).is_some() => {
@@ -943,15 +1059,19 @@ impl Expr {
                     // the whole clause Null rather than quietly reading as false,
                     // so `not (x and y)` cannot turn a broken comparison into a
                     // confident answer.
+                    // SQL's three-valued logic, as Polars has it: false decides an
+                    // `and` and true an `or` whatever the other side is.
                     Op::And => {
                         return match (l.as_bool(), r.as_bool()) {
-                            (Some(a), Some(b)) => Value::Boolean(a && b),
+                            (Some(false), _) | (_, Some(false)) => Value::Boolean(false),
+                            (Some(true), Some(true)) => Value::Boolean(true),
                             _ => Value::Null,
                         }
                     }
                     Op::Or => {
                         return match (l.as_bool(), r.as_bool()) {
-                            (Some(a), Some(b)) => Value::Boolean(a || b),
+                            (Some(true), _) | (_, Some(true)) => Value::Boolean(true),
+                            (Some(false), Some(false)) => Value::Boolean(false),
                             _ => Value::Null,
                         }
                     }
@@ -987,6 +1107,10 @@ impl Expr {
             }
             Expr::InList { left, list } => {
                 let l = left.eval(row_idx, col_lookup, df);
+                // An unknown value is in no list, nor out of one.
+                if matches!(l, Value::Null) {
+                    return Value::Null;
+                }
                 for item in list {
                     if values_equal(&l, &item.eval(row_idx, col_lookup, df)) {
                         return Value::Boolean(true);
@@ -1219,41 +1343,37 @@ impl Expr {
                         if !count.is_finite() || count.abs() >= i64::MAX as f64 {
                             return Value::Null;
                         }
-                        match (count as i64).checked_mul(scale) {
-                            Some(ns) => Value::Datetime(
-                                chrono::DateTime::from_timestamp_nanos(ns).naive_utc(),
-                            ),
-                            None => Value::Null,
-                        }
+                        // In i128 nanoseconds: an i64 of them ends in 2262.
+                        from_nanos(count as i128 * scale as i128)
                     }
                     "time_bucket" => {
-                        let Some((every, step)) = bucket_of(&args[1])
-                            .ok()
-                            .and_then(|w| bucket_nanos(&w).map(|step| (w, step)))
+                        let Some(step) = bucket_of(&args[1]).ok().and_then(|w| bucket_nanos(&w))
                         else {
                             return Value::Null;
                         };
+                        const DAY: i64 = 86_400_000_000_000;
                         match &evaluated_args[0] {
-                            Value::Datetime(dt) => match dt.and_utc().timestamp_nanos_opt() {
-                                Some(ns) => Value::Datetime(
-                                    chrono::DateTime::from_timestamp_nanos(
-                                        ns - ns.rem_euclid(step),
-                                    )
-                                    .naive_utc(),
-                                ),
-                                None => Value::Null,
-                            },
-                            Value::Date(d) if every.ends_with('d') => {
-                                let days = step / 86_400_000_000_000;
+                            Value::Datetime(dt) => {
+                                let at = dt.and_utc();
+                                let ns = at.timestamp() as i128 * 1_000_000_000
+                                    + at.timestamp_subsec_nanos() as i128;
+                                from_nanos(ns - ns.rem_euclid(step as i128))
+                            }
+                            // A date is a whole day: a width of whole days buckets it, a
+                            // narrower one leaves it as it is — as Polars does.
+                            Value::Date(d) if step % DAY == 0 => {
+                                let days = step / DAY;
                                 let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
                                 let n = (*d - epoch).num_days();
                                 Value::Date(epoch + chrono::Duration::days(n - n.rem_euclid(days)))
                             }
+                            Value::Date(d) => Value::Date(*d),
                             _ => Value::Null,
                         }
                     }
-                    "today" => Value::Date(chrono::Local::now().naive_local().date()),
-                    "now" => Value::Datetime(chrono::Local::now().naive_local()),
+                    // UTC, as every datetime column is held and shown.
+                    "today" => Value::Date(chrono::Utc::now().naive_utc().date()),
+                    "now" => Value::Datetime(chrono::Utc::now().naive_utc()),
                     "date_format" => {
                         if evaluated_args.len() == 2 {
                             if let (Value::String(fmt), v) =
@@ -1380,35 +1500,69 @@ fn values_equal(l: &Value, r: &Value) -> bool {
         | (Value::Date(_) | Value::Datetime(_), Value::String(_)) => {
             as_temporal(l.clone()) == as_temporal(r.clone())
         }
+        (Value::Date(_), Value::Datetime(_)) | (Value::Datetime(_), Value::Date(_)) => {
+            at_midnight(l) == at_midnight(r)
+        }
         _ => l == r,
     }
 }
 
-/// A date (`YYYY-MM-DD`) or a datetime in one of the forms a cell takes.
-/// A pattern compiled once, however many rows ask for it.  The row-by-row path used to
-/// compile the same regex again on every row.  `None` for a pattern that does not
-/// compile.  The patterns come from the expressions in use, so the map stays small.
-fn cached_regex(pattern: &str) -> Option<regex::Regex> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<regex::Regex>>>> = OnceLock::new();
-    let mut cache = CACHE
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    cache
-        .entry(pattern.to_string())
-        .or_insert_with(|| regex::Regex::new(pattern).ok())
-        .clone()
+/// The moment `ns` nanoseconds from the epoch, or NULL past what a datetime holds.
+fn from_nanos(ns: i128) -> Value {
+    let secs = ns.div_euclid(1_000_000_000);
+    let sub = ns.rem_euclid(1_000_000_000) as u32;
+    i64::try_from(secs)
+        .ok()
+        .and_then(|s| chrono::DateTime::from_timestamp(s, sub))
+        .map_or(Value::Null, |dt| Value::Datetime(dt.naive_utc()))
 }
 
+/// A date as the moment it starts, so it compares with a datetime as Polars compares
+/// them; anything else as it is.
+fn at_midnight(v: &Value) -> Value {
+    match v {
+        Value::Date(d) => Value::Datetime(d.and_hms_opt(0, 0, 0).expect("midnight exists")),
+        other => other.clone(),
+    }
+}
+
+type Compiled = Option<std::sync::Arc<regex::Regex>>;
+static REGEXES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Compiled>>> =
+    std::sync::OnceLock::new();
+/// Patterns kept: one read from a column is a pattern per distinct cell.
+const REGEXES_KEPT: usize = 256;
+
+/// A pattern compiled once, however many rows ask for it.  The row-by-row path used to
+/// compile the same regex again on every row.  `None` for a pattern that does not
+/// compile.  Shared, not cloned: a cloned `Regex` starts its match caches over.
+fn cached_regex(pattern: &str) -> Option<std::sync::Arc<regex::Regex>> {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    let mut cache = REGEXES
+        .get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = cache.get(pattern) {
+        return hit.clone();
+    }
+    // ponytail: starts over when full rather than evicting the oldest.
+    if cache.len() >= REGEXES_KEPT {
+        cache.clear();
+    }
+    let compiled = regex::Regex::new(pattern).ok().map(Arc::new);
+    cache.insert(pattern.to_string(), compiled.clone());
+    compiled
+}
+
+/// A date (`YYYY-MM-DD`) or a datetime in one of the forms a cell takes.
 pub(crate) fn parse_temporal(text: &str) -> Option<Value> {
     if let Ok(d) = NaiveDate::parse_from_str(text, "%Y-%m-%d") {
         return Some(Value::Date(d));
     }
     for fmt in ["%Y-%m-%d %H:%M:%S%.f%#z", "%Y-%m-%dT%H:%M:%S%.f%#z"] {
         if let Ok(dt) = chrono::DateTime::parse_from_str(text, fmt) {
-            return Some(Value::Datetime(dt.naive_local()));
+            // The instant, in UTC: the columns it is compared with are held that way.
+            return Some(Value::Datetime(dt.naive_utc()));
         }
     }
     for fmt in [
@@ -1641,10 +1795,14 @@ impl Parser {
     /// factor → NUMBER | STRING | COLUMN_NAME | FUNCTION_CALL | '(' expr ')'
     fn parse_factor(&mut self) -> Result<Expr, String> {
         // Unary minus: `-x` is `0 - x`, which is what the user wrote down anyway, and
-        // saves the AST a variant no evaluator would treat differently.
+        // saves the AST a variant no evaluator would treat differently.  A negative
+        // number is a literal of its own: `round(x, -2)` needs to see one.
         if let Some(Token::Minus) = self.peek() {
             self.advance();
             let operand = self.parse_factor()?;
+            if let Expr::Literal(Value::Number(n)) = operand {
+                return Ok(Expr::Literal(Value::Number(-n)));
+            }
             return Ok(Expr::BinOp {
                 op: Op::Sub,
                 left: Box::new(Expr::Literal(Value::Number(0.0))),
@@ -1867,6 +2025,9 @@ fn compare_ordered(l: &Value, r: &Value, target: std::cmp::Ordering, allow_equal
         | (Value::Date(_) | Value::Datetime(_), Value::String(_)) => {
             (as_temporal(l.clone()), as_temporal(r.clone()))
         }
+        (Value::Date(_), Value::Datetime(_)) | (Value::Datetime(_), Value::Date(_)) => {
+            (at_midnight(l), at_midnight(r))
+        }
         _ => (l.clone(), r.clone()),
     };
     match (&l, &r) {
@@ -1881,6 +2042,17 @@ fn compare_ordered(l: &Value, r: &Value, target: std::cmp::Ordering, allow_equal
 mod tests {
     use super::*;
     use polars::prelude::{NamedFrom, Series};
+
+    /// `contains(text, pattern_col)` compiles a pattern per distinct cell; a server
+    /// running for days keeps a bounded number of them.
+    #[test]
+    fn compiled_patterns_are_bounded() {
+        for i in 0..REGEXES_KEPT * 3 {
+            cached_regex(&format!("cell-{}", i));
+        }
+        let kept = REGEXES.get().unwrap().lock().unwrap().len();
+        assert!(kept <= REGEXES_KEPT, "{} patterns kept", kept);
+    }
 
     fn mock_df(data: Vec<Vec<String>>, names: Vec<&str>) -> crate::data::dataframe::DataFrame {
         let mut series_vec = Vec::new();
@@ -1991,7 +2163,9 @@ mod tests {
         // `polars::prelude::*` brings its own `Expr`, so name ours explicitly.
         use polars::prelude::IntoLazy;
         let parsed = super::Expr::parse(expr).expect("expression must parse");
-        let polars_expr = parsed.to_polars_expr().expect("must lower to Polars");
+        let polars_expr = parsed
+            .to_polars_expr_with(None)
+            .expect("must lower to Polars");
         let out = df
             .df
             .clone()
@@ -2271,11 +2445,8 @@ mod tests {
 
     /// A pattern chrono cannot format has no answer; `to_string` panicked on it.
     #[test]
-    fn date_format_with_a_bad_pattern_is_null() {
-        let (df, lookup) = codes();
-        let at = |e: &str, row| Expr::parse(e).unwrap().eval(row, &lookup, &df);
-
-        assert_eq!(at("date_format(when, '%Q')", 0), Value::Null);
+    fn date_format_with_a_bad_pattern_is_refused() {
+        assert!(Expr::parse("date_format(when, '%Q')").is_err());
     }
 
     /// A misspelt function used to evaluate to a column of NULLs with no error at all.
@@ -2338,7 +2509,9 @@ mod tests {
             .clone()
             .lazy()
             .select([parsed
-                .to_polars_expr()
+                // With the frame's schema, as every real caller lowers: the forms
+                // that depend on a column's type are the ones to hold to the row path.
+                .to_polars_expr_with(Some(df.df.schema().as_ref()))
                 .expect("must lower to Polars")
                 .cast(polars::prelude::DataType::Float64)
                 .alias("m")])
@@ -2361,6 +2534,179 @@ mod tests {
         (fast, slow)
     }
 
+    /// A frame of the given columns, and its name lookup, for the parity checks.
+    fn frame_of(
+        columns: Vec<Series>,
+    ) -> (
+        crate::data::dataframe::DataFrame,
+        HashMap<&'static str, usize>,
+    ) {
+        let names: Vec<&'static str> = columns
+            .iter()
+            .map(|c| &*Box::leak(c.name().to_string().into_boxed_str()))
+            .collect();
+        let pdf = polars::prelude::DataFrame::new_infer_height(
+            columns.into_iter().map(|c| c.into()).collect(),
+        )
+        .unwrap();
+        let df = crate::data::io::wrap_polars_df(pdf).unwrap();
+        (
+            df,
+            names.into_iter().enumerate().map(|(i, n)| (n, i)).collect(),
+        )
+    }
+
+    /// NULL in `and`, `or` and `in` follows SQL's three-valued logic on both paths: a
+    /// filter keeps the same rows whichever engine answers it.
+    #[test]
+    fn null_logic_agrees_on_both_paths() {
+        let (df, lookup) = frame_of(vec![
+            Series::new("x".into(), [None, Some(5.0)]),
+            Series::new("y".into(), [0.0, 1.0]),
+        ]);
+        for expr in [
+            "x > 1 or y == 0",
+            "x > 1 and y == 1",
+            "not (x > 1 and y == 1)",
+            "x > 1 and y == 5",
+            "not (x in (5, 7))",
+            "x in (5, 7)",
+        ] {
+            let (fast, slow) = shown_on_both_paths(expr, &df, &lookup);
+            assert_eq!(fast, slow, "{}", expr);
+        }
+    }
+
+    /// An IN list of whole numbers compares an integer column as integers, as `==` does.
+    #[test]
+    fn an_in_list_of_whole_numbers_compares_as_integers() {
+        let (df, lookup) = frame_of(vec![Series::new(
+            "id".into(),
+            [9_007_199_254_740_992i64, 9_007_199_254_740_993],
+        )]);
+        let (in_list, _) = shown_on_both_paths("id in (9007199254740992)", &df, &lookup);
+        let (eq, _) = shown_on_both_paths("id == 9007199254740992", &df, &lookup);
+        assert_eq!(in_list, eq);
+        assert_eq!(in_list, ["true", "false"]);
+    }
+
+    /// A datetime compared with a date — `ts < today()` — is an answer on the row path.
+    #[test]
+    fn a_datetime_compares_with_a_date_row_by_row() {
+        let ts = Series::new("ts".into(), [1_700_000_000_000i64, 1_800_000_000_000])
+            .cast(&polars::prelude::DataType::Datetime(
+                polars::prelude::TimeUnit::Milliseconds,
+                None,
+            ))
+            .unwrap();
+        let (df, lookup) = frame_of(vec![ts]);
+        let cutoff = Expr::parse("ts < date(\"2025-01-01\")").unwrap();
+        let rows: Vec<Value> = (0..2).map(|r| cutoff.eval(r, &lookup, &df)).collect();
+        assert_eq!(rows, [Value::Boolean(true), Value::Boolean(false)]);
+        let same = Expr::parse("ts == date(\"2023-11-14\")").unwrap();
+        assert_eq!(same.eval(0, &lookup, &df), Value::Boolean(false));
+    }
+
+    /// `from_epoch` past 2262 and `time_bucket` over a date give the same answer row by
+    /// row as vectorised.
+    #[test]
+    fn epochs_and_buckets_agree_outside_the_nanosecond_range() {
+        let (df, lookup) = frame_of(vec![Series::new(
+            "e".into(),
+            [9_999_999_999i64, 1_700_000_000],
+        )]);
+        for expr in [
+            "from_epoch(e, \"s\")",
+            "time_bucket(from_epoch(e, \"s\"), \"1h\")",
+        ] {
+            let (fast, slow) = shown_on_both_paths(expr, &df, &lookup);
+            assert_eq!(fast, slow, "{}", expr);
+        }
+        let d = Series::new("d".into(), [19_000i32])
+            .cast(&polars::prelude::DataType::Date)
+            .unwrap();
+        let (df, lookup) = frame_of(vec![d]);
+        let (fast, slow) = shown_on_both_paths("time_bucket(d, \"1h\")", &df, &lookup);
+        assert_eq!(fast, slow);
+    }
+
+    /// A number or a datetime read as text reads alike on both paths: a regex over a
+    /// number runs row by row, over a datetime vectorised on the text the table shows,
+    /// and `text()` of a whole float is `2`, as row by row.
+    #[test]
+    fn text_of_numbers_and_datetimes_agrees_on_both_paths() {
+        let t = Series::new("t".into(), [1_700_000_000_000i64, 1_700_000_000_500])
+            .cast(&polars::prelude::DataType::Datetime(
+                polars::prelude::TimeUnit::Milliseconds,
+                None,
+            ))
+            .unwrap();
+        let (df, lookup) = frame_of(vec![Series::new("price".into(), [2.0, 2.5]), t]);
+        for expr in [
+            "text(price)",
+            "contains(price, \"[.]0\")",
+            "regexp_extract(t, \"[.]([0-9]+)\", 1)",
+            "regexp_replace(t, \"[0-9]\", \"x\")",
+        ] {
+            let (fast, slow) = shown_on_both_paths(expr, &df, &lookup);
+            assert_eq!(fast, slow, "{}", expr);
+        }
+        for expr in [
+            "regexp_extract(price, \"[.]([0-9]+)\", 1)",
+            "regexp_replace(price, \"0\", \"x\")",
+            "json_get(price, \"$.a\")",
+        ] {
+            let lowered = Expr::parse(expr)
+                .unwrap()
+                .to_polars_expr_with(Some(df.df.schema().as_ref()));
+            assert!(lowered.is_err(), "{} lowered over a number", expr);
+        }
+    }
+
+    /// An epoch past what a datetime can hold is NULL on both paths, not a panic.
+    #[test]
+    fn an_epoch_past_any_datetime_is_null() {
+        let (df, lookup) = frame_of(vec![Series::new("e".into(), [9_000_000_000_000_000i64, 1])]);
+        for expr in [
+            "from_epoch(e, \"s\")",
+            "from_epoch(e, \"ms\")",
+            "from_epoch(e * 1000, \"us\")",
+            "from_epoch(e / 3, \"s\")",
+        ] {
+            let (fast, slow) = shown_on_both_paths(expr, &df, &lookup);
+            assert_eq!(fast, slow, "{}", expr);
+            assert_eq!(fast[0], "", "{}", expr);
+        }
+    }
+
+    /// A moment written with an offset is that instant in UTC, as every datetime
+    /// column is held.
+    #[test]
+    fn an_offset_literal_is_read_as_utc() {
+        let want = NaiveDate::from_ymd_opt(2024, 1, 1)
+            .unwrap()
+            .and_hms_opt(7, 0, 0)
+            .unwrap();
+        for text in ["2024-01-01T10:00:00+03:00", "2024-01-01 10:00:00+03:00"] {
+            assert_eq!(
+                parse_temporal(text),
+                Some(Value::Datetime(want)),
+                "{}",
+                text
+            );
+        }
+    }
+
+    /// Places that are not a whole number from -28 to 28 are refused when the
+    /// expression is read, not answered with a column of NULLs.
+    #[test]
+    fn round_refuses_places_it_cannot_honour() {
+        for bad in ["round(v, 1.5)", "round(v, 40)", "round(v, v)"] {
+            assert!(Expr::parse(bad).is_err(), "{} parsed", bad);
+        }
+        assert!(Expr::parse("round(v, -2)").is_ok());
+    }
+
     #[test]
     fn math_functions_agree_on_both_paths() {
         let cases: &[(&str, &[f64], &[f64])] = &[
@@ -2368,6 +2714,7 @@ mod tests {
             ("round(v, 2)", &[2.345, -2.345], &[2.35, -2.35]),
             // Half away from zero, as tuitab_calc rounds.
             ("round(v)", &[2.5, -2.5, 1.4], &[3.0, -3.0, 1.0]),
+            ("round(v, -2)", &[1234.5678, -150.0], &[1200.0, -200.0]),
             ("floor(v)", &[-1.5, 1.5], &[-2.0, 1.0]),
             ("ceil(v)", &[1.2, -1.2], &[2.0, -1.0]),
             ("sqrt(v)", &[9.0], &[3.0]),
@@ -2552,15 +2899,8 @@ mod tests {
         let col = fast.column("m").unwrap().as_materialized_series().clone();
         let fast: Vec<String> = (0..col.len())
             .map(|i| match col.get(i).unwrap() {
-                polars::prelude::AnyValue::Datetime(v, tu, _) => {
-                    let nanos = match tu {
-                        polars::prelude::TimeUnit::Nanoseconds => v,
-                        polars::prelude::TimeUnit::Microseconds => v * 1_000,
-                        polars::prelude::TimeUnit::Milliseconds => v * 1_000_000,
-                    };
-                    chrono::DateTime::from_timestamp_nanos(nanos)
-                        .naive_utc()
-                        .to_string()
+                d @ polars::prelude::AnyValue::Datetime(..) => {
+                    crate::data::dataframe::DataFrame::anyvalue_to_string_fmt(&d)
                 }
                 polars::prelude::AnyValue::Null => String::new(),
                 polars::prelude::AnyValue::String(t) => t.to_string(),

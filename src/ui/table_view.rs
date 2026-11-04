@@ -65,8 +65,13 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let is_new = sheet.source_path.as_deref().is_some_and(|p| !p.exists());
 
     let title = format!(
-        " {}{}{}{} ",
+        " {}{}{}{}{} ",
         sheet.title,
+        sheet
+            .sample
+            .as_ref()
+            .map(|s| format!(" [{}]", s.label()))
+            .unwrap_or_default(),
         if is_new { " [new]" } else { "" },
         if df.modified { " [*]" } else { "" },
         if stack_depth > 1 {
@@ -569,21 +574,8 @@ fn make_data_rows(
                     let is_active_col = col == cursor_col;
                     let display_chars = widths_override[i] as usize;
 
-                    let truncated_text: String = text
-                        .chars()
-                        .scan(0usize, |acc, c: char| {
-                            if c == '\n' {
-                                return None;
-                            }
-                            let w = UnicodeWidthStr::width(c.to_string().as_str());
-                            if *acc + w <= display_chars {
-                                *acc += w;
-                                Some(c)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    let truncated_text =
+                        clip(&crate::data::dataframe::one_line(&text), display_chars);
 
                     let mut style = match (is_active, is_selected, is_active_col) {
                         (true, true, true) => T::selected_active_col_style(),

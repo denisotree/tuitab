@@ -135,8 +135,8 @@ ln(requests + 1)
 |----------|--------|
 | `year(d)` `month(d)` `day(d)` | Parts of a date |
 | `hour(dt)` `minute(dt)` | Parts of a datetime |
-| `today()` | Current date |
-| `now()` | Current datetime |
+| `today()` | Current date, in UTC |
+| `now()` | Current datetime, in UTC — the clock the columns are held in |
 | `date(s)` | Parse a value into a date |
 | `date_format(d, fmt)` | Format a date with a `chrono`/`strftime` pattern |
 | `from_epoch(x, unit)` | Integer seconds, milliseconds, microseconds or nanoseconds since 1970 (`"s"`, `"ms"`, `"us"`, `"ns"`) as a UTC datetime |
@@ -157,8 +157,8 @@ name ending `_time`, `_ts`, `_timestamp`, `_at` — whose every value is an epoc
 in one unit (s, ms, µs or ns, years 2001–2286) is shown as a UTC datetime. The
 file still holds the integers: saving writes them back, and `t` → Integer
 restores them. In the MCP server `tuitab_inspect` notes such a column, and
-`"detect_epoch": false` on the source keeps the integers. JSON, YAML, TOML and
-markdown are left as they are.
+`"detect_epoch": false` on the source keeps the integers. JSON, JSON Lines, YAML,
+TOML and markdown are left as they are: their numbers are the values the JSON holds.
 
 A datetime that carries a time zone (Parquet, Arrow) is shown, compared and
 computed in UTC — write a filter's moment in UTC. Saving to Parquet or Arrow puts

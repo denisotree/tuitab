@@ -5,42 +5,6 @@ use polars::prelude::*;
 use rayon::prelude::*;
 use serde_json::Value as Json;
 
-/// A text column offered to the narrowest type that holds every value: Int64, then
-/// Float64, then — when asked — Boolean (`true`/`false`); text otherwise.
-///
-/// A zero-padded number is not a number: `01234` is a postcode, an account, a product
-/// code, and casting it would quietly hand back `1234`, so one such value keeps the
-/// whole column text.
-pub fn type_from_text(text: &Series, booleans: bool) -> Series {
-    let Ok(ca) = text.str() else {
-        return text.clone();
-    };
-    let padded = ca.into_iter().flatten().any(|s| {
-        let b = s.as_bytes();
-        let digits = b.strip_prefix(b"-").unwrap_or(b);
-        digits.len() > 1 && digits[0] == b'0' && digits[1].is_ascii_digit()
-    });
-    if padded {
-        return text.clone();
-    }
-    for target in [DataType::Int64, DataType::Float64] {
-        if let Ok(cast) = text.strict_cast(&target) {
-            return cast;
-        }
-    }
-    if booleans
-        && ca.null_count() < ca.len()
-        && ca
-            .into_iter()
-            .flatten()
-            .all(|s| s == "true" || s == "false")
-    {
-        let flags: BooleanChunked = ca.into_iter().map(|v| v.map(|s| s == "true")).collect();
-        return flags.with_name(text.name().clone()).into_series();
-    }
-    text.clone()
-}
-
 /// The subset of JSONPath `json_get` reads: `$`, then `.key`, `["key"]`, `['key']` or
 /// `[index]`, any number of times.  Wildcards, recursive descent and filters are not
 /// paths to one value, so they are refused rather than half-supported.
@@ -164,8 +128,10 @@ pub fn expand_json(df: &DataFrame, col: &str, prefix: &str) -> Result<DataFrame,
         }
     }
 
-    let new_columns: Vec<Series> = keys
-        .par_iter()
+    // One key at a time: typing a column runs a Polars query, which must not be
+    // started from inside another thread pool's task.
+    let new_columns: Vec<(Series, bool)> = keys
+        .iter()
         .map(|k| {
             let values: Vec<Option<&Json>> = parsed
                 .iter()
@@ -176,41 +142,36 @@ pub fn expand_json(df: &DataFrame, col: &str, prefix: &str) -> Result<DataFrame,
         .collect();
 
     let mut out = df.clone();
-    for (offset, s) in new_columns.into_iter().enumerate() {
+    let added = new_columns.len();
+    for (offset, (s, json)) in new_columns.into_iter().enumerate() {
         let at = col_idx + 1 + offset;
         let mut meta = crate::data::column::ColumnMeta::new(s.name().to_string());
         meta.col_type = crate::data::io::column_type_of(s.dtype());
+        meta.json = json;
         out.df
             .insert_column(at, s.into_column())
             .map_err(|e| e.to_string())?;
         out.columns.insert(at, meta);
     }
     out.aggregates_cache = None;
-    out.calc_widths(40, 1000);
+    for at in col_idx + 1..col_idx + 1 + added {
+        out.calc_column_width(at, 40, 1000);
+    }
     Ok(out)
 }
 
-/// A column from JSON values by the type they share.
-fn typed_series(name: &str, values: &[Option<&Json>]) -> Series {
-    let all = |f: fn(&Json) -> bool| values.iter().flatten().all(|v| f(v));
-    if values.iter().all(Option::is_none) {
-        return Series::new(
-            name.into(),
-            values.iter().map(|_| None::<String>).collect::<Vec<_>>(),
-        );
-    }
-    if all(|v| v.as_i64().is_some()) {
-        let ints: Vec<Option<i64>> = values.iter().map(|v| v.and_then(Json::as_i64)).collect();
-        return Series::new(name.into(), ints);
-    }
-    if all(Json::is_number) {
-        let floats: Vec<Option<f64>> = values.iter().map(|v| v.and_then(Json::as_f64)).collect();
-        return Series::new(name.into(), floats);
-    }
-    if all(Json::is_boolean) {
-        let flags: Vec<Option<bool>> = values.iter().map(|v| v.and_then(Json::as_bool)).collect();
-        return Series::new(name.into(), flags);
+/// A column of one key's values: nested ones as their JSON, which saves back as itself;
+/// scalars typed by the rule `json_get` uses, so the two tools read one value alike.
+fn typed_series(name: &str, values: &[Option<&Json>]) -> (Series, bool) {
+    if values
+        .iter()
+        .flatten()
+        .any(|v| v.is_object() || v.is_array())
+    {
+        let texts: Vec<Option<String>> = values.iter().map(|v| v.map(Json::to_string)).collect();
+        return (Series::new(name.into(), texts), true);
     }
     let texts: Vec<Option<String>> = values.iter().map(|v| v.and_then(scalar_text)).collect();
-    Series::new(name.into(), texts)
+    let texts = Series::new(name.into(), texts);
+    (crate::data::profile::typed_text(&texts, true), false)
 }

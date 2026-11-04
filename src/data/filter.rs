@@ -164,19 +164,18 @@ enum Shape {
     AsIs,
     /// Numeric column: a quoted number is the number it spells.
     Numeric,
-    /// Date or datetime: compare the ISO text of both sides.
-    ///
-    /// Polars refuses a temporal column against a string outright, and ISO-8601
-    /// orders the same way chronology does, so text is exact rather than a
-    /// convenient approximation.
+    /// Date or datetime against something that is not a moment — a pattern, a word:
+    /// compare the ISO text of both sides, the text the column shows.
     IsoText,
+    /// Date or datetime against literals that name moments, or another date column:
+    /// compare as moments.  The column's text carries its unit's fraction
+    /// (`11:10:00.000`), so an equal instant written `11:10:00` never matched as text.
+    Moment,
 }
 
 fn shape_for(df: &DataFrame, col: &str) -> Result<Shape, String> {
     Ok(match df.columns[df.column_index(col)?].col_type {
-        ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency => {
-            Shape::Numeric
-        }
+        t if t.is_numeric() => Shape::Numeric,
         ColumnType::Date | ColumnType::Datetime => Shape::IsoText,
         _ => Shape::AsIs,
     })
@@ -193,6 +192,7 @@ fn fit(value: &Value, shape: Shape) -> Result<Value, String> {
                 .map_err(|_| format!("'{}' is not a number, and the column holds numbers", s))?,
         ),
         (Shape::IsoText, other) => Value::String(other.to_string()),
+        (Shape::Moment, v) => moment(v).unwrap_or_else(|| v.clone()),
         _ => value.clone(),
     })
 }
@@ -221,12 +221,9 @@ fn as_text(col: &str) -> Expr {
 }
 
 impl Predicate {
-    /// Turn this predicate into an expression over the frame's columns.
-    pub fn to_expr(&self, df: &DataFrame) -> Result<Expr, String> {
-        let shape = shape_for(df, &self.col)?;
-        // A date or datetime column against literals that name moments compares as
-        // moments: its text carries the unit's fraction (`11:10:00.000`), so an equal
-        // instant written `11:10:00` never matched as text.
+    /// Whether this predicate on a date or datetime column orders or matches moments:
+    /// a comparison whose literals all name one, or against another such column.
+    fn compares_moments(&self, df: &DataFrame) -> Result<bool, String> {
         let ordering = matches!(
             self.op,
             PredOp::Eq
@@ -239,8 +236,7 @@ impl Predicate {
                 | PredOp::In
                 | PredOp::NotIn
         );
-        let as_moments = shape == Shape::IsoText
-            && ordering
+        Ok(ordering
             && match &self.value {
                 Operand::Literal(v) => moment(v).is_some(),
                 Operand::List(items) => {
@@ -250,27 +246,28 @@ impl Predicate {
                     df.columns[df.column_index(other)?].col_type,
                     ColumnType::Date | ColumnType::Datetime
                 ),
-            };
-        let fit = |value: &Value, shape: Shape| -> Result<Value, String> {
-            match (as_moments, moment(value)) {
-                (true, Some(m)) => Ok(m),
-                _ => fit(value, shape),
+            })
+    }
+
+    /// Turn this predicate into an expression over the frame's columns.
+    pub fn to_expr(&self, df: &DataFrame) -> Result<Expr, String> {
+        let shape = match shape_for(df, &self.col)? {
+            Shape::IsoText if self.compares_moments(df)? => Shape::Moment,
+            shape => shape,
+        };
+        let side = |name: &str| {
+            if shape == Shape::IsoText {
+                as_text(name)
+            } else {
+                Expr::ColumnRef(name.to_string())
             }
         };
-        let column = if shape == Shape::IsoText && !as_moments {
-            as_text(&self.col)
-        } else {
-            Expr::ColumnRef(self.col.clone())
-        };
+        let column = side(&self.col);
 
         let operand = |value: &Operand| -> Result<Expr, String> {
             match value {
                 Operand::Literal(v) => Ok(Expr::Literal(fit(v, shape)?)),
-                Operand::Column(name) => Ok(if shape == Shape::IsoText && !as_moments {
-                    as_text(name)
-                } else {
-                    Expr::ColumnRef(name.clone())
-                }),
+                Operand::Column(name) => Ok(side(name)),
                 Operand::List(_) => {
                     Err("this operator takes a single value, not a list".to_string())
                 }
@@ -314,19 +311,6 @@ impl Predicate {
                 _ => Err("'between' takes a two-element [low, high] array".to_string()),
             },
             PredOp::In | PredOp::NotIn => match &self.value {
-                // Moments as a chain of equalities: an IN list holds numbers and text.
-                Operand::List(items) if as_moments => {
-                    let any = items
-                        .iter()
-                        .map(|v| Ok(binop(Op::Eq, column.clone(), Expr::Literal(fit(v, shape)?))))
-                        .reduce(|a: Result<Expr, String>, b| Ok(binop(Op::Or, a?, b?)))
-                        .expect("as_moments needs a non-empty list")?;
-                    Ok(if self.op == PredOp::In {
-                        any
-                    } else {
-                        Expr::Not(Box::new(any))
-                    })
-                }
                 Operand::List(items) => {
                     let list = Expr::InList {
                         left: Box::new(column),

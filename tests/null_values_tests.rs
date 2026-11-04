@@ -134,3 +134,16 @@ fn a_count_over_a_column_with_tokens_counts_the_values() {
     );
     assert_eq!(out["rows"][0][0], json!(2));
 }
+
+/// CSV from a pipe follows the rules a file does: a null token in a column of numbers
+/// is a missing number.
+#[test]
+fn csv_from_a_pipe_reads_null_tokens_as_a_file_does() {
+    let (df, _) =
+        tuitab::data::io::load_from_bytes(b"v\n1\nundefined\n3\n".to_vec(), "csv", None).unwrap();
+    assert_eq!(
+        df.df.column("v").unwrap().dtype(),
+        &polars::prelude::DataType::Int64
+    );
+    assert_eq!(df.df.column("v").unwrap().null_count(), 1);
+}

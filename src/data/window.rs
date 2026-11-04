@@ -193,10 +193,12 @@ impl WindowFn {
             Self::PctOfTotal => ColumnType::Percentage,
             // An average of integers is fractional; everything else that
             // carries a value forward keeps the source column's type.
-            Self::Avg => match source {
-                Some(ColumnType::Integer) | None => ColumnType::Float,
+            Self::Avg | Self::Median | Self::Mad => match source {
+                Some(ColumnType::Integer | ColumnType::Boolean) | None => ColumnType::Float,
                 Some(other) => other,
             },
+            // Booleans add up to a count.
+            Self::Sum | Self::CumSum if source == Some(ColumnType::Boolean) => ColumnType::Integer,
             _ => source.unwrap_or(ColumnType::Float),
         }
     }
@@ -253,13 +255,7 @@ pub fn add_window_column(df: &DataFrame, spec: &Spec) -> Result<DataFrame, Strin
 
     if spec.function.needs_numbers() {
         if let Some(meta) = &source_meta {
-            let numeric = matches!(
-                meta.col_type,
-                ColumnType::Integer
-                    | ColumnType::Float
-                    | ColumnType::Percentage
-                    | ColumnType::Currency
-            );
+            let numeric = meta.col_type.sums();
             if !numeric {
                 return Err(format!(
                     "Cannot compute {} over '{}': the column is {}, and {} needs a numeric one",

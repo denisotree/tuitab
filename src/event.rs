@@ -4,6 +4,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Map a raw crossterm key event to a semantic Action.
 /// Returns Action::None for events that should be ignored.
+/// Lines a page key scrolls the `?` popup by.
+const HELP_PAGE: i32 = 10;
+
 pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
     // Ignore key release and repeat events — only handle Press
     if key.kind != KeyEventKind::Press {
@@ -617,7 +620,18 @@ pub fn handle_key_event(key: KeyEvent, mode: AppMode, can_pop: bool) -> Action {
 
         // Help overlay — any key closes it
         AppMode::Help => match key.code {
-            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => Action::CloseHelp,
+            KeyCode::Down | KeyCode::Char('j') => Action::HelpScroll(1),
+            KeyCode::Up | KeyCode::Char('k') => Action::HelpScroll(-1),
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Action::HelpScroll(HELP_PAGE)
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Action::HelpScroll(-HELP_PAGE)
+            }
+            KeyCode::PageDown | KeyCode::Char(' ') => Action::HelpScroll(HELP_PAGE),
+            KeyCode::PageUp => Action::HelpScroll(-HELP_PAGE),
+            KeyCode::Home | KeyCode::Char('g') => Action::HelpScroll(i32::MIN),
+            KeyCode::End | KeyCode::Char('G') => Action::HelpScroll(i32::MAX),
             _ => Action::CloseHelp,
         },
 

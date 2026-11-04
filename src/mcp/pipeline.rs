@@ -149,7 +149,7 @@ fn known_keys(op: &str) -> Option<&'static [&'static str]> {
 }
 
 /// How close two key names are, for "did you mean" — a plain edit distance, capped.
-pub(crate) fn close_enough(a: &str, b: &str) -> bool {
+fn close_enough(a: &str, b: &str) -> bool {
     // `aggregate` for `agg` is the mistake that prompted this, and no edit distance
     // small enough to be useful reaches across six characters — but one name being the
     // start of the other is as good a signal as they come.
@@ -185,24 +185,31 @@ fn check_keys(op: &str, body: &Value) -> Result<(), String> {
     let Some(obj) = body.as_object() else {
         return Ok(());
     };
-    for key in obj.keys() {
-        if allowed.contains(&key.as_str()) {
-            continue;
-        }
-        let suggestion = allowed
-            .iter()
-            .find(|a| close_enough(key, a))
-            .map(|a| format!(" (did you mean '{}'?)", a))
-            .unwrap_or_default();
-        return Err(format!(
+    match unknown_field(obj, allowed) {
+        Some((key, hint)) => Err(format!(
             "'{}' has no field '{}'{}. It takes: {}",
             op,
             key,
-            suggestion,
+            hint,
             allowed.join(", ")
-        ));
+        )),
+        None => Ok(()),
     }
-    Ok(())
+}
+
+/// The first field of `obj` that is not `allowed`, with a " (did you mean …?)" hint
+/// when one of them is a typo away.
+pub(super) fn unknown_field<'a>(
+    obj: &'a serde_json::Map<String, Value>,
+    allowed: &[&str],
+) -> Option<(&'a str, String)> {
+    let key = obj.keys().find(|k| !allowed.contains(&k.as_str()))?;
+    let hint = allowed
+        .iter()
+        .find(|a| close_enough(key, a))
+        .map(|a| format!(" (did you mean '{}'?)", a))
+        .unwrap_or_default();
+    Some((key, hint))
 }
 
 fn parse_op(value: &Value) -> Result<Op, String> {
@@ -487,21 +494,12 @@ fn parse_aggs(value: Option<&Value>) -> Result<Vec<AggSpec>, String> {
     array
         .iter()
         .map(|item| {
-            if let Some(obj) = item.as_object() {
-                for key in obj.keys() {
-                    if !AGG_KEYS.contains(&key.as_str()) {
-                        let hint = AGG_KEYS
-                            .iter()
-                            .find(|k| close_enough(key, k))
-                            .map(|k| format!(" (did you mean '{}'?)", k))
-                            .unwrap_or_default();
-                        return Err(format!(
-                            "an aggregate has no field '{}'{}. It takes: col, fn, and for \
-                             a conditional one where and as",
-                            key, hint
-                        ));
-                    }
-                }
+            if let Some((key, hint)) = item.as_object().and_then(|o| unknown_field(o, AGG_KEYS)) {
+                return Err(format!(
+                    "an aggregate has no field '{}'{}. It takes: col, fn, and for a \
+                     conditional one where and as",
+                    key, hint
+                ));
             }
             let col = required_str(item, "col")?;
             let name = required_str(item, "fn")?;
@@ -597,11 +595,7 @@ fn parse_join(body: &Value) -> Result<JoinSpec, String> {
 pub struct Seeds(pub Vec<(usize, u64)>);
 
 pub fn apply_all(df: DataFrame, ops: &[Op]) -> Result<DataFrame, String> {
-    apply_all_reporting_seeds(df, ops).map(|(df, _)| df)
-}
-
-pub fn apply_all_reporting_seeds(df: DataFrame, ops: &[Op]) -> Result<(DataFrame, Seeds), String> {
-    apply_from(df, ops, 0)
+    apply_from(df, ops, 0).map(|(df, _)| df)
 }
 
 /// `ops[from..]` over `df`, numbered as steps of the whole pipeline — the rest of one

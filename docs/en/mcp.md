@@ -109,7 +109,7 @@ result of the last.
 | `select` | Keep these columns, in this order |
 | `sort` | `{"col": …, "desc": …}` for one key, `{"by": [{…}, {…}]}` for several |
 | `compute` | A derived column from an expression |
-| `group_by` | Exactly the aggregates asked for, in the order asked for |
+| `group_by` | Exactly the aggregates asked for, in the order asked for; their columns are named `col:fn` (`amount:sum`), a row count `count` |
 | `aggregate` | A grand total — one row, no grouping |
 | `frequency` | Distribution ranked by count, with `Count` and `Pct` |
 | `pivot` | Rows by `index`, columns by `on`, cells by `formula` |
@@ -290,25 +290,34 @@ earlier steps: a`, `division by zero`, `'=' is not an operator here: compare wit
 
 ## Files larger than memory
 
-A CSV, TSV, Parquet, Arrow or JSONL file — or a pattern of them — is never loaded
-whole. It is scanned, the pipeline's leading steps become one plan that reads only
-the columns and rows they need, and the plan runs on Polars' streaming engine:
+A CSV, TSV, Parquet, Arrow or JSONL file — a `.json` that holds JSON Lines counts,
+and in a pattern of them the first file says whether they do — or a pattern of
+them, larger than a sixteenth of the memory the server may use is never loaded
+whole. (A smaller one is
+loaded once and kept, so the next call on it answers from memory.) It is scanned,
+the pipeline's leading steps become one plan that reads only the columns and rows
+they need, and the plan runs on Polars' streaming engine:
 
 - `filter`, `select`, `compute` (any expression but a date difference — a
   `json_get` first takes one pass to learn its column's type), `sort`, `limit`
   and `unpivot` join the plan;
 - `group_by`, `aggregate` and `frequency` run the same grouping over the stream and
   collect only the groups;
-- `tuitab_inspect` counts the rows as they stream past and collects the sample;
+- `tuitab_inspect` reads the sample in one pass and counts the rows in a second;
   `tuitab_describe` collects only the `columns` it is asked to profile.
 
-So `frequency` over a 17 GB JSONL file holds the counts, not the file. A step that
+So `frequency` over a 16 GB JSONL file holds the counts, not the file — and as many
+counts as there are groups: a `group_by` on a key nearly every row has its own holds
+nearly every row, and there is no counting the groups without holding their keys. A step that
 needs the whole table — `dedup`, `duplicates`, `sample`, `window`, `pivot`, `join`,
 `transpose`, `expand_json`, writing to `output.path` — runs in memory over what the
 plan has produced by then. Before it collects, the server counts the rows and
 estimates their size; more than half the machine's memory is refused with the
-numbers and what streams instead, rather than left to run out of memory. Narrow the
-rows or columns first, or put a `group_by` before it.
+numbers and what streams instead, rather than left to run out of memory; so is an
+`output.limit` past a thousand rows. Narrow the rows or columns first, or put a
+`group_by` before it. A file past that size that cannot be scanned — JSON Lines
+whose fields change shape from line to line, a pattern whose files type a column
+differently — is refused with the reason rather than read whole.
 
 The answers are the same as for a small file: a streamed pipeline and a loaded one
 are held to the same output by the test suite.
@@ -361,8 +370,8 @@ Rows come back as arrays matching the `columns` list:
 ```
 
 - **Percentages are fractions.** `0.42` means 42%.
-- **Currency and floats are raw numbers**, not formatted strings — the
-  formatting belongs to a person reading a file, not to a model computing.
+- **Currency and floats are raw numbers**, not formatted strings, here and in a file
+  written to `output.path` alike: no currency symbol, no fixed decimals.
 - **`truncated` matters.** When it is true you are looking at part of the answer.
 
 ## Getting a file out

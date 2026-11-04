@@ -430,3 +430,151 @@ fn mannwhitney_over_samples_all_equal_says_so() {
         out
     );
 }
+
+/// The two-sided asymptotic KS over large samples is a number, not a minute of matrix
+/// powers: forty thousand against forty thousand, p as scipy's `ks_2samp` gives it.
+#[test]
+fn two_sided_ks_over_large_samples_answers_quickly() {
+    let column = |name: &str, shift: f64| {
+        let mut text = String::from("v\n");
+        for i in 0..40_000 {
+            text.push_str(&format!("{:?}\n", i as f64 / 40_000.0 + shift));
+        }
+        csv(name, &text)
+    };
+    let (x, y) = (column("ks-x40k.csv", 0.0), column("ks-y40k.csv", 0.0147));
+    let started = std::time::Instant::now();
+    let out = calc(
+        &mut Server::new(),
+        json!({
+            "lists": {"x": {"source": x, "col": "v"}, "y": {"source": y, "col": "v"}},
+            "expr": "ks2(x, y, two_sided, auto)"
+        }),
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+    let p: f64 = steps(&out)[0]["value"].as_str().unwrap().parse().unwrap();
+    let scipy = 0.000_338_828_432_188_476_74;
+    assert!((p - scipy).abs() / scipy < 1e-9, "p = {}", p);
+}
+
+/// `less` is `greater` with the samples swapped, deep in the tail too — not a
+/// difference from one that cancels to zero.
+#[test]
+fn mannwhitney_less_keeps_its_tail() {
+    let a: Vec<String> = (1..=100).map(|i| i.to_string()).collect();
+    let b: Vec<String> = (1001..=1100).map(|i| i.to_string()).collect();
+    let (a, b) = (format!("[{}]", a.join(", ")), format!("[{}]", b.join(", ")));
+    let less = value(&format!("mannwhitney({}, {}, less, asymptotic)", a, b));
+    let greater = value(&format!("mannwhitney({}, {}, greater, asymptotic)", b, a));
+    assert!(less > 0.0, "less = {}", less);
+    assert!(
+        (less - greater).abs() <= 1e-9 * greater,
+        "less {} greater {}",
+        less,
+        greater
+    );
+}
+
+/// An exact KS p-value out of reach is refused, as `mannwhitney` refuses one, rather
+/// than answered asymptotically under the name exact — or computed for minutes.
+#[test]
+fn ks2_refuses_an_exact_p_it_cannot_give() {
+    let list = |n: usize, shift: f64| -> String {
+        let v: Vec<String> = (0..n)
+            .map(|i| format!("{}", i as f64 * 0.5 + shift))
+            .collect();
+        format!("[{}]", v.join(", "))
+    };
+    // One-sided: the count of paths overflows a float.
+    let out = calc(
+        &mut Server::new(),
+        json!({"expr": format!("ks2({}, {}, less, exact)", list(600, 5.0), list(601, 0.0))}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", &out.to_string()[..200]);
+    // Two-sided, sizes whose lattice is past what scipy computes exactly.
+    let started = std::time::Instant::now();
+    let out = calc(
+        &mut Server::new(),
+        json!({"expr": format!("ks2({}, {}, two_sided, exact)", list(50000, 0.0), list(49999, 0.1))}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", &out.to_string()[..200]);
+    assert!(started.elapsed().as_secs() < 10);
+    // Left to choose, the same samples are answered.
+    let out = calc(
+        &mut Server::new(),
+        json!({"expr": format!("ks2({}, {}, less)", list(600, 5.0), list(601, 0.0))}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", &out.to_string()[..200]);
+}
+
+/// A NaN or an infinity in a list's column is no number for a statistic: it is left
+/// out, as a missing value is.
+#[test]
+fn a_list_leaves_out_values_that_are_not_finite() {
+    use polars::prelude::*;
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("rank-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("not-finite.parquet");
+    let mut df = DataFrame::new_infer_height(vec![Series::new(
+        "v".into(),
+        [1.0, f64::NAN, 3.0, f64::INFINITY],
+    )
+    .into()])
+    .unwrap();
+    ParquetWriter::new(std::fs::File::create(&path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    let out = calc(
+        &mut Server::new(),
+        json!({"lists": {"a": {"source": path, "col": "v"}}, "expr": "mean(a)"}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    assert_eq!(
+        out["structuredContent"]["result"]["value"],
+        json!("2"),
+        "{}",
+        out
+    );
+}
+
+/// A list reads its own column: a table too wide to collect whole still gives one.
+#[test]
+fn a_list_collects_only_its_column() {
+    let header: Vec<String> = (0..30).map(|c| format!("c{}", c)).collect();
+    let mut text = header.join(",") + "\n";
+    for r in 0..400 {
+        let row: Vec<String> = (0..30).map(|c| format!("value {} {}", r, c)).collect();
+        text.push_str(&row.join(","));
+        text.push('\n');
+    }
+    text = text.replacen("c0,", "n,", 1);
+    let text: String = text
+        .lines()
+        .enumerate()
+        .map(|(i, l)| {
+            if i == 0 {
+                l.to_string()
+            } else {
+                l.replacen(&format!("value {} 0", i - 1), &format!("{}", i), 1)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let path = csv("wide.csv", &text);
+    let mut tight = Server {
+        memory_budget: Some(16384),
+        ..Server::new()
+    };
+    let out = calc(
+        &mut tight,
+        json!({"lists": {"a": {"source": path, "col": "n"}}, "expr": "mean(a)"}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+}

@@ -192,6 +192,9 @@ impl App {
         sheet.doc_hits = None;
         sheet.container = Some(table.to_string());
         sheet.title = format!("{} :: {}", path.display(), table);
+        // The file the rows came from is read no further, and this is no sample of it.
+        sheet.tail = None;
+        sheet.sample = None;
         // The same two fields a drilled-into table gets, so the JOIN picker offers this
         // database's other tables without the file having to be reopened first.
         match kind {
@@ -267,6 +270,17 @@ impl App {
                 let path = answered
                     .clone()
                     .unwrap_or_else(|| crate::app::expand_tilde(self.save.input.as_str()));
+                // Written over its file, a sample would cut the file down to it.
+                if let Some(sample) = &self.stack.active().sample {
+                    if db_write::same_file(&sample.file, &path) {
+                        self.save.error = Some(format!(
+                            "This sheet holds the {} of the file; saving it there would \
+                             drop the rest.  Save to a different file.",
+                            sample.label()
+                        ));
+                        return None;
+                    }
+                }
                 // A sheet that came from a database table is saved by changing that
                 // table, not by dumping the rows into a new file — unless the user
                 // pointed the save somewhere else entirely, which is an export.
@@ -339,28 +353,34 @@ impl App {
                     self.mode = AppMode::SaveShapeSelect;
                     return None;
                 }
-                let shape = self.chosen_shape();
-                let sheet = self.stack.active();
+                let shape = self.chosen_shape(&path);
                 // A doc-backed sheet is written by re-serialising its tree, so structure
                 // survives and changing the extension converts between formats.
-                let result = crate::data::io::save_file_as(
+                let format = self.format_for(&path);
+                let sheet = self.stack.active();
+                let result = crate::data::io::save_file_in(
                     &sheet.dataframe,
                     sheet.doc.as_ref(),
                     &path,
+                    format,
                     shape,
                     &sheet.title,
                 );
-                let loss = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .and_then(crate::data::doc::Format::from_ext)
-                    .and_then(|fmt| {
-                        self.stack
-                            .active()
-                            .doc
-                            .as_ref()
-                            .and_then(|d| d.conversion_loss(fmt))
-                    });
+                let loss = format.and_then(|fmt| {
+                    self.stack
+                        .active()
+                        .doc
+                        .as_ref()
+                        .and_then(|d| d.conversion_loss(fmt))
+                });
+                // A sheet still reading holds part of its file; the saved one does too.
+                let part = self.stack.active().sample.as_ref().map(|sample| {
+                    format!(
+                        " — {} rows, the {} of the file",
+                        self.stack.active().dataframe.visible_row_count(),
+                        sample.label()
+                    )
+                });
                 match result {
                     Ok(_) => {
                         self.mode = AppMode::Normal;
@@ -371,7 +391,7 @@ impl App {
                             None => {
                                 format!("Saved successfully to: {}", self.save.input.as_str())
                             }
-                        };
+                        } + part.as_deref().unwrap_or_default();
                         self.save.error = None;
                     }
                     Err(e) => {
@@ -667,18 +687,41 @@ impl App {
 
     /// True when saving to `path` has to ask for a shape first: the target is one of
     /// the document formats and this sheet has no document to re-serialise.
+    /// The document format a save to `path` writes: its extension's — except onto the
+    /// file the sheet was read from, which keeps what it holds, so a `.json` of JSON
+    /// Lines stays lines.
+    fn format_for(&self, path: &std::path::Path) -> Option<crate::data::doc::Format> {
+        let own = self
+            .stack
+            .active()
+            .source_path
+            .as_deref()
+            .is_some_and(|p| db_write::same_file(p, path));
+        if own {
+            crate::data::doc::Format::of_file(path)
+        } else {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .and_then(crate::data::doc::Format::from_ext)
+        }
+    }
+
+    /// JSON Lines has one shape — a record per line — so it is never asked about.
     fn needs_shape_for(&self, path: &std::path::Path) -> bool {
         if self.stack.active().doc.is_some() {
             return false;
         }
-        path.extension()
-            .and_then(|e| e.to_str())
-            .and_then(crate::data::doc::Format::from_ext)
-            .is_some()
+        self.format_for(path)
+            .is_some_and(|f| f != crate::data::doc::Format::Jsonl)
     }
 
-    fn chosen_shape(&self) -> crate::data::io::doc_io::Shape {
-        self.save.shape
+    fn chosen_shape(&self, path: &std::path::Path) -> crate::data::io::doc_io::Shape {
+        let lines = self.format_for(path) == Some(crate::data::doc::Format::Jsonl);
+        if lines {
+            crate::data::io::doc_io::Shape::Records
+        } else {
+            self.save.shape
+        }
     }
 
     pub(super) fn saving_autocomplete(&mut self) {

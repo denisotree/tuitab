@@ -15,7 +15,6 @@
 
 use crate::data::column::ColumnMeta;
 use crate::data::dataframe::DataFrame;
-use crate::types::ColumnType;
 use indexmap::IndexMap;
 use std::collections::HashSet;
 
@@ -58,10 +57,7 @@ fn column_metrics(df: &DataFrame, col: usize) -> Vec<String> {
         }
     }
 
-    let is_numeric = matches!(
-        meta.col_type,
-        ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency
-    );
+    let is_numeric = meta.col_type.is_numeric();
 
     let nums: Vec<f64> = if is_numeric {
         non_empty

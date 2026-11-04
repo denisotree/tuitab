@@ -11,7 +11,9 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn out(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("tuitab-doc-tests");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join("doc-tests");
     std::fs::create_dir_all(&dir).unwrap();
     dir.join(name)
 }
@@ -113,14 +115,44 @@ fn multi_document_yaml_becomes_rows_and_stays_multi_document() {
 #[test]
 fn jsonl_round_trips_and_can_be_saved_as_json() {
     let (df, doc) = load_file_with_doc(&fixture("rows.jsonl"), None).unwrap();
-    let doc = doc.unwrap();
+    assert!(doc.is_none(), "JSON Lines is a table");
     assert_eq!(df.visible_row_count(), 2);
     assert_eq!(df.col_count(), 2);
 
     let path = out("rows.json");
-    save_file_as(&df, Some(&doc), &path, Shape::Records, "rows").unwrap();
+    save_file_as(&df, None, &path, Shape::Records, "rows").unwrap();
     let json = std::fs::read_to_string(&path).unwrap();
     assert!(json.trim_start().starts_with('['), "{}", json);
+}
+
+/// Exports name JSON Lines `.json` often enough: such a file opens as the lines it
+/// holds, and written in the format it holds, it goes back as lines rather than one
+/// array.  (Which format a save picks is the caller's: the terminal keeps it for the
+/// file a sheet was read from.)
+#[test]
+fn a_json_file_holding_json_lines_opens_and_saves_as_lines() {
+    let path = out("lines.json");
+    std::fs::write(&path, "{\"a\":1,\"b\":\"x\"}\n{\"a\":2,\"b\":\"y\"}\n").unwrap();
+    let (df, doc) = load_file_with_doc(&path, None).unwrap();
+    assert_eq!(df.visible_row_count(), 2);
+    assert_eq!(df.col_count(), 2);
+
+    let format = tuitab::data::doc::Format::of_file(&path);
+    assert_eq!(format, Some(Format::Jsonl));
+    tuitab::data::io::save_file_in(&df, doc.as_ref(), &path, format, Shape::Records, "lines")
+        .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.lines().count(), 2, "{}", text);
+    assert!(text.starts_with('{'), "{}", text);
+}
+
+/// One object on one line is JSON, not a single line of JSON Lines.
+#[test]
+fn a_json_file_holding_one_object_is_json() {
+    let path = out("one.json");
+    std::fs::write(&path, "{\"a\":1,\"b\":[1,2]}\n").unwrap();
+    let (_df, doc) = load_file_with_doc(&path, None).unwrap();
+    assert_eq!(doc.unwrap().format(), Format::Json);
 }
 
 #[test]
@@ -802,7 +834,7 @@ fn an_extensionless_file_only_sniffs_json() {
 /// level, so it becomes an array of tables named after the sheet.
 #[test]
 fn an_array_rooted_document_can_still_be_saved_as_toml() {
-    let (df, doc) = load_file_with_doc(&fixture("rows.jsonl"), None).unwrap();
+    let (df, doc) = load_file_with_doc(&fixture("nested.json"), None).unwrap();
     let doc = doc.unwrap();
     let path = out("rows.toml");
     save_file_as(&df, Some(&doc), &path, Shape::Records, "rows").unwrap();

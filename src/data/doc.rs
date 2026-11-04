@@ -39,6 +39,15 @@ impl Format {
         }
     }
 
+    /// The format a file holds: its extension's, except that a `.json` beginning as
+    /// JSON Lines — exports name them `.json` often enough — is JSON Lines.
+    pub fn of_file(path: &Path) -> Option<Format> {
+        match Format::from_ext(path.extension()?.to_str()?)? {
+            Format::Json if begins_as_lines(path) => Some(Format::Jsonl),
+            format => Some(format),
+        }
+    }
+
     /// Map an explicit `--type` argument to a format.
     pub fn from_name(name: &str) -> Option<Format> {
         Format::from_ext(name)
@@ -104,6 +113,27 @@ pub fn conversion_caveats(doc: &Doc, target: Format) -> Vec<&'static str> {
         .filter(|c| (c.applies)(doc, target))
         .map(|c| c.lost)
         .collect()
+}
+
+/// Whether the file's first lines are JSON Lines, as [`sniff`] judges them.
+fn begins_as_lines(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(1 << 20).read_to_end(&mut head))
+        .is_ok()
+        && holds_lines(&String::from_utf8_lossy(&head))
+}
+
+/// Whether text given as JSON is JSON Lines: one value per line, not one document.
+/// Reads only the first MiB, which is enough for `sniff` to tell.
+// ponytail: reads the first MiB only, so a first record longer than that reads as JSON.
+pub fn holds_lines(text: &str) -> bool {
+    let mut end = text.len().min(1 << 20);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    sniff(&text[..end], true) == Some(Format::Jsonl)
 }
 
 /// Guess a structured format from the contents of `text`.
@@ -838,8 +868,14 @@ fn parse_json(text: &str) -> Result<Node> {
 }
 
 fn parse_jsonl(text: &str) -> Result<Node> {
+    Ok(Node::Arr(jsonl_records(text, 0)?))
+}
+
+/// The records of JSON Lines text whose first line is line `first_line + 1` of its file.
+pub fn jsonl_records(text: &str, first_line: usize) -> Result<Vec<Node>> {
     let mut rows = Vec::new();
     for (n, line) in text.lines().enumerate() {
+        let n = n + first_line;
         let line = line.trim();
         // blank lines and `//` / `#` comments are skipped, as VisiData does
         if line.is_empty() || line.starts_with("//") || line.starts_with('#') {
@@ -849,7 +885,7 @@ fn parse_jsonl(text: &str) -> Result<Node> {
             serde_json::from_str(line).map_err(|e| eyre!("line {}: {}", n + 1, e))?;
         rows.push(from_json(v));
     }
-    Ok(Node::Arr(rows))
+    Ok(rows)
 }
 
 fn parse_yaml(text: &str) -> Result<(Node, bool)> {
@@ -872,6 +908,18 @@ fn parse_yaml(text: &str) -> Result<(Node, bool)> {
 fn parse_toml(text: &str) -> Result<Node> {
     let doc: toml_edit::DocumentMut = text.parse().map_err(|e| eyre!("{}", e))?;
     Ok(item_to_node(doc.as_item()))
+}
+
+impl Node {
+    /// The node as compact JSON text.
+    pub fn json_text(&self) -> String {
+        to_json(self).to_string()
+    }
+
+    /// The node JSON text describes, when it is JSON.
+    pub fn from_json_text(text: &str) -> Option<Node> {
+        serde_json::from_str(text).ok().map(from_json)
+    }
 }
 
 fn from_json(v: serde_json::Value) -> Node {

@@ -213,7 +213,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 popup::render_confirm_popup(frame, "Unsaved changes. Quit? (y/n)", frame.area());
             }
             if app.mode == AppMode::Help {
-                popup::render_help_popup(frame, frame.area());
+                popup::render_help_popup(frame, frame.area(), &mut app.help_scroll);
+            }
+            let prefix = match app.mode {
+                AppMode::GPrefix => Some('g'),
+                AppMode::ZPrefix => Some('z'),
+                AppMode::YPrefix => Some('y'),
+                AppMode::SPrefix => Some('S'),
+                _ => None,
+            };
+            if let Some(p) = prefix {
+                popup::render_prefix_popup(frame, chunks[0], p);
             }
 
             if app.mode == AppMode::TypeSelect {

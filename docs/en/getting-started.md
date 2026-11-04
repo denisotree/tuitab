@@ -29,9 +29,9 @@ tuitab app.db
 
 | Format | Extensions | Notes |
 |--------|-----------|-------|
-| CSV / TSV | `.csv`, `.tsv` | Delimiter auto-detected; override with `-d` |
+| CSV / TSV | `.csv`, `.tsv` | A `.csv`'s delimiter is detected, a `.tsv` is split on tabs; override with `-d` |
 | JSON | `.json` | Opens as a tree over the real document |
-| JSONL / NDJSON | `.jsonl`, `.ndjson` | One record per line |
+| JSONL / NDJSON | `.jsonl`, `.ndjson`, or `.json` holding one record per line | One record per line |
 | YAML | `.yaml`, `.yml` | Tree, like JSON |
 | TOML | `.toml` | Tree, like JSON |
 | Parquet | `.parquet` | Columnar, fast |
@@ -49,6 +49,26 @@ JSON, YAML and TOML are not flattened into a copy: the sheet is a view over the
 document itself, `Enter` dives into a nested object or list, and saving
 re-serialises the tree. Converting between them is just a different extension on
 `Ctrl+S`.
+
+JSONL is a table, read into columns as CSV is: a column of one kind of value is
+typed, and a column of nested or mixed values holds each value's JSON
+(`{"host":"x"}`, strings quoted), which `json_get` and `zJ` read. The MCP server
+reads JSONL the same way. Saving writes the values back as they were, with two
+exceptions: a field set to `null` and a field left out both come back left out
+(except on the first line, which carries every field), and in a column of whole
+and decimal numbers a whole one comes back as a decimal (`10.0`).
+
+A file past a sixteenth of the memory budget (half the machine's memory) opens at
+once with its first 8 MB, and the rest is read in the background: the status bar
+shows `12% · 523000 rows` as it grows. Tables made from the sheet meanwhile — a
+frequency table, say — cover the rows read so far, and reading pauses while one is
+on top. The first change to the sheet itself — a sort, an edit, a filter, a column
+moved, renamed or retyped — stops the reading there, since later rows would land
+outside it; open the file again to read on. A 16 GB log reads to its end in under
+three minutes and takes about its own size in memory; should the table outgrow
+three quarters of the budget, reading stops there too. Either way the title says
+`[first … of …]`, and saving onto the file itself is refused, because it would
+drop the rest.
 
 ![A TOML file edited in place and saved as YAML](https://raw.githubusercontent.com/denisotree/tuitab/master/.github/assets/tree.gif)
 

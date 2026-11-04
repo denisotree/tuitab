@@ -48,9 +48,12 @@ pub struct Server {
     /// `tuitab_write_apply` runs the plan the model just read and refuses any other, and
     /// a counter does that as well as a nonce would.
     pub plan_seq: u64,
-    /// Load every file whole, as before streaming — for tests that hold the two paths
+    /// The size, in bytes, from which a file Polars scans is streamed rather than
+    /// loaded and kept; a sixteenth of the memory budget when unset.  A smaller file
+    /// is read once and answers every later call from memory.  `Some(0)` streams
+    /// everything and `Some(u64::MAX)` nothing — for tests that hold the two paths
     /// against each other.
-    pub eager_only: bool,
+    pub stream_from: Option<u64>,
     /// How much a pipeline may collect into memory, in bytes; half the machine's
     /// physical memory when unset.
     pub memory_budget: Option<u64>,

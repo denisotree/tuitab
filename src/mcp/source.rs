@@ -18,13 +18,10 @@ pub struct Source {
     pub path: PathBuf,
     /// Sheet name (Excel) or table name (SQLite/DuckDB).
     pub container: Option<String>,
-    pub delimiter: Option<u8>,
     /// Overrides the extension, so a `.conf` file can be read as YAML.
     pub format: Option<String>,
-    /// Show integer epoch columns as datetimes (the default).
-    pub detect_epoch: bool,
-    /// Text read as NULL in every column of a CSV.
-    pub null_values: Vec<String>,
+    /// How the file is read: delimiter, epoch detection, NULL text.
+    pub opts: io::LoadOpts,
 }
 
 /// Every field a `source` object takes.
@@ -45,10 +42,8 @@ impl Source {
             return Ok(Self {
                 path: PathBuf::from(path),
                 container: None,
-                delimiter: None,
                 format: None,
-                detect_epoch: true,
-                null_values: Vec::new(),
+                opts: io::LoadOpts::default(),
             });
         }
 
@@ -57,19 +52,11 @@ impl Source {
         })?;
 
         // A misspelt field used to be ignored, and the source read without it.
-        for key in obj.keys() {
-            if SOURCE_KEYS.contains(&key.as_str()) {
-                continue;
-            }
-            let suggestion = SOURCE_KEYS
-                .iter()
-                .find(|k| super::pipeline::close_enough(key, k))
-                .map(|k| format!(" (did you mean '{}'?)", k))
-                .unwrap_or_default();
+        if let Some((key, hint)) = super::pipeline::unknown_field(obj, SOURCE_KEYS) {
             return Err(format!(
                 "'source' has no field '{}'{}. It takes: {}",
                 key,
-                suggestion,
+                hint,
                 SOURCE_KEYS.join(", ")
             ));
         }
@@ -101,41 +88,34 @@ impl Source {
                 .get("container")
                 .and_then(Value::as_str)
                 .map(str::to_string),
-            delimiter,
             format: obj
                 .get("format")
                 .and_then(Value::as_str)
                 .map(|s| s.to_lowercase()),
-            detect_epoch: match obj.get("detect_epoch") {
-                None => true,
-                Some(Value::Bool(b)) => *b,
-                Some(other) => {
-                    return Err(format!("'detect_epoch' is true or false, got {}", other))
-                }
-            },
-            null_values: match obj.get("null_values") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::Array(items)) => items
-                    .iter()
-                    .map(|v| v.as_str().map(str::to_string))
-                    .collect::<Option<Vec<_>>>()
-                    .ok_or("'null_values' is a list of text, as [\"undefined\", \"-\"]")?,
-                Some(_) => {
-                    return Err(
-                        "'null_values' is a list of text, as [\"undefined\", \"-\"]".to_string()
-                    )
-                }
+            opts: io::LoadOpts {
+                delimiter,
+                detect_epoch: match obj.get("detect_epoch") {
+                    None => true,
+                    Some(Value::Bool(b)) => *b,
+                    Some(other) => {
+                        return Err(format!("'detect_epoch' is true or false, got {}", other))
+                    }
+                },
+                profile: true,
+                null_values: match obj.get("null_values") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(items)) => items
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_string))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or("'null_values' is a list of text, as [\"undefined\", \"-\"]")?,
+                    Some(_) => {
+                        return Err("'null_values' is a list of text, as [\"undefined\", \"-\"]"
+                            .to_string())
+                    }
+                },
             },
         })
-    }
-
-    /// How the file is read.
-    pub fn load_opts(&self) -> io::LoadOpts {
-        io::LoadOpts {
-            delimiter: self.delimiter,
-            detect_epoch: self.detect_epoch,
-            null_values: self.null_values.clone(),
-        }
     }
 
     fn extension(&self) -> String {
@@ -231,10 +211,12 @@ pub fn load(server: &mut super::Server, source: &Source) -> Result<DataFrame, St
 /// carries the `container` and `format` the model asked for.
 fn load_pattern(source: &Source) -> Result<DataFrame, String> {
     let pattern = source.path.to_string_lossy().to_string();
-    let records = matches!(source.extension().as_str(), "md" | "markdown");
-    io::load_pattern(&pattern, records, |p| {
+    let ext = source.extension();
+    let records = matches!(ext.as_str(), "md" | "markdown");
+    io::load_pattern(&pattern, records, &ext, &source.opts, |p, opts| {
         load_single(&Source {
             path: p.to_path_buf(),
+            opts: opts.clone(),
             ..source.clone()
         })
         // Plain `eyre!` on a string is `Report::msg`, so `to_string` below hands back
@@ -299,14 +281,14 @@ fn load_single(source: &Source) -> Result<DataFrame, String> {
     // 'parquet' quietly came back as CSV.  Send those through the reader by name.
     if let Some(declared) = source.format.as_deref() {
         if Format::from_name(declared).is_none() {
-            return io::load_tabular(&source.path, &source.load_opts(), &ext).map_err(|e| {
+            return io::load_tabular(&source.path, &source.opts, &ext).map_err(|e| {
                 format!("Could not read {} as {}: {}", source.path.display(), ext, e)
             });
         }
     }
 
     let forced = source.format.as_deref().and_then(Format::from_name);
-    io::load_file_as_opts(&source.path, &source.load_opts(), forced)
+    io::load_file_as_opts(&source.path, &source.opts, forced)
         .map(|(df, _)| df)
         .map_err(|e| format!("Could not read {}: {}", source.path.display(), e))
 }
@@ -404,7 +386,11 @@ pub fn extension_of(source: &Source) -> String {
 /// CSV has no nesting for jq to walk.
 pub fn load_doc(source: &Source) -> Result<Doc, String> {
     let ext = source.extension();
-    let format = Format::from_name(&ext).ok_or_else(|| {
+    let format = match &source.format {
+        Some(declared) => Format::from_name(declared),
+        None => Format::of_file(&source.path),
+    };
+    let format = format.ok_or_else(|| {
         format!(
             "jq needs a JSON, JSONL, YAML or TOML source; '{}' is not one. \
              Use tuitab_query for tabular data.",

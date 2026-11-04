@@ -384,7 +384,7 @@ fn parity(action: &Action) -> Parity {
         Action::CreateSheetFromSelection => Parity::Shared("select"),
         Action::TogglePinColumn => Parity::UiOnly("pinning is a view concern"),
         Action::OpenMultiFrequencyTable => Parity::Shared("frequency"),
-        Action::ShowHelp => Parity::UiOnly("help"),
+        Action::ShowHelp | Action::HelpScroll(_) => Parity::UiOnly("help"),
         Action::OpenJoin => Parity::UiOnly("opens the wizard"),
         Action::JoinSourceApply => Parity::UiOnly("a wizard step"),
         Action::JoinPathApply => Parity::UiOnly("a wizard step"),

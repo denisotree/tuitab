@@ -23,9 +23,7 @@ impl App {
         match action {
             Action::EnterYPrefix => {
                 self.mode = AppMode::YPrefix;
-                self.status_message =
-                    "y: (c)cell  (r)rows  (z)col.values  (Z)whole col  (R)whole table  Esc=cancel"
-                        .to_string();
+                self.status_message.clear();
                 None
             }
             Action::CancelYPrefix => {

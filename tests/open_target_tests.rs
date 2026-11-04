@@ -333,3 +333,431 @@ fn a_text_file_with_duck_at_offset_eight_is_not_a_database() {
     assert_eq!(cols, vec!["animals", "DUCK", "goose"]);
     assert!(opened.duckdb_db_path.is_none());
 }
+
+// ── A file too large to load opens its first lines ─────────────────────────────────
+
+mod keys;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use keys::key;
+use tuitab::data::io::{open_target_from, Sample, Sampling};
+
+/// Three records of eight bytes each.
+const LINES: &str = "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n";
+
+fn lines_at(name: &str) -> PathBuf {
+    let path = dir().join(name);
+    std::fs::write(&path, LINES).unwrap();
+    path
+}
+
+#[test]
+fn a_jsonl_past_the_threshold_opens_its_first_whole_lines() {
+    let path = lines_at("big.jsonl");
+    let opened = open_target_from(
+        &path,
+        None,
+        None,
+        Sampling {
+            from: 0,
+            chunk: 20,
+            cap: 16,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        opened.df.visible_row_count(),
+        2,
+        "the third line is cut, so not read"
+    );
+    let sample = opened.sample.expect("a sampled open says so");
+    assert_eq!((sample.read, sample.size), (16, 24));
+    assert_eq!(sample.file, path);
+    assert!(opened.doc.is_none(), "a table needs no tree");
+    assert!(opened.tail.is_some(), "the rest follows in the background");
+}
+
+#[test]
+fn a_jsonl_under_the_threshold_opens_whole() {
+    let path = lines_at("small.jsonl");
+    let opened = open_target_from(
+        &path,
+        None,
+        None,
+        Sampling {
+            from: 25,
+            chunk: 20,
+            cap: 16,
+        },
+    )
+    .unwrap();
+    assert_eq!(opened.df.visible_row_count(), 3);
+    assert!(opened.sample.is_none());
+}
+
+#[test]
+fn a_json_file_holding_lines_is_sampled_too() {
+    let path = lines_at("big-lines.json");
+    let opened = open_target_from(
+        &path,
+        None,
+        None,
+        Sampling {
+            from: 0,
+            chunk: 20,
+            cap: 16,
+        },
+    )
+    .unwrap();
+    assert_eq!(opened.df.visible_row_count(), 2);
+}
+
+fn sampled_app(name: &str) -> (tuitab::app::App, PathBuf) {
+    let path = lines_at(name);
+    let mut app = tuitab::app::App::new_as(&path, None, None).unwrap();
+    app.stack.active_mut().sample = Some(Sample {
+        file: path.clone(),
+        read: 16,
+        size: 24,
+    });
+    (app, path)
+}
+
+fn save_to(app: &mut tuitab::app::App, path: &Path) {
+    let event = KeyEvent {
+        code: KeyCode::Char('s'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: crossterm::event::KeyEventState::NONE,
+    };
+    let action = tuitab::event::handle_key_event(event, app.mode, app.stack.can_pop());
+    app.handle_action(action);
+    app.save.input =
+        tuitab::ui::text_input::TextInput::with_value(path.to_string_lossy().into_owned());
+    key(app, KeyCode::Enter);
+}
+
+/// Writing the sample back would cut the file down to it.
+#[test]
+fn a_sample_is_never_saved_over_its_file() {
+    let (mut app, path) = sampled_app("guarded.jsonl");
+    save_to(&mut app, &path);
+    assert!(app.save.error.is_some(), "the save is refused");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), LINES);
+
+    // Nor is a table made from it.
+    let (mut app, path) = sampled_app("guarded-freq.jsonl");
+    // The frequency table defers one frame through the Calculating overlay.
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    app.handle_action(tuitab::types::Action::OpenFrequencyTable);
+    assert!(app.stack.can_pop(), "the frequency table is open");
+    assert!(
+        app.stack.active().sample.is_some(),
+        "a frequency of a sample is one"
+    );
+    save_to(&mut app, &path);
+    assert!(app.save.error.is_some(), "the save is refused");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), LINES);
+
+    // Anywhere else is fine.
+    let (mut app, _) = sampled_app("guarded-elsewhere.jsonl");
+    let other = dir().join("sample-copy.jsonl");
+    let _ = std::fs::remove_file(&other);
+    save_to(&mut app, &other);
+    assert!(app.save.error.is_none(), "{:?}", app.save.error);
+    assert_eq!(std::fs::read_to_string(&other).unwrap().lines().count(), 3);
+}
+
+/// The title says the sheet is part of its file.
+#[test]
+fn a_sample_says_so_in_its_title() {
+    let (mut app, _) = sampled_app("titled.jsonl");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
+    terminal.draw(|f| tuitab::ui::render(f, &mut app)).unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(screen.contains("first 16 B of 24 B"), "{}", screen);
+}
+
+// ── JSON Lines is a table: read into columns, no tree kept ─────────────────────────
+
+use tuitab::data::io::{doc_io::Shape, save_file_as};
+
+fn table_of(name: &str, text: &str, sampling: Sampling) -> tuitab::data::dataframe::DataFrame {
+    let path = dir().join(name);
+    std::fs::write(&path, text).unwrap();
+    let opened = open_target_from(&path, None, None, sampling).unwrap();
+    assert!(opened.doc.is_none(), "JSON Lines keeps no tree");
+    opened.df
+}
+
+fn cell(df: &tuitab::data::dataframe::DataFrame, row: usize, name: &str) -> String {
+    df.get_physical(row, df.column_index(name).unwrap())
+}
+
+fn is_json(df: &tuitab::data::dataframe::DataFrame, name: &str) -> bool {
+    df.columns[df.column_index(name).unwrap()].json
+}
+
+/// A piece of eight bytes at a time, read to the end before the sheet opens.
+const PIECEMEAL: Sampling = Sampling {
+    from: u64::MAX,
+    chunk: 8,
+    cap: u64::MAX,
+};
+
+#[test]
+fn a_column_of_one_kind_is_typed_and_any_other_holds_json() {
+    let df = table_of(
+        "kinds.jsonl",
+        "{\"n\":1,\"s\":\"x\",\"m\":1,\"o\":{\"k\":1}}\n{\"n\":2,\"s\":\"y\",\"m\":\"two\",\"o\":[1,2]}\n",
+        Sampling::default(),
+    );
+    assert_eq!(
+        df.df.column("n").unwrap().dtype(),
+        &polars::prelude::DataType::Int64
+    );
+    assert!(!is_json(&df, "n") && !is_json(&df, "s"));
+    assert_eq!(cell(&df, 0, "s"), "x");
+    assert!(is_json(&df, "m") && is_json(&df, "o"));
+    assert_eq!(
+        (cell(&df, 0, "m"), cell(&df, 1, "m")),
+        ("1".into(), "\"two\"".into())
+    );
+    assert_eq!(
+        (cell(&df, 0, "o"), cell(&df, 1, "o")),
+        ("{\"k\":1}".into(), "[1,2]".into())
+    );
+}
+
+/// What a JSON Lines sheet holds is what it writes: a long nested value whole, a
+/// string that holds JSON as a string, `5` apart from `"5"`.
+#[test]
+fn a_jsonl_table_saves_back_the_values_it_read() {
+    let long: String = (0..60)
+        .map(|i| format!("\"key{}\":\"value {}\",", i, i))
+        .collect();
+    let nested = format!("{{{}\"end\":true}}", long);
+    assert!(nested.len() > 512);
+    let lines = [
+        format!(
+            "{{\"id\":1,\"client\":\"{{\\\"country\\\": \\\"US\\\"}}\",\"geo\":{},\"code\":5}}",
+            nested
+        ),
+        "{\"id\":2,\"client\":\"plain\",\"geo\":[1,{\"a\":null}],\"code\":\"5\"}".to_string(),
+    ];
+    let text = lines.join("\n") + "\n";
+    let path = dir().join("fidelity.jsonl");
+    std::fs::write(&path, &text).unwrap();
+    let df = open_target(&path, None, None).unwrap().df;
+    assert!(!is_json(&df, "client"), "a column of strings is strings");
+
+    let saved = dir().join("fidelity-saved.jsonl");
+    let _ = std::fs::remove_file(&saved);
+    save_file_as(&df, None, &saved, Shape::Records, "t").unwrap();
+    let parse = |t: &str| -> Vec<serde_json::Value> {
+        t.lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    assert_eq!(
+        parse(&std::fs::read_to_string(&saved).unwrap()),
+        parse(&text)
+    );
+}
+
+#[test]
+fn pieces_of_other_types_meet_in_one_column() {
+    // An integer then a float: a number column.
+    let df = table_of("int-float.jsonl", "{\"a\":1}\n{\"a\":2.5}\n", PIECEMEAL);
+    assert_eq!(
+        df.df.column("a").unwrap().dtype(),
+        &polars::prelude::DataType::Float64
+    );
+    assert!(!is_json(&df, "a"));
+    // A string then a number: JSON, the string quoted.
+    let df = table_of("str-int.jsonl", "{\"b\":\"x\"}\n{\"b\":3}\n", PIECEMEAL);
+    assert!(is_json(&df, "b"));
+    assert_eq!(
+        (cell(&df, 0, "b"), cell(&df, 1, "b")),
+        ("\"x\"".into(), "3".into())
+    );
+    // A field first seen late: empty behind it.
+    let df = table_of("late.jsonl", "{\"a\":1}\n{\"c\":7}\n", PIECEMEAL);
+    assert_eq!(df.visible_row_count(), 2);
+    assert_eq!(
+        (cell(&df, 0, "c"), cell(&df, 1, "c")),
+        ("".into(), "7".into())
+    );
+    assert_eq!(
+        df.df.column("c").unwrap().dtype(),
+        &polars::prelude::DataType::Int64
+    );
+}
+
+#[test]
+fn a_bad_line_names_its_line_across_pieces() {
+    let path = dir().join("bad-piece.jsonl");
+    std::fs::write(&path, "{\"a\":1}\n{\"a\":2}\n{oops}\n").unwrap();
+    let err = open_target_from(&path, None, None, PIECEMEAL)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(err.contains("line 3"), "{}", err);
+}
+
+/// JSON Lines has one shape, so there is nothing to ask.
+#[test]
+fn saving_a_table_as_jsonl_asks_no_shape() {
+    let (mut app, _) = sampled_app("shapeless.jsonl");
+    app.stack.active_mut().sample = None;
+    let other = dir().join("shapeless-copy.jsonl");
+    let _ = std::fs::remove_file(&other);
+    save_to(&mut app, &other);
+    assert_ne!(app.mode, tuitab::types::AppMode::SaveShapeSelect);
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), LINES);
+}
+
+#[test]
+fn json_lines_text_is_a_table() {
+    let df = tuitab::data::io::jsonl_table("{\"a\":1}\n{\"a\":2}\n").unwrap();
+    assert_eq!(df.visible_row_count(), 2);
+    assert_eq!(
+        df.df.column("a").unwrap().dtype(),
+        &polars::prelude::DataType::Int64
+    );
+}
+
+/// Blank lines between records — or a piece that is nothing else — add no column.
+#[test]
+fn blank_lines_add_no_column() {
+    let df = table_of("blanks.jsonl", "{\"a\":1}\n\n\n{\"a\":2}\n\n", PIECEMEAL);
+    let names: Vec<&str> = df.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["a"]);
+    assert_eq!(df.visible_row_count(), 2);
+}
+
+/// Keys a path would quote, empty strings and lines that are not objects come back as
+/// they were read.
+#[test]
+fn a_jsonl_table_saves_back_its_keys_strings_and_bare_lines() {
+    let text = "{\"log.level\":\"info\",\"s\":\"\",\"\":1}\n[1,2]\n{\"log.level\":\"warn\",\"s\":\"x\",\"\":2}\n5\n";
+    let path = dir().join("keys.jsonl");
+    std::fs::write(&path, text).unwrap();
+    let df = open_target(&path, None, None).unwrap().df;
+    assert!(
+        df.column_index("log.level").is_ok(),
+        "a key names its column as written"
+    );
+
+    let saved = dir().join("keys-saved.jsonl");
+    let _ = std::fs::remove_file(&saved);
+    save_file_as(&df, None, &saved, Shape::Records, "t").unwrap();
+    let parse = |t: &str| -> Vec<serde_json::Value> {
+        t.lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    assert_eq!(
+        parse(&std::fs::read_to_string(&saved).unwrap()),
+        parse(text)
+    );
+}
+
+/// Bare lines in one piece and a field named `value` in another stay apart.
+#[test]
+fn bare_lines_and_a_value_field_stay_apart_across_pieces() {
+    // Twelve bytes: the record is one piece, the bare line the next.
+    let df = table_of(
+        "bare-value.jsonl",
+        "{\"value\":1}\n5\n",
+        Sampling {
+            chunk: 12,
+            ..PIECEMEAL
+        },
+    );
+    assert_eq!(
+        df.col_count(),
+        2,
+        "{:?}",
+        df.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+    );
+    assert_eq!(cell(&df, 0, "value"), "1");
+    assert_eq!(cell(&df, 1, "value"), "");
+}
+
+/// Files of a JSON Lines pattern meet as pieces of one file do: the nested field stays
+/// JSON, and saving writes it back as an object.
+#[test]
+fn a_jsonl_pattern_keeps_its_json_columns() {
+    let sub = dir().join("jsonl-pattern");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("a.jsonl"), "{\"id\":1,\"geo\":{\"lat\":1}}\n").unwrap();
+    std::fs::write(
+        sub.join("b.jsonl"),
+        "{\"id\":2,\"geo\":{\"lat\":2},\"extra\":true}\n",
+    )
+    .unwrap();
+    let app = tuitab::app::App::new_as(&sub.join("*.jsonl"), None, None).unwrap();
+    let df = &app.stack.active().dataframe;
+    assert!(is_json(df, "geo"));
+    assert_eq!(df.visible_row_count(), 2);
+    let saved = dir().join("jsonl-pattern-saved.jsonl");
+    let _ = std::fs::remove_file(&saved);
+    save_file_as(df, None, &saved, Shape::Records, "t").unwrap();
+    let first: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(&saved)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first["geo"], serde_json::json!({"lat": 1}));
+}
+
+/// A byte that is not UTF-8 is refused with its line, as every other reader refuses it
+/// — not quietly replaced, which a save would then write.
+#[test]
+fn a_jsonl_line_that_is_not_utf8_is_refused_by_line() {
+    let path = dir().join("latin1.jsonl");
+    std::fs::write(&path, b"{\"a\":\"ok\"}\n{\"a\":\"caf\xe9\"}\n").unwrap();
+    let err = open_target(&path, None, None).err().unwrap().to_string();
+    assert!(err.contains("line 2") && err.contains("UTF-8"), "{}", err);
+}
+
+/// Saved onto the file it was read from, a `.json` of JSON Lines stays lines; saved
+/// over another `.json`, the sheet is written as JSON, whatever that file held before.
+#[test]
+fn a_json_file_of_lines_stays_lines_only_when_saved_onto_itself() {
+    let path = dir().join("own-lines.json");
+    std::fs::write(&path, LINES).unwrap();
+    let mut app = tuitab::app::App::new_as(&path, None, None).unwrap();
+    save_to(&mut app, &path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), LINES);
+
+    let other = dir().join("other-lines.json");
+    std::fs::write(&other, LINES).unwrap();
+    let mut app = tuitab::app::App::new_as(&path, None, None).unwrap();
+    save_to(&mut app, &other);
+    assert_eq!(
+        app.mode,
+        tuitab::types::AppMode::SaveShapeSelect,
+        "a new JSON asks its shape"
+    );
+}
+
+/// `head logs.json | tuitab -t json` on JSON Lines content: the same check a `.json`
+/// file gets, so it opens as rows rather than failing on "trailing characters".
+#[test]
+fn stdin_typed_json_holding_json_lines_opens_as_rows() {
+    let lines = b"{\"a\":1,\"b\":\"x\"}\n{\"a\":2,\"b\":\"y\"}\n".to_vec();
+    let (df, state) = tuitab::data::io::load_from_bytes(lines, "json", None).unwrap();
+    assert_eq!(df.df.height(), 2);
+    assert!(state.is_none(), "JSON Lines is a table, not a tree");
+}

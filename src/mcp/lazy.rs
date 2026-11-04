@@ -25,9 +25,9 @@ pub struct Scanned {
     reading: String,
     pub lf: LazyFrame,
     pub shell: DataFrame,
-    /// Columns holding nested JSON, which the in-memory path shows as a compact
-    /// summary; they are summarised once collected, and an operation that reads one
-    /// is run in memory.
+    /// JSON Lines columns holding nested values, which the in-memory path holds as
+    /// their JSON text; they are written out once collected, and an operation that
+    /// reads one is run in memory.
     nested: Vec<String>,
 }
 
@@ -46,7 +46,7 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
         return Ok(None);
     }
     let text = src.path.to_string_lossy().to_string();
-    let pattern = text.contains(['*', '?', '[']);
+    let pattern = crate::data::io::is_pattern(&src.path);
     if !pattern {
         if !src.path.is_file() {
             return Ok(None);
@@ -60,7 +60,9 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
         }
     }
     let ext = super::source::extension_of(src);
-    let lines = matches!(ext.as_str(), "jsonl" | "ndjson" | "ldjson");
+    // A `.json` is scanned when it holds JSON Lines; whether it does is its first file's to say.
+    let named_json = ext == "json" && src.format.is_none();
+    let lines = named_json || matches!(ext.as_str(), "jsonl" | "ndjson" | "ldjson");
     let table = matches!(
         ext.as_str(),
         "csv" | "tsv" | "parquet" | "arrow" | "feather" | "ipc"
@@ -68,26 +70,40 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
     if !lines && !table {
         return Ok(None);
     }
-    // A pattern's schema, when its files agree on one: the CSV scan takes it rather
-    // than inferring it a second time.
-    let mut pattern_schema: Option<Schema> = None;
-    let first = if pattern {
-        let files = match crate::data::io::glob_matches(&text) {
+    let files = if pattern {
+        match crate::data::io::glob_matches(&text) {
             Ok(files) if !files.is_empty() => files,
             _ => return Ok(None),
-        };
+        }
+    } else {
+        vec![src.path.clone()]
+    };
+    if named_json
+        && crate::data::doc::Format::of_file(&files[0]) != Some(crate::data::doc::Format::Jsonl)
+    {
+        return Ok(None);
+    }
+    // One scan reads every file with one separator; files that differ are each read by
+    // their own in memory.
+    if pattern && matches!(ext.as_str(), "csv" | "tsv") {
+        let sep = |f: &Path| crate::data::loader::separator(&src.opts, &ext, f);
+        let first_sep = sep(&files[0]);
+        if files.iter().any(|f| sep(f) != first_sep) {
+            return Ok(None);
+        }
+    }
+    let first = files[0].clone();
+    let key = profile_key(src, &files);
+    // A pattern's schema, when its files agree on one: the CSV scan takes it rather
+    // than inferring it a second time.
+    let pattern_schema = if pattern {
         // A pattern reads files that hold one table.  One whose columns or their types
         // differ — each typed from all its rows, as the in-memory reader types it — is
         // the in-memory path's to name, as it always has.
         let schema_of = |file: &Path| -> Option<Schema> {
             let one = PlRefPath::try_from_path(file).ok()?;
             let mut lf = match ext.as_str() {
-                "csv" | "tsv" => LazyCsvReader::new(one)
-                    .with_separator(delimiter_of(src, file))
-                    .with_has_header(true)
-                    .with_infer_schema_length(None)
-                    .finish()
-                    .ok()?,
+                "csv" | "tsv" => scan_csv(src, one, file, None).ok()?,
                 "parquet" => LazyFrame::scan_parquet(one, ScanArgsParquet::default()).ok()?,
                 "arrow" | "feather" | "ipc" => {
                     LazyFrame::scan_ipc(one, Default::default(), Default::default()).ok()?
@@ -99,19 +115,25 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
             };
             Some((*lf.collect_schema().ok()?).clone())
         };
-        let schema_of = |file: &Path| {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| schema_of(file)))
-                .ok()
-                .flatten()
-        };
-        let head = schema_of(&files[0]);
-        if head.is_none() || files[1..].iter().any(|f| schema_of(f) != head) {
+        let agreed = cached(&PATTERN_SCHEMAS, &key, || {
+            use rayon::prelude::*;
+            let schemas: Vec<Option<Schema>> = files
+                .par_iter()
+                .map(|f| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| schema_of(f)))
+                        .ok()
+                        .flatten()
+                })
+                .collect();
+            let head = schemas[0].clone();
+            Ok(head.filter(|_| schemas[1..].iter().all(|s| *s == schemas[0])))
+        })?;
+        let Some(schema) = agreed else {
             return Ok(None);
-        }
-        pattern_schema = head;
-        files[0].clone()
+        };
+        Some(schema)
     } else {
-        src.path.clone()
+        None
     };
 
     // A read error names the file, the way the in-memory path's does.
@@ -122,8 +144,14 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
         _ => format!("Could not read {}", src.path.display()),
     };
     let named = |e: String| format!("{}: {}", reading, e);
-    let path = PlRefPath::try_from_path(Path::new(&text)).map_err(|e| e.to_string())?;
-    let key = profile_key(src, &first, pattern);
+    // The JSON Lines scan always expands its path: a real file whose name holds `[1]`
+    // is named with those characters escaped, so it matches only itself.
+    let scanned_as = if lines && !pattern {
+        literal_glob(&text)
+    } else {
+        text.clone()
+    };
+    let path = PlRefPath::try_from_path(Path::new(&scanned_as)).map_err(|e| e.to_string())?;
     // A CSV's and a JSONL file's types are worked out from every row, as the in-memory
     // readers do — one full pass, paid once per version of the file.
     let inferred = |lf: LazyFrame| -> Result<Schema, String> {
@@ -141,12 +169,23 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
             };
             scan_csv(src, path, &first, Some(schema)).map_err(named)?
         }
-        "parquet" => LazyFrame::scan_parquet(path, ScanArgsParquet::default())
-            .map_err(|e| named(e.to_string()))?,
-        "arrow" | "feather" | "ipc" => {
-            LazyFrame::scan_ipc(path, Default::default(), Default::default())
-                .map_err(|e| named(e.to_string()))?
-        }
+        "parquet" => LazyFrame::scan_parquet(
+            path,
+            ScanArgsParquet {
+                glob: pattern,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| named(e.to_string()))?,
+        "arrow" | "feather" | "ipc" => LazyFrame::scan_ipc(
+            path,
+            Default::default(),
+            UnifiedScanArgs {
+                glob: pattern,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| named(e.to_string()))?,
         _ => {
             // Lines whose fields change shape, arrays per line, numbers past 64 bits:
             // the scan cannot type them (and Polars may panic trying), the in-memory
@@ -175,6 +214,12 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
                             .ok()?
                             .select([all().as_expr().null_count()]);
                         crate::data::collect(decoded).ok()?;
+                        // And a type is not yet the in-memory reader's: a number past 64
+                        // bits is text to Polars and a float to the reader.  The head of
+                        // each file, typed both ways, has to agree.
+                        if !files.iter().all(|f| head_types_agree(f, &schema)) {
+                            return None;
+                        }
                         Some(schema)
                     }))
                     .ok()
@@ -194,77 +239,74 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
 
     let mut schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
 
-    // A zoned datetime as the in-memory loader holds it: UTC, the zone set aside.
-    let zones: Vec<(String, String)> = schema
+    // A DECIMAL column as the in-memory loader holds it: a float.
+    let decimals: Vec<Expr> = schema
         .iter()
-        .filter_map(|(n, t)| match t {
-            DataType::Datetime(_, Some(tz)) => Some((n.to_string(), tz.to_string())),
-            _ => None,
-        })
+        .filter(|(_, t)| matches!(t, DataType::Decimal(..)))
+        .map(|(n, _)| col(n.as_str()).cast(DataType::Float64))
         .collect();
-    if !zones.is_empty() {
-        lf = lf.with_columns(
-            schema
-                .iter()
-                .filter_map(|(n, t)| match t {
-                    DataType::Datetime(tu, Some(_)) => Some(
-                        col(n.as_str())
-                            .to_physical()
-                            .cast(DataType::Datetime(*tu, None))
-                            .alias(n.as_str()),
-                    ),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        );
+    if !decimals.is_empty() {
+        lf = lf.with_columns(decimals);
+        schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
+    }
+
+    // A zoned datetime as the in-memory loader holds it: UTC, the zone set aside.
+    let (unzoned, zones) = crate::data::profile::zone_free(&schema);
+    if !unzoned.is_empty() {
+        lf = lf.with_columns(unzoned);
         schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
     }
 
     // The in-memory CSV reader turns `undefined` and friends into NULL in a column
-    // that is otherwise numbers; the scan does the same, from one profiling pass.
+    // that is otherwise numbers, and NaN into NULL in a float one; the scan does the
+    // same, from one profiling pass.
     if matches!(ext.as_str(), "csv" | "tsv") {
-        let casts = cached(&TOKEN_CASTS, &key, || token_casts(&lf, &schema)).map_err(named)?;
+        lf = crate::data::profile::without_nan(lf, &schema);
+        let casts = cached(&TOKEN_CASTS, &key, || {
+            crate::data::profile::token_casts(&lf, &schema).map_err(|e| e.to_string())
+        })
+        .map_err(named)?;
         if !casts.is_empty() {
-            lf = lf.with_columns(
-                casts
-                    .iter()
-                    .map(|(name, dtype)| token_cast_expr(name, dtype))
-                    .collect::<Vec<_>>(),
-            );
+            lf = crate::data::profile::with_casts(lf, &casts);
             schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
         }
     }
 
     // Epoch columns of a table file, as the in-memory loader shows them.
     let mut epochs: Vec<(String, EpochUnit)> = Vec::new();
-    if table && src.detect_epoch {
-        epochs = cached(&EPOCHS, &key, || epoch_columns(&lf, &schema)).map_err(named)?;
+    if table && src.opts.detect_epoch {
+        epochs = cached(&EPOCHS, &key, || {
+            crate::data::profile::epoch_columns(&lf, &schema).map_err(|e| e.to_string())
+        })
+        .map_err(named)?;
         if !epochs.is_empty() {
-            lf = lf.with_columns(
-                epochs
-                    .iter()
-                    .map(|(name, unit)| {
-                        crate::data::expression::epoch_to_datetime(col(name.as_str()), *unit, true)
-                            .alias(name.as_str())
-                    })
-                    .collect::<Vec<_>>(),
-            );
+            lf = crate::data::profile::with_epochs(lf, &epochs);
             schema = (*lf.collect_schema().map_err(|e| named(e.to_string()))?).clone();
         }
     }
 
-    let nested: Vec<String> = schema
-        .iter()
-        .filter(|(_, t)| matches!(t, DataType::Struct(_) | DataType::List(_)))
-        .map(|(n, _)| n.to_string())
-        .collect();
-    // In the shell a nested column is the text the in-memory path makes of it.
+    // A nested JSON Lines value is its JSON text, as the in-memory reader holds it; a
+    // Parquet or Arrow struct or list keeps its own type, on both paths alike.
+    let nested: Vec<String> = if lines {
+        schema
+            .iter()
+            .filter(|(_, t)| matches!(t, DataType::Struct(_) | DataType::List(_)))
+            .map(|(n, _)| n.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut shell_schema = schema.clone();
     for name in &nested {
         shell_schema.with_column(name.as_str().into(), DataType::String);
     }
     let empty = polars::prelude::DataFrame::empty_with_schema(&shell_schema);
     let mut shell = crate::data::io::wrap_polars_df(empty).map_err(|e| e.to_string())?;
+    for name in &nested {
+        if let Ok(i) = shell.column_index(name) {
+            shell.columns[i].json = true;
+        }
+    }
     for (name, unit) in &epochs {
         if let Ok(i) = shell.column_index(name) {
             shell.columns[i].epoch_unit = Some(*unit);
@@ -283,33 +325,16 @@ pub fn scan(src: &Source) -> Result<Option<Scanned>, String> {
     }))
 }
 
-/// The separator the in-memory reader would use: the one given, a tab for a tsv, or
-/// what the file's first lines suggest.
-fn delimiter_of(src: &Source, file: &Path) -> u8 {
-    src.delimiter
-        .or((super::source::extension_of(src) == "tsv").then_some(b'\t'))
-        .unwrap_or_else(|| crate::data::loader::detect_delimiter(file))
-}
-
 fn scan_csv(
     src: &Source,
     path: PlRefPath,
     first: &Path,
     schema: Option<Schema>,
 ) -> Result<LazyFrame, String> {
-    let opts = src.load_opts();
-    let sep = delimiter_of(src, first);
-    let mut reader = LazyCsvReader::new(path)
-        .with_separator(sep)
-        .with_has_header(true)
-        .with_infer_schema_length(None);
+    let sep = crate::data::loader::separator(&src.opts, &super::source::extension_of(src), first);
+    let mut reader = crate::data::loader::csv_reader(path, sep, &src.opts);
     if let Some(schema) = schema {
         reader = reader.with_schema(Some(std::sync::Arc::new(schema)));
-    }
-    if !opts.null_values.is_empty() {
-        reader = reader.with_null_values(Some(NullValues::AllColumns(
-            opts.null_values.iter().map(|v| v.as_str().into()).collect(),
-        )));
     }
     reader.finish().map_err(|e| e.to_string())
 }
@@ -325,31 +350,80 @@ type Store<T> = OnceLock<Mutex<HashMap<Key, T>>>;
 const PROFILES_KEPT: usize = 64;
 
 static SCHEMAS: Store<Schema> = OnceLock::new();
+static PATTERN_SCHEMAS: Store<Option<Schema>> = OnceLock::new();
 static LINE_SCHEMAS: Store<Option<Schema>> = OnceLock::new();
 static TOKEN_CASTS: Store<Vec<(String, DataType)>> = OnceLock::new();
 static EPOCHS: Store<Vec<(String, EpochUnit)>> = OnceLock::new();
 
-/// Which file, read how, at which version — a pattern is never cached, its files can
-/// change one by one.
-fn profile_key(src: &Source, first: &Path, pattern: bool) -> Option<Key> {
-    if pattern {
-        return None;
+/// Whether the first lines of a JSON Lines file get, from the in-memory reader, the
+/// types `schema` gives them — its nested and empty columns aside, which the two hold
+/// in their own ways.
+fn head_types_agree(file: &Path, schema: &Schema) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    if std::fs::File::open(file)
+        .and_then(|f| f.take(1 << 20).read_to_end(&mut head))
+        .is_err()
+    {
+        return false;
     }
-    let meta = std::fs::metadata(first).ok()?;
-    let stamp = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    Some(format!(
-        "{}|{}|{}|{}|{:?}",
-        first.display(),
-        super::source::extension_of(src),
-        stamp,
-        meta.len(),
-        src.load_opts()
-    ))
+    if let Some(end) = head.iter().rposition(|&b| b == b'\n') {
+        head.truncate(end + 1);
+    }
+    let Ok(text) = std::str::from_utf8(&head) else {
+        return false;
+    };
+    let Ok(table) = crate::data::doc::jsonl_records(text, 0)
+        .map_err(|e| e.to_string())
+        .and_then(|rows| crate::data::view::records_table(&rows).map_err(|e| e.to_string()))
+    else {
+        return false;
+    };
+    table
+        .columns
+        .iter()
+        .zip(table.df.columns())
+        .all(|(meta, column)| {
+            if meta.json || column.null_count() == column.len() {
+                return true;
+            }
+            match (schema.get(meta.name.as_str()), column.dtype()) {
+                (Some(DataType::Struct(_) | DataType::List(_)), _) => true,
+                // Whole numbers at the head, a decimal further on: the whole file is
+                // floats to the in-memory reader as well.
+                (Some(DataType::Float64), DataType::Int64) => true,
+                (Some(dtype), head) => dtype == head,
+                (None, _) => true,
+            }
+        })
+}
+
+/// A file's name as a glob pattern that matches only that file.
+fn literal_glob(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '[' | ']' | '*' | '?' => format!("[{}]", c),
+            c => c.to_string(),
+        })
+        .collect()
+}
+
+/// Which files, read how, at which version — every file a pattern matches, so one
+/// added, removed or rewritten is a new profile.
+fn profile_key(src: &Source, files: &[std::path::PathBuf]) -> Option<Key> {
+    use std::fmt::Write;
+    let mut key = format!("{}|{:?}", super::source::extension_of(src), src.opts);
+    for file in files {
+        let meta = std::fs::metadata(file).ok()?;
+        let stamp = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        write!(key, "|{}|{}|{}", file.display(), stamp, meta.len()).ok()?;
+    }
+    Some(key)
 }
 
 fn cached<T: Clone>(
@@ -374,125 +448,6 @@ fn cached<T: Clone>(
         kept.insert(k.clone(), value.clone());
     }
     Ok(value)
-}
-
-/// What the in-memory reader reads as "no value" in a column of numbers.
-const NULL_TOKENS: &[&str] = &["undefined", "null", "NULL", "NaN", "None", "N/A", "n/a"];
-
-fn tokens_series() -> Series {
-    Series::new("tokens".into(), NULL_TOKENS)
-}
-
-/// A text column's value with the null tokens and the empty string as NULL.
-fn cleaned(name: &str) -> Expr {
-    let trimmed = col(name).str().strip_chars(lit(polars::prelude::Null {}));
-    when(
-        trimmed
-            .clone()
-            .is_in(lit(tokens_series()).implode(), false)
-            .or(trimmed.clone().eq(lit(""))),
-    )
-    .then(lit(polars::prelude::Null {}))
-    .otherwise(trimmed)
-}
-
-fn token_cast_expr(name: &str, dtype: &DataType) -> Expr {
-    cleaned(name).cast(dtype.clone()).alias(name)
-}
-
-/// The text columns holding a null token whose every other value is a number, and
-/// the number type each becomes — one streaming pass, the in-memory rule.
-fn token_casts(lf: &LazyFrame, schema: &Schema) -> Result<Vec<(String, DataType)>, String> {
-    let text: Vec<String> = schema
-        .iter()
-        .filter(|(_, t)| **t == DataType::String)
-        .map(|(n, _)| n.to_string())
-        .collect();
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut exprs = Vec::new();
-    for (i, name) in text.iter().enumerate() {
-        let trimmed = col(name.as_str())
-            .str()
-            .strip_chars(lit(polars::prelude::Null {}));
-        let c = cleaned(name);
-        exprs.push(
-            trimmed
-                .clone()
-                .is_in(lit(tokens_series()).implode(), false)
-                .any(true)
-                .alias(format!("t{}", i)),
-        );
-        exprs.push(c.clone().is_not_null().sum().alias(format!("n{}", i)));
-        for (tag, dtype) in [("i", DataType::Int64), ("f", DataType::Float64)] {
-            exprs.push(
-                (c.clone().is_not_null().and(c.clone().cast(dtype).is_null()))
-                    .sum()
-                    .alias(format!("{}{}", tag, i)),
-            );
-        }
-        exprs.push(
-            c.clone()
-                .str()
-                .contains(lit("^-?0[0-9]"), true)
-                .any(true)
-                .alias(format!("p{}", i)),
-        );
-    }
-    let stats = crate::data::collect(lf.clone().select(exprs)).map_err(|e| e.to_string())?;
-    let get = |key: String| stats.column(&key).ok().and_then(|c| c.get(0).ok());
-    let truthy = |v: Option<AnyValue>| matches!(v, Some(AnyValue::Boolean(true)));
-    let count = |v: Option<AnyValue>| v.and_then(|v| v.extract::<u64>()).unwrap_or(0);
-    let mut casts = Vec::new();
-    for (i, name) in text.iter().enumerate() {
-        if !truthy(get(format!("t{}", i)))
-            || count(get(format!("n{}", i))) == 0
-            || truthy(get(format!("p{}", i)))
-        {
-            continue;
-        }
-        if count(get(format!("i{}", i))) == 0 {
-            casts.push((name.clone(), DataType::Int64));
-        } else if count(get(format!("f{}", i))) == 0 {
-            casts.push((name.clone(), DataType::Float64));
-        }
-    }
-    Ok(casts)
-}
-
-/// Integer columns named like a time whose every value is an epoch in one unit.
-fn epoch_columns(lf: &LazyFrame, schema: &Schema) -> Result<Vec<(String, EpochUnit)>, String> {
-    let candidates: Vec<String> = schema
-        .iter()
-        .filter(|(n, t)| t.is_integer() && crate::data::column::names_a_time(n))
-        .map(|(n, _)| n.to_string())
-        .collect();
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut exprs = Vec::new();
-    for (i, name) in candidates.iter().enumerate() {
-        let c = col(name.as_str()).cast(DataType::Int64);
-        exprs.push(c.clone().min().alias(format!("lo{}", i)));
-        exprs.push(c.max().alias(format!("hi{}", i)));
-    }
-    let stats = crate::data::collect(lf.clone().select(exprs)).map_err(|e| e.to_string())?;
-    let get = |key: String| {
-        stats
-            .column(&key)
-            .ok()
-            .and_then(|c| c.get(0).ok())
-            .and_then(|v| v.extract::<i64>())
-    };
-    Ok(candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(i, name)| {
-            let unit = EpochUnit::of_range(get(format!("lo{}", i))?, get(format!("hi{}", i))?)?;
-            Some((name.clone(), unit))
-        })
-        .collect())
 }
 
 // ── Running a pipeline ──────────────────────────────────────────────────────────────
@@ -531,61 +486,73 @@ pub fn run(
         if !streams || reads_nested(op, &scanned.nested) {
             break;
         }
+        let failed =
+            |e: String| format!("ops[{}]: {}", i, super::pipeline::without_polars_hints(&e));
+        // The grouping steps run the in-memory path's own function over the scan;
+        // what they produce is small, and the rest of the pipeline runs on it.
+        let grouped = match op {
+            Op::GroupBy { by, agg } => Some(crate::data::group::group_by_from(
+                &shell,
+                lf.clone(),
+                by,
+                agg,
+            )),
+            Op::Aggregate(agg) => Some(crate::data::group::total_from(&shell, lf.clone(), agg)),
+            Op::Frequency { by, agg } => Some(crate::data::group::frequency_from(
+                &shell,
+                lf.clone(),
+                by,
+                agg,
+            )),
+            _ => None,
+        };
+        if let Some(grouped) = grouped {
+            return Ok(Outcome::Collected {
+                df: grouped.map_err(failed)?,
+                next: i + 1,
+            });
+        }
         // The in-memory operation on the empty table first: its errors are the ones
         // the caller would have had, and its table says what the step produces.
-        let next = super::pipeline::apply_op(shell.clone(), op)
-            .map_err(|e| format!("ops[{}]: {}", i, super::pipeline::without_polars_hints(&e)))?;
-        match op {
-            // The grouping steps run the in-memory path's own function over the scan;
-            // what they produce is small, and the rest of the pipeline runs on it.
-            Op::GroupBy { by, agg } => {
-                let df = crate::data::group::group_by_from(&shell, lf, by, agg).map_err(|e| {
-                    format!("ops[{}]: {}", i, super::pipeline::without_polars_hints(&e))
-                })?;
-                return Ok(Outcome::Collected { df, next: i + 1 });
-            }
-            Op::Aggregate(agg) => {
-                let df = crate::data::group::total_from(&shell, lf, agg).map_err(|e| {
-                    format!("ops[{}]: {}", i, super::pipeline::without_polars_hints(&e))
-                })?;
-                return Ok(Outcome::Collected { df, next: i + 1 });
-            }
-            Op::Frequency { by, agg } => {
-                let df = crate::data::group::frequency_from(&shell, lf, by, agg).map_err(|e| {
-                    format!("ops[{}]: {}", i, super::pipeline::without_polars_hints(&e))
-                })?;
-                return Ok(Outcome::Collected { df, next: i + 1 });
-            }
-            _ => match lower(lf.clone(), &shell, op)? {
-                Some((lowered, retyped)) => {
-                    lf = lowered;
-                    shell = next;
-                    // json_get's column took its type from the values, which the empty
-                    // table has none of.
-                    if let Some((name, dtype)) = retyped {
-                        retype_shell(&mut shell, &name, &dtype)?;
-                    }
-                    i += 1;
-                    continue;
-                }
-                None => break,
-            },
+        let next = super::pipeline::apply_op(shell.clone(), op).map_err(failed)?;
+        let Some((lowered, retyped)) = lower(lf.clone(), &shell, op)? else {
+            break;
+        };
+        lf = lowered;
+        shell = next;
+        // json_get's column took its type from the values, which the empty table has
+        // none of.
+        if let Some((name, dtype)) = retyped {
+            retype_shell(&mut shell, &name, &dtype)?;
         }
+        i += 1;
     }
 
     // The step's columns, in the step's order and types.
     let lf = conform(lf, &shell, &scanned.nested);
     if i == ops.len() && whole.is_none() {
-        let counted = crate::data::collect(lf.clone().select([len().alias("n")]))
-            .map_err(|e| format!("{}: {}", scanned.reading, e))?;
-        let row_count = counted
-            .column("n")
-            .ok()
-            .and_then(|c| c.get(0).ok())
-            .and_then(|v| v.extract::<u64>())
-            .unwrap_or(0) as usize;
-        let head = crate::data::collect(lf.limit(limit as IdxSize))
-            .map_err(|e| format!("{}: {}", scanned.reading, e))?;
+        let read = |e: PolarsError| format!("{}: {}", scanned.reading, e);
+        // A long head is a result like any other, held to the budget.
+        if limit > 1000 {
+            let head = lf
+                .clone()
+                .limit(IdxSize::try_from(limit).unwrap_or(IdxSize::MAX));
+            guard(&head, "output.limit", budget).map_err(|e| match e {
+                Guard::Refused(why) => why,
+                Guard::Read(why) => format!("{}: {}", scanned.reading, why),
+            })?;
+        }
+        let head = crate::data::collect(
+            lf.clone()
+                .limit(IdxSize::try_from(limit).unwrap_or(IdxSize::MAX)),
+        )
+        .map_err(read)?;
+        // Fewer rows than were asked for are all the rows there are.
+        let row_count = if head.height() < limit {
+            head.height()
+        } else {
+            row_count(&lf).map_err(read)? as usize
+        };
         let df = finish(head, &shell, &scanned.nested)?;
         return Ok(Outcome::Head { df, row_count });
     }
@@ -615,57 +582,6 @@ fn retype_shell(shell: &mut DataFrame, name: &str, dtype: &DataType) -> Result<(
         .map_err(|e| e.to_string())?;
     shell.columns[idx].col_type = crate::data::io::column_type_of(dtype);
     Ok(())
-}
-
-/// The type `json_get`'s text takes on the rows of `lf`: the in-memory rule
-/// (`type_from_text` with booleans), counted in one streaming pass.
-fn json_type(lf: &LazyFrame, text: Expr) -> Result<DataType, String> {
-    let x = col("__json");
-    let failing = |dtype: DataType| {
-        (x.clone().is_not_null().and(x.clone().cast(dtype).is_null()))
-            .sum()
-            .cast(DataType::UInt64)
-    };
-    let stats = crate::data::collect(
-        lf.clone().select([text.alias("__json")]).select([
-            x.clone()
-                .str()
-                .contains(lit("^-?0[0-9]"), true)
-                .any(true)
-                .alias("padded"),
-            failing(DataType::Int64).alias("int"),
-            failing(DataType::Float64).alias("float"),
-            x.clone()
-                .is_not_null()
-                .sum()
-                .cast(DataType::UInt64)
-                .alias("present"),
-            (x.clone().is_not_null().and(
-                x.clone()
-                    .eq(lit("true"))
-                    .or(x.clone().eq(lit("false")))
-                    .not(),
-            ))
-            .sum()
-            .cast(DataType::UInt64)
-            .alias("not_bool"),
-        ]),
-    )
-    .map_err(|e| e.to_string())?;
-    let get = |c: &str| stats.column(c).ok().and_then(|s| s.get(0).ok());
-    let count = |c: &str| get(c).and_then(|v| v.extract::<u64>()).unwrap_or(0);
-    if matches!(get("padded"), Some(AnyValue::Boolean(true))) {
-        return Ok(DataType::String);
-    }
-    Ok(if count("int") == 0 {
-        DataType::Int64
-    } else if count("float") == 0 {
-        DataType::Float64
-    } else if count("present") > 0 && count("not_bool") == 0 {
-        DataType::Boolean
-    } else {
-        DataType::String
-    })
 }
 
 /// A step as part of the plan, and the column it gave a type of its own, if any.
@@ -700,14 +616,9 @@ fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<Lowered>, S
                     let Ok(text) = parsed.to_polars_expr_with(Some(schema.as_ref())) else {
                         return Ok(None);
                     };
-                    let dtype = json_type(&lf, text.clone())?;
-                    let typed = match &dtype {
-                        DataType::Boolean => when(text.clone().is_null())
-                            .then(lit(polars::prelude::Null {}).cast(DataType::Boolean))
-                            .otherwise(text.eq(lit("true"))),
-                        DataType::String => text,
-                        other => text.cast(other.clone()),
-                    };
+                    let dtype = crate::data::profile::text_type(&lf, text.clone(), true)
+                        .map_err(|e| e.to_string())?;
+                    let typed = crate::data::profile::as_type(text, &dtype);
                     return Ok(Some((
                         lf.with_column(typed.alias(name.as_str())),
                         Some((name.clone(), dtype)),
@@ -720,17 +631,8 @@ fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<Lowered>, S
                 let Ok(e) = parsed.to_polars_expr_with(Some(schema.as_ref())) else {
                     return Ok(None);
                 };
-                let probe = polars::prelude::DataFrame::empty_with_schema(schema.as_ref())
-                    .lazy()
-                    .with_column(e.clone().alias(name.as_str()))
-                    .collect();
-                match probe {
-                    Ok(df)
-                        if !matches!(
-                            df.column(name.as_str()).map(|c| c.dtype()),
-                            Ok(DataType::Duration(_))
-                        ) =>
-                    {
+                match crate::data::expression::output_type(&e, schema.as_ref()) {
+                    Some(t) if !matches!(t, DataType::Duration(_)) => {
                         lf.with_column(e.alias(name.as_str()))
                     }
                     _ => return Ok(None),
@@ -747,7 +649,7 @@ fn lower(lf: LazyFrame, shell: &DataFrame, op: &Op) -> Result<Option<Lowered>, S
                         .with_maintain_order(true),
                 )
             }
-            Op::Limit(n) => lf.limit(*n as IdxSize),
+            Op::Limit(n) => lf.limit(IdxSize::try_from(*n).unwrap_or(IdxSize::MAX)),
             Op::Unpivot(spec) => crate::data::unpivot::unpivot_lazy(lf, schema.as_ref(), spec)?,
             _ => return Ok(None),
         },
@@ -766,35 +668,43 @@ fn reads_nested(op: &Op, nested: &[String]) -> bool {
     }
     match op {
         Op::Select(_) | Op::Limit(_) => false,
-        Op::Filter(clauses) => named(
-            clauses.iter().flat_map(|c| c.predicates()).map(|p| &p.col),
-            nested,
-        ),
+        Op::Filter(clauses) => named(predicate_columns(clauses.iter()), nested),
         Op::Sort(keys) => named(keys.iter().map(|k| &k.col), nested),
         Op::GroupBy { by, agg } | Op::Frequency { by, agg } => {
-            named(by.iter(), nested)
-                || named(agg.iter().map(|a| &a.col), nested)
-                || named(
-                    agg.iter()
-                        .flat_map(|a| a.where_.iter())
-                        .flat_map(|c| c.predicates())
-                        .map(|p| &p.col),
-                    nested,
-                )
+            named(by.iter(), nested) || named(agg_columns(agg), nested)
         }
-        Op::Aggregate(agg) => {
-            named(agg.iter().map(|a| &a.col), nested)
-                || named(
-                    agg.iter()
-                        .flat_map(|a| a.where_.iter())
-                        .flat_map(|c| c.predicates())
-                        .map(|p| &p.col),
-                    nested,
-                )
-        }
-        // An expression or anything else may read any column.
+        Op::Aggregate(agg) => named(agg_columns(agg), nested),
+        // The columns the expression names; one it cannot read is no reason to leave.
+        Op::Compute { expr, .. } => crate::data::expression::Expr::parse(expr).map_or(true, |e| {
+            e.columns().iter().any(|c| nested.iter().any(|n| n == c))
+        }),
+        Op::Unpivot(spec) => match &spec.columns {
+            Some(columns) => named(spec.index.iter().chain(columns), nested),
+            None => true,
+        },
+        // Anything else may read any column.
         _ => true,
     }
+}
+
+/// Every column aggregates read: their own, and those their conditions test.
+fn agg_columns(agg: &[crate::data::group::AggSpec]) -> impl Iterator<Item = &String> {
+    agg.iter()
+        .map(|a| &a.col)
+        .chain(predicate_columns(agg.iter().flat_map(|a| a.where_.iter())))
+}
+
+/// The columns predicates read: each one's own, and one it is compared with.
+fn predicate_columns<'a>(
+    clauses: impl Iterator<Item = &'a crate::data::filter::Clause>,
+) -> impl Iterator<Item = &'a String> {
+    clauses.flat_map(|c| c.predicates()).flat_map(|p| {
+        let other = match &p.value {
+            crate::data::filter::Operand::Column(c) => Some(c),
+            _ => None,
+        };
+        std::iter::once(&p.col).chain(other)
+    })
 }
 
 /// The plan's columns as the step's table has them: its order, its types.
@@ -814,8 +724,8 @@ fn conform(lf: LazyFrame, shell: &DataFrame, nested: &[String]) -> LazyFrame {
     lf.select(exprs)
 }
 
-/// A collected frame as a table: nested values as the in-memory path's compact text,
-/// the step's column descriptions.
+/// A collected frame as a table: nested values as their JSON text, the step's column
+/// descriptions.
 fn finish(
     mut pdf: polars::prelude::DataFrame,
     shell: &DataFrame,
@@ -825,7 +735,13 @@ fn finish(
         if let Ok(column) = pdf.column(name) {
             let series = column.as_materialized_series();
             let texts: Vec<Option<String>> = (0..series.len())
-                .map(|r| series.get(r).ok().and_then(|v| compact(&v)))
+                .map(|r| {
+                    series
+                        .get(r)
+                        .ok()
+                        .filter(|v| !matches!(v, AnyValue::Null))
+                        .map(|v| json_of(&v).to_string())
+                })
                 .collect();
             let replaced = Series::new(name.as_str().into(), texts);
             pdf.replace(name, replaced.into())
@@ -837,49 +753,31 @@ fn finish(
     Ok(df)
 }
 
-/// A nested value the way a JSON document's table shows it: `{2} lat=1.5 city=X`,
-/// `[2] a; b`.  A field Polars holds as NULL — absent from that row — is left out.
-fn compact(v: &AnyValue) -> Option<String> {
-    let mut out = String::new();
-    write_compact(v, &mut out);
-    if matches!(v, AnyValue::Null) {
-        None
-    } else {
-        Some(out)
-    }
-}
-
-fn write_compact(v: &AnyValue, out: &mut String) {
+/// A nested value as JSON, as the in-memory reader writes a record's value
+/// (`Node::json_text`).  Polars holds a field a line lacks as NULL, so a NULL field is
+/// left out — and an object's fields come in the order of the whole file's.
+fn json_of(v: &AnyValue) -> serde_json::Value {
+    use serde_json::Value as J;
     match v {
-        AnyValue::Null => {}
-        AnyValue::Boolean(b) => out.push_str(if *b { "true" } else { "false" }),
-        AnyValue::String(s) => out.push_str(s),
-        AnyValue::StringOwned(s) => out.push_str(s),
-        AnyValue::Float64(f) => out.push_str(&crate::data::doc::fmt_float(*f)),
-        AnyValue::Float32(f) => out.push_str(&crate::data::doc::fmt_float(*f as f64)),
-        AnyValue::List(items) => {
-            out.push_str(&format!("[{}]", items.len()));
-            for (i, item) in items.iter().enumerate() {
-                out.push_str(if i == 0 { " " } else { "; " });
-                write_compact(&item, out);
-            }
-        }
-        AnyValue::Struct(_, _, fields) => {
-            let values: Vec<AnyValue> = v._iter_struct_av().collect();
-            let present: Vec<(&Field, &AnyValue)> = fields
+        AnyValue::Null => J::Null,
+        AnyValue::Boolean(b) => J::Bool(*b),
+        AnyValue::String(s) => J::from(*s),
+        AnyValue::StringOwned(s) => J::from(s.as_str()),
+        AnyValue::Float64(f) => J::from(*f),
+        AnyValue::Float32(f) => J::from(*f as f64),
+        AnyValue::List(items) => J::Array(items.iter().map(|i| json_of(&i)).collect()),
+        AnyValue::Struct(_, _, fields) => J::Object(
+            fields
                 .iter()
-                .zip(values.iter())
+                .zip(v._iter_struct_av())
                 .filter(|(_, v)| !matches!(v, AnyValue::Null))
-                .collect();
-            out.push_str(&format!("{{{}}}", present.len()));
-            for (field, value) in present {
-                out.push(' ');
-                out.push_str(field.name());
-                out.push('=');
-                write_compact(value, out);
-            }
-        }
-        other => out.push_str(&other.to_string()),
+                .map(|(f, v)| (f.name().to_string(), json_of(&v)))
+                .collect(),
+        ),
+        other => match other.extract::<i64>() {
+            Some(i) if other.dtype().is_integer() => J::from(i),
+            _ => J::from(other.to_string()),
+        },
     }
 }
 
@@ -889,17 +787,26 @@ enum Guard {
     Read(String),
 }
 
-fn guard(lf: &LazyFrame, step: &str, budget: u64) -> Result<(), Guard> {
-    let counted = crate::data::collect(lf.clone().select([len().alias("n")]))
-        .map_err(|e| Guard::Read(e.to_string()))?;
-    let rows = counted
+/// How many rows the plan yields — one streaming pass.
+fn row_count(lf: &LazyFrame) -> PolarsResult<u64> {
+    let counted = crate::data::collect(lf.clone().select([len().alias("n")]))?;
+    Ok(counted
         .column("n")
         .ok()
         .and_then(|c| c.get(0).ok())
         .and_then(|v| v.extract::<u64>())
-        .unwrap_or(0);
-    let sample =
-        crate::data::collect(lf.clone().limit(1000)).map_err(|e| Guard::Read(e.to_string()))?;
+        .unwrap_or(0))
+}
+
+fn guard(lf: &LazyFrame, step: &str, budget: u64) -> Result<(), Guard> {
+    let read = |e: PolarsError| Guard::Read(e.to_string());
+    let sample = crate::data::collect(lf.clone().limit(1000)).map_err(read)?;
+    // A sample short of its thousand rows is the whole result.
+    let rows = if sample.height() < 1000 {
+        sample.height() as u64
+    } else {
+        row_count(lf).map_err(read)?
+    };
     let mut row_bytes: u64 = 0;
     for column in sample.columns() {
         row_bytes += match column.dtype() {
@@ -928,8 +835,8 @@ fn guard(lf: &LazyFrame, step: &str, budget: u64) -> Result<(), Guard> {
          or put a group_by before it.",
         step,
         rows,
-        human(need),
-        human(budget)
+        crate::data::io::format_file_size_pub(need),
+        crate::data::io::format_file_size_pub(budget)
     )))
 }
 
@@ -953,35 +860,6 @@ fn op_name(op: &Op) -> &'static str {
         Op::ExpandJson { .. } => "expand_json",
         Op::Unpivot(_) => "unpivot",
     }
-}
-
-fn human(bytes: u64) -> String {
-    let b = bytes as f64;
-    if b >= 1e9 {
-        format!("{:.1} GB", b / 1e9)
-    } else if b >= 1e6 {
-        format!("{:.1} MB", b / 1e6)
-    } else {
-        format!("{} bytes", bytes)
-    }
-}
-
-/// Half the machine's physical memory: what a pipeline may collect by default.
-pub fn default_budget() -> u64 {
-    #[cfg(unix)]
-    {
-        // SAFETY: sysconf reads a system constant and has no preconditions.
-        let (pages, size) = unsafe {
-            (
-                libc::sysconf(libc::_SC_PHYS_PAGES),
-                libc::sysconf(libc::_SC_PAGESIZE),
-            )
-        };
-        if pages > 0 && size > 0 {
-            return (pages as u64).saturating_mul(size as u64) / 2;
-        }
-    }
-    8 * 1024 * 1024 * 1024
 }
 
 #[cfg(test)]

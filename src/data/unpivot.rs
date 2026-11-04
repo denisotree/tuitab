@@ -149,19 +149,40 @@ fn common_type(schema: &Schema, columns: &[String]) -> Result<DataType, String> 
 
 /// Unpivot the visible rows of a sheet.
 pub fn unpivot(df: &DataFrame, spec: &Spec) -> Result<DataFrame, String> {
-    let visible = df.get_visible_df()?;
+    let mut visible = df.get_visible_df()?;
+    // Values that are JSON make the value column JSON: the plain ones join them as the
+    // JSON of what they hold, a string quoted.
+    let values: Vec<usize> = (0..df.columns.len())
+        .filter(|&c| {
+            let name = &df.columns[c].name;
+            !spec.index.contains(name) && spec.columns.as_ref().is_none_or(|l| l.contains(name))
+        })
+        .collect();
+    let json = values.iter().any(|&c| df.columns[c].json);
+    if json {
+        for &c in &values {
+            if !df.columns[c].json {
+                let text = crate::data::dataframe::json_text(visible.columns()[c].clone(), false)
+                    .map_err(|e| e.to_string())?;
+                visible.replace_column(c, text).map_err(|e| e.to_string())?;
+            }
+        }
+    }
     let schema = visible.schema().clone();
     let long = unpivot_lazy(visible.lazy(), &schema, spec)?
         .collect()
         .map_err(|e| e.to_string())?;
     let mut out = crate::data::io::wrap_polars_df(long).map_err(|e| e.to_string())?;
-    // The index columns keep what the sheet had set on them.
-    for (i, name) in spec.index.iter().enumerate() {
-        if let Ok(src) = df.column_index(name) {
-            let mut meta = df.columns[src].clone();
-            meta.pinned = false;
-            out.columns[i] = meta;
-        }
+    // The index columns keep what the sheet knew about them.
+    let index: Vec<_> = df
+        .columns
+        .iter()
+        .filter(|c| spec.index.contains(&c.name))
+        .cloned()
+        .collect();
+    out.inherit_meta(&index, |n| n);
+    if let Ok(v) = out.column_index(&spec.value) {
+        out.columns[v].json = json;
     }
     out.calc_widths(40, 1000);
     Ok(out)

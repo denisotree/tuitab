@@ -7,16 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-04
+
+### Notice
+
+- **tuitab becomes qrow in 0.12.0; this is the last release under the name tuitab.**
+  The commands become `qrow` and `qrw` (`tuitab`, `ttab` and `ttb` go away), the MCP
+  server and its tools become `qrow` and `qrow_*` — an MCP client's config and tool
+  permissions need the new names — and the repository moves to `denisotree/qrow`.
+  Homebrew moves an installed `tuitab` to `qrow` on upgrade; on the AUR `qrow` and
+  `qrow-bin` replace `tuitab` and `tuitab-bin`. The APT repository moves to
+  `https://qrow.dev/apt`: after the move `apt update` warns that the old address is
+  gone, the installed `tuitab` keeps working, and one change to the source list —
+  described in the 0.12.0 notes and on qrow.dev — brings `qrow` in its place.
+
 ### Added
 
 - **Files larger than memory stream through the MCP server.** A CSV, TSV,
-  Parquet, Arrow or JSONL file is scanned rather than loaded: `filter`,
+  Parquet, Arrow or JSONL file past a sixteenth of the memory budget is scanned
+  rather than loaded (a smaller one is still loaded once and kept): `filter`,
   `select`, `compute`, `sort`, `limit` and `unpivot` become one plan that reads
   only what it needs, and `group_by`, `aggregate` and `frequency` stream to their
   groups. `frequency` over a 16 GB JSONL file runs in under 40 MB. A step that
   needs the whole table is checked against the machine's memory first and refused
   with the numbers rather than left to run out. `tuitab_inspect` and
   `tuitab_describe` stream too.
+- **A large JSONL file opens in the terminal at once and fills in.** Past a
+  sixteenth of the memory budget the first 8 MB open the sheet and the rest is
+  read in the background, the status bar showing how far (`12% · 523000 rows`);
+  a frequency table or any other table made from the sheet meanwhile covers the
+  rows read so far. A 16 GB log reads to its end in under three minutes. Reading
+  stops at the first change to the sheet itself (a sort, an edit, a filter, a
+  column change) or if the table would outgrow three quarters of the budget, and
+  the title then says how much of the file the sheet holds; saving it, or a table
+  made from it, onto the file itself is refused.
 - **Regular expressions in expressions:** `regexp_replace(s, regex, replacement)`
   (`$1`, `${name}` or `\1` for groups) and `regexp_extract(s, regex[, group])` —
   turning a log line into its template is one `compute`.
@@ -55,9 +79,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the file as its fraction (`0.3`, not `30%`), a currency column without its
   symbol, a file size in bytes — so the file reads back as numbers. The MCP
   answer no longer says the file was formatted.
+- `NaN` in a CSV float column is a missing value too: it is not counted, and no
+  longer turns a sum or an average into NaN.
+- `today()` and `now()` read the UTC clock, the one every datetime column is held
+  in; a moment written with an offset (`…T10:00:00+03:00`) is that instant in UTC.
+- A sheet is saved in the format its extension names; only a save onto the file it
+  was read from keeps what the file holds, so a `.json` of JSON Lines stays lines.
+- `expand_json` types a key's values by the rule `json_get` uses (`"42"` and `42`
+  both read as 42), and keeps a nested value as JSON that saves back as itself.
+- The window functions `sum`, `avg` and `median` read a boolean column as 1 and 0,
+  as the group aggregates of the same names do.
+- A sheet underneath others that is larger than a sixteenth of the memory budget
+  stays in memory instead of being written to a swap file: writing it out took as
+  much memory again and seconds per gigabyte each way, so it raised the peak it was
+  there to lower. Smaller sheets are still written out, now streamed.
+- The files of a pattern are profiled once, over all of them, as the stream reads
+  them: an epoch column in one file and small integers in another stack as integers.
 
 ### Fixed
 
+- The MCP instructions name a `group_by` row count's column, `count`, beside the
+  `col:fn` names of the others; a model guessing `*:count` got an unknown column.
+- Saving a sheet that is still reading its file says the saved file holds part of it:
+  `Saved … — 5259967 rows, the first 2.2 GB of 16.1 GB of the file`.
+- A prefix key — `g`, `z`, `y`, `Shift+S` — lists every key it takes in a box above the
+  status bar. The one-line hint it replaced missed most of them, `zJ` among them, and
+  could not hold them all at a hundred columns.
+- `?` shows every key and scrolls (`j` `k`, `Ctrl+F` `Ctrl+B`, `g` `G`); past a screen
+  it used to cut off. It had been missing `n` `N`, `c`, `,`, `d`, `"`, `T`, `W`, `+`,
+  `-`, `Z`, `gt`, `ge`, `g_`, `zr`, `zg`, `zx`, and named keys that are not bound:
+  `Backspace` for going back, `v` for the chart (it is `V`), `tc`.
+- `-t json` on stdin holding JSON Lines — `head logs.json | tuitab -t json` — opens as
+  rows, as a `.json` file of JSON Lines does, instead of failing on trailing characters.
+- A cell holding several lines — pretty-printed JSON in a log field — showed only its
+  first line, `{`. Its line breaks now read as spaces, so the value shows on one row.
+- A file whose name holds `[`, `]`, `?` or `*` — `report[1].csv` — is read as that
+  file, not as a pattern that matches nothing.
+- A Parquet or Arrow DECIMAL column (DuckDB, Spark) is read as numbers instead of
+  crashing the call.
+- In expressions run row by row, `and`, `or` and `in` follow SQL's three-valued logic
+  as the vectorised engine does, and a datetime compares with a date (`ts <
+  today()`), so a filter keeps the same rows whichever engine answers it.
+- An `in` list of whole numbers compares an integer column as integers: ids past
+  2^53 no longer match their neighbours.
+- `mannwhitney(…, less)` keeps its p-value deep in the tail instead of rounding it
+  to 0, and `ks2(…, exact)` refuses samples whose exact distribution is out of
+  reach, as `mannwhitney` does, instead of answering asymptotically or for minutes.
+- The footer's min and max read a percentage column as numbers.
+- Saving a sheet into a new database table writes an epoch column's integers, as
+  every other save does.
+- CSV and TSV piped in over stdin follow the rules a file does: null tokens, epochs,
+  types from every row.
+
+- **JSON Lines takes about its own size in memory in the terminal, not four and a
+  half times it.** It is read as a table, as CSV is, rather than as a document
+  tree with a table on top. A column of one kind of value is typed; a column of
+  nested or mixed values holds each value's JSON (`{"host":"x"}`, strings quoted),
+  which `json_get` and `zJ` read directly, and saving writes the values back as
+  they were — but for `null` against a missing field, and a whole number in a
+  column of decimals, which comes back as `10.0`. The MCP server reads JSONL the
+  same way, so `json_get`, `expand_json` and `output.path` work on its nested
+  fields too, streamed or not. Diving into a nested value is for JSON, YAML and
+  TOML documents.
+- **A `.json` file holding JSON Lines opens.** Exports often name one record per
+  line `.json`; such a file used to fail with "trailing characters at line 2". It
+  is now read, streamed by the MCP server and saved back as the lines it holds.
 - **A filter on a date or datetime column matches the moment it names.** The
   column was compared as text, which carries the unit's fraction (`11:10:00.000`),
   so `eq "2026-08-24 11:10:00"` never matched. The same holds for `in`, `not_in`
@@ -82,9 +168,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The MCP server no longer prints Polars' `is_in` deprecation warning on stderr.
 - A misspelt field in an MCP `source` was ignored; it is now refused with the
   one it was close to.
+- A join keeps what its tables said about their columns — currency, percentage,
+  precision — as a diff already did.
 
 ### Security
 
+- calamine 0.38: a malformed `.xls` file could panic the reader or make it allocate
+  without bound (RUSTSEC-2026-0436).
 - Dependencies moved off two yanked releases: `chacha20` 0.10.2 and
   `clipboard-win` 5.4.3.
 
@@ -1400,7 +1490,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/denisotree/tuitab/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/denisotree/tuitab/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/denisotree/tuitab/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/denisotree/tuitab/compare/v0.10.1...v0.10.2

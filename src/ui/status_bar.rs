@@ -123,6 +123,16 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             format!("{} {}... |{}", spin, name, base_status)
         }
+    } else if let (Some(_), Some(sample)) = (&sheet.tail, &sheet.sample) {
+        let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let spin = spinner_chars[(app.spinner_tick as usize) % spinner_chars.len()];
+        format!(
+            "{} {}% · {} rows |{}",
+            spin,
+            sample.percent(),
+            df.df.height(),
+            base_status
+        )
     } else if app.mode == AppMode::Calculating {
         let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
         let spin = spinner_chars[(app.spinner_tick as usize) % spinner_chars.len()];

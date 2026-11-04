@@ -1414,6 +1414,23 @@ pub fn run(args: &Value) -> Result<Value, String> {
     run_with(args, Vec::new())
 }
 
+/// A name a step or a list may take: an identifier that is not a built-in.
+fn check_name(name: &str, what: &str) -> Result<(), String> {
+    if !is_identifier(name) {
+        return Err(format!(
+            "a {} name is letters, digits and '_', not starting with a digit",
+            what
+        ));
+    }
+    if FUNCTIONS.contains(&name)
+        || CONSTANTS.contains(&name)
+        || ["and", "or", "not", "true", "false"].contains(&name)
+    {
+        return Err(format!("'{}' is a built-in name; choose another", name));
+    }
+    Ok(())
+}
+
 /// [`run`] with named lists already bound — samples a query produced, handed in by
 /// the server as `lists`.
 pub fn run_with(args: &Value, lists: Vec<(String, Vec<f64>)>) -> Result<Value, String> {
@@ -1455,20 +1472,7 @@ pub fn run_with(args: &Value, lists: Vec<(String, Vec<f64>)>) -> Result<Value, S
     let mut names: HashMap<String, Val> = HashMap::new();
     for (name, values) in lists {
         let fail = |why: String| format!("lists.{}: {}", name, why);
-        if !is_identifier(&name) {
-            return Err(fail(
-                "a list name is letters, digits and '_', not starting with a digit".into(),
-            ));
-        }
-        if FUNCTIONS.contains(&name.as_str())
-            || CONSTANTS.contains(&name.as_str())
-            || ["and", "or", "not", "true", "false"].contains(&name.as_str())
-        {
-            return Err(fail(format!(
-                "'{}' is a built-in name; choose another",
-                name
-            )));
-        }
+        check_name(&name, "list").map_err(fail)?;
         let items = values
             .into_iter()
             .map(|v| {
@@ -1491,20 +1495,7 @@ pub fn run_with(args: &Value, lists: Vec<(String, Vec<f64>)>) -> Result<Value, S
             return Err(fail(format!("longer than {} characters", MAX_EXPR_LEN)));
         }
         if let Some(name) = name {
-            if !is_identifier(name) {
-                return Err(fail(
-                    "a step name is letters, digits and '_', not starting with a digit".into(),
-                ));
-            }
-            let reserved = FUNCTIONS.contains(&name.as_str())
-                || CONSTANTS.contains(&name.as_str())
-                || ["and", "or", "not", "true", "false"].contains(&name.as_str());
-            if reserved {
-                return Err(fail(format!(
-                    "'{}' is a built-in name; choose another",
-                    name
-                )));
-            }
+            check_name(name, "step").map_err(fail)?;
             if names.contains_key(name) {
                 return Err(fail(format!(
                     "a step or list named '{}' already exists",

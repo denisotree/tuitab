@@ -14,6 +14,7 @@
 //! | [`mod@column`] | [`column::ColumnMeta`] — per-column metadata (type, width, aggregators) |
 //! | [`expression`] | Expression AST and recursive-descent parser for computed columns and row filters |
 //! | [`filter`] | Row selection shared by the TUI's typed expressions and the MCP server's structured predicates |
+//! | [`profile`] | What a column's values say about its type — null tokens, epochs, zones — for a loaded frame and a scan alike |
 //! | [`group`] | Group-by and grand totals — exactly the requested aggregates, unlike a frequency table |
 //! | [`aggregator`] | [`aggregator::AggregatorKind`] enum and compatibility rules |
 //! | [`sort`] | Sort-by-column implementation using Polars `arg_sort` |
@@ -38,6 +39,7 @@ pub mod io;
 pub mod join;
 pub mod json_cols;
 pub mod loader;
+pub mod profile;
 pub mod query;
 pub mod sort;
 pub mod swap;

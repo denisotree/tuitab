@@ -17,7 +17,7 @@ mod window_order;
 pub use aggregator::{render_aggregator_popup, render_partition_select_popup};
 pub use choice::render_choice_popup;
 pub use dedup_tiebreaker::render_dedup_tiebreaker_popup;
-pub use help::render_help_popup;
+pub use help::{render_help_popup, render_prefix_popup, Key, Section, SECTIONS};
 pub use input::render_input_popup;
 pub use join::{
     render_join_key_popup, render_join_overview_select_popup, render_join_source_popup,

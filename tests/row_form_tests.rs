@@ -304,9 +304,17 @@ fn tab_and_shift_tab_walk_the_fields() {
 /// putting a popup up rather than after the user has filled it in.
 #[test]
 fn the_form_does_not_open_on_a_document_sheet() {
-    let mut app = open("test_data/rows.jsonl", "a");
+    let mut app = open("test_data/nested.json", "name");
     press(&mut app, "O");
 
     assert_ne!(app.mode, AppMode::RowForm);
     assert!(app.row_form.fields.is_empty());
+}
+
+/// JSON Lines is a table, not a document: a row goes in like a CSV row.
+#[test]
+fn the_form_opens_on_json_lines() {
+    let mut app = open("test_data/rows.jsonl", "a");
+    press(&mut app, "O");
+    assert_eq!(app.mode, AppMode::RowForm);
 }

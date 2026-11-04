@@ -18,9 +18,7 @@ impl App {
             }
             Action::EnterGPrefix => {
                 self.mode = AppMode::GPrefix;
-                self.status_message =
-                    "g: (g)o top  (s)elect all  (u)nselect all  (t)oggle all  (e)dit selected"
-                        .to_string();
+                self.status_message.clear();
                 None
             }
             Action::CancelGPrefix => {
@@ -98,7 +96,13 @@ impl App {
             }
             Action::ShowHelp => {
                 self.mode = AppMode::Help;
+                self.help_scroll = 0;
                 self.status_message = "Press Esc or ? to close help".to_string();
+                None
+            }
+            Action::HelpScroll(by) => {
+                self.help_scroll = (i64::from(self.help_scroll) + i64::from(by))
+                    .clamp(0, i64::from(u16::MAX)) as u16;
                 None
             }
             Action::CloseHelp => {
@@ -110,8 +114,7 @@ impl App {
             // ── Special select (Shift+S) ────────────────────────────────────
             Action::EnterSPrefix => {
                 self.mode = AppMode::SPrefix;
-                self.status_message =
-                    "S: (r)andom N rows  (d)uplicates  (D) smart dedup".to_string();
+                self.status_message.clear();
                 None
             }
             Action::CancelSPrefix => {

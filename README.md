@@ -17,6 +17,22 @@ leaving the terminal.
 
 </div>
 
+> **tuitab becomes qrow in the next release, 0.12.0.** 0.11.1 is the last release
+> under this name. In 0.12.0:
+>
+> - the commands are `qrow` and its short alias `qrw`; `tuitab`, `ttab` and `ttb` go away;
+> - the MCP server is named `qrow` and its tools `qrow_inspect`, `qrow_query`,
+>   `qrow_describe`, `qrow_jq`, `qrow_calc`, `qrow_write` and `qrow_write_apply` — an
+>   MCP client's config and tool permissions need the new names;
+> - the repository moves to [denisotree/qrow](https://github.com/denisotree/qrow) and the
+>   crate to `qrow` on crates.io;
+> - Homebrew moves an installed `tuitab` to `qrow` on upgrade, and on the AUR `qrow` and
+>   `qrow-bin` replace `tuitab` and `tuitab-bin`;
+> - the APT repository moves to `https://qrow.dev/apt`. The old address stops answering,
+>   so `apt update` warns about it; the installed `tuitab` keeps working. Replace the
+>   source list once, as the 0.12.0 notes and [qrow.dev](https://qrow.dev) describe, and
+>   `apt install qrow` removes `tuitab`.
+
 ```sh
 tuitab data.csv                   # open a file
 tuitab config.toml                # JSON / YAML / TOML open as a browsable tree
@@ -33,7 +49,7 @@ cat data.csv | tuitab -t csv      # read from a pipe
 
 ## Highlights
 
-- **Tabular and structured formats** — CSV/TSV (auto-delimiter), JSON, JSONL/NDJSON,
+- **Tabular and structured formats** — CSV (auto-delimiter), TSV, JSON, JSONL/NDJSON,
   YAML, TOML, Parquet, Arrow/Feather, Excel (xlsx/xls), SQLite, DuckDB, and Markdown
   with frontmatter. Databases are recognised by their header, whatever the file is
   called. Browse a whole directory, or pipe data in over stdin.
@@ -42,6 +58,11 @@ cat data.csv | tuitab -t csv      # read from a pipe
   into one column per key, `m` switches between record and key/value layouts, and edits
   write back into the document, not into a flattened copy. Saving re-serialises the
   tree, so structure survives.
+- **Files larger than memory** — a JSONL file of gigabytes opens at once in the
+  terminal and fills in behind the sheet as you look at it, taking about its own size
+  in memory; the MCP server streams CSV, TSV, Parquet, Arrow and JSONL past a
+  sixteenth of its memory budget, so `frequency` over a 16 GB log holds the counts,
+  not the file.
 - **Vim-style navigation** — `hjkl`, `gg`/`G`, page jumps, sticky pinned columns.
 - **Instant analysis** — per-column statistics, frequency tables, and charts
   (histogram, bar, line, grouped bar) rendered right in the terminal.
@@ -316,7 +337,7 @@ one table, each page a row of its frontmatter — so a site can be checked again
 database in one call rather than through an export script.
 
 Five tools: `tuitab_inspect` (columns, types, row count, sample rows),
-`tuitab_query` (fifteen operations composed as a pipeline — filter, group by,
+`tuitab_query` (seventeen operations composed as a pipeline — filter, group by,
 window functions, pivot, join, dedup and the rest — returning JSON or writing
 xlsx/csv/parquet/sqlite), `tuitab_describe` (per-column statistics),
 `tuitab_jq` (jq programs over nested JSON/YAML/TOML), and `tuitab_calc` — any

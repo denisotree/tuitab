@@ -40,6 +40,8 @@ pub struct App {
     pub stack: SheetStack,
     pub mode: AppMode,
     pub status_message: String,
+    /// How far down the `?` popup is scrolled.
+    pub help_scroll: u16,
     pub should_quit: bool,
     pub load_receiver: Option<std::sync::mpsc::Receiver<LoadEvent>>,
     pub background_task: Option<(String, usize, usize)>,
@@ -83,6 +85,7 @@ impl App {
             stack,
             mode,
             status_message,
+            help_scroll: 0,
             should_quit: false,
             load_receiver,
             background_task: None,
@@ -258,9 +261,18 @@ impl App {
         // ponytail: a pattern loads on the main thread, so no spinner. The async branch
         // in `new_as` takes a single path and returns a single `Opened`; teaching it to
         // stack is its own job, worth doing when a glob over large files starts hurting.
-        let (dataframe, files) = crate::data::io::load_pattern(&text, records, |p| {
-            crate::data::io::open_target(p, delim_byte, forced).map(|o| o.df)
-        })?;
+        let opts = crate::data::io::LoadOpts::with_delimiter(delim_byte);
+        let (dataframe, files) =
+            crate::data::io::load_pattern(&text, records, &kind, &opts, |p, opts| {
+                // One table of every file whole: a piece of each would be no table.
+                crate::data::io::open_target_opts(
+                    p,
+                    opts,
+                    forced,
+                    crate::data::io::Sampling::whole(),
+                )
+                .map(|o| o.df)
+            })?;
         let row_count = dataframe.visible_row_count();
 
         let mut root_sheet = Sheet::new(text.clone(), dataframe);
@@ -365,11 +377,7 @@ impl App {
             let opened = crate::data::io::open_target(path, delim_byte, forced_format)?;
 
             let row_count = opened.df.visible_row_count();
-            let mut root_sheet = Sheet::new(filename.clone(), opened.df);
-            root_sheet.doc = opened.doc;
-            root_sheet.sqlite_db_path = opened.sqlite_db_path;
-            root_sheet.duckdb_db_path = opened.duckdb_db_path;
-            root_sheet.xlsx_db_path = opened.xlsx_db_path;
+            let mut root_sheet = Sheet::from_opened(filename.clone(), opened);
             root_sheet.source_path = Some(path.to_path_buf());
             root_sheet.source_delimiter = delim_byte;
             root_sheet.forced_type = forced_format.map(str::to_string);
@@ -395,9 +403,10 @@ impl App {
 
     /// Construct `App` by reading typed data from stdin.
     ///
-    /// `data_type` is `"csv"`, `"tsv"`, `"txt"`, or one of the structured formats
-    /// (`"json"`, `"jsonl"`, `"ndjson"`, `"yaml"`, `"toml"`), which arrive with a
-    /// document tree attached and are therefore editable and convertible.
+    /// `data_type` is `"csv"`, `"tsv"`, `"txt"`, `"jsonl"`/`"ndjson"` (a table, as
+    /// from a file), or one of the document formats (`"json"`, `"yaml"`, `"toml"`),
+    /// which arrive with a document tree attached and are therefore editable and
+    /// convertible.
     /// `delimiter` overrides auto-detection for CSV/TSV input.
     pub fn from_stdin_typed(data_type: &str, delimiter: Option<char>) -> Result<Self> {
         let delim_byte = delimiter.map(|c| c as u8);
@@ -458,9 +467,16 @@ impl App {
 
             let has_bg = self.mode == AppMode::Loading
                 || self.mode == AppMode::Calculating
-                || self.background_task.is_some();
+                || self.background_task.is_some()
+                || self.stack.active().tail.is_some();
             if has_bg {
-                if crossterm::event::poll(Duration::from_millis(100))? {
+                // A file still being read takes its next piece as soon as keys allow.
+                let wait = if self.stack.active().tail.is_some() {
+                    10
+                } else {
+                    100
+                };
+                if crossterm::event::poll(Duration::from_millis(wait))? {
                     if let Event::Key(key) = event::read()? {
                         let action = handle_key_event(key, self.mode, self.stack.can_pop());
                         self.handle_action(action);
@@ -488,8 +504,12 @@ impl App {
         Ok(())
     }
 
-    /// Phase 10: check if the background loader has finished.
+    /// Phase 10: check if the background loader has finished, and take the next piece
+    /// of a file the top sheet is still reading.
     fn poll_async_load(&mut self) {
+        if let Some(message) = self.stack.active_mut().take_growth() {
+            self.status_message = message;
+        }
         if let Some(ref rx) = self.load_receiver {
             match rx.try_recv() {
                 Ok(LoadEvent::Complete(Ok(opened))) => {
@@ -1942,18 +1962,14 @@ impl App {
             {
                 match crate::data::io::open_target(&target_path, None, forced.map(|f| f.name())) {
                     Ok(opened) => {
-                        let mut new_sheet = crate::sheet::Sheet::new(
+                        let mut new_sheet = crate::sheet::Sheet::from_opened(
                             target_path.to_string_lossy().into_owned(),
-                            opened.df,
+                            opened,
                         );
-                        new_sheet.doc = opened.doc;
                         // A file is a file wherever it was opened from: `R` re-reads it
                         // as it was opened, and `J` knows which sibling it is.
                         new_sheet.source_path = Some(target_path.clone());
                         new_sheet.forced_type = forced.map(|f| f.name().to_string());
-                        new_sheet.sqlite_db_path = opened.sqlite_db_path;
-                        new_sheet.duckdb_db_path = opened.duckdb_db_path;
-                        new_sheet.xlsx_db_path = opened.xlsx_db_path;
                         // Track the parent directory for regular data files so J can offer siblings.
                         if new_sheet.sqlite_db_path.is_none()
                             && new_sheet.duckdb_db_path.is_none()
@@ -3136,9 +3152,10 @@ mod async_open_tests {
         d
     }
 
-    /// Run the loader to completion, the way `App::run` would between draws.
+    /// Run the loader to completion, the way `App::run` would between draws.  A minute
+    /// at most: the suite runs these beside heavy tests, and only a failure waits it out.
     fn settle(app: &mut App) {
-        for _ in 0..600 {
+        for _ in 0..6000 {
             app.poll_async_load();
             if app.mode != AppMode::Loading {
                 return;
@@ -3368,5 +3385,302 @@ mod async_open_tests {
             app.status_message
         );
         assert_eq!(app.stack.active().dataframe.visible_row_count(), 2);
+    }
+
+    // ── A JSON Lines file read a piece at a time ────────────────────────────────────
+
+    use crate::data::io::Sampling;
+
+    /// Three records of eight bytes each.
+    const LINES: &str = "{\"a\":1}\n{\"a\":2}\n{\"a\":3}\n";
+
+    /// One line per piece, no cap.
+    const BY_LINE: Sampling = Sampling {
+        from: 0,
+        chunk: 8,
+        cap: u64::MAX,
+    };
+
+    fn growing(name: &str, text: &str, sampling: Sampling) -> App {
+        let path = dir().join(name);
+        std::fs::write(&path, text).unwrap();
+        let opened = crate::data::io::open_target_from(&path, None, None, sampling).unwrap();
+        let mut sheet = Sheet::from_opened(name.to_string(), opened);
+        sheet.source_path = Some(path);
+        App::init(
+            SheetStack::new(sheet),
+            AppMode::Normal,
+            String::new(),
+            SaveState::default(),
+            None,
+        )
+    }
+
+    /// Take pieces until the reading ends, the way `App::run` would between draws.
+    fn grow_all(app: &mut App) {
+        for _ in 0..12000 {
+            app.poll_async_load();
+            if app.stack.active().tail.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the file never finished reading: {}", app.status_message);
+    }
+
+    fn rows(app: &App) -> usize {
+        app.stack.active().dataframe.visible_row_count()
+    }
+
+    /// Saving a sheet still reading its file onto that file would cut the file down
+    /// to the rows read so far.
+    #[test]
+    fn a_sheet_still_reading_is_not_saved_over_its_file() {
+        let mut app = growing("guard.json", LINES, BY_LINE);
+        let path = app.stack.active().source_path.clone().unwrap();
+        app.handle_action(Action::SaveFile);
+        app.handle_action(Action::ApplySave);
+        if app.mode == AppMode::SaveShapeSelect {
+            app.handle_action(Action::ApplySaveShape);
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), LINES);
+        assert!(app.save.error.is_some(), "{}", app.status_message);
+    }
+
+    /// Saved elsewhere while it reads, a sheet writes the rows read so far — and the
+    /// message says that is part of the file, not all of it.
+    #[test]
+    fn saving_a_sheet_still_reading_says_it_is_part_of_the_file() {
+        let mut app = growing("part.jsonl", LINES, BY_LINE);
+        let to = dir().join("part_out.jsonl");
+        app.handle_action(Action::SaveFile);
+        app.save.input =
+            crate::ui::text_input::TextInput::with_value(to.to_string_lossy().into_owned());
+        app.handle_action(Action::ApplySave);
+        assert!(to.exists(), "{:?}", app.save.error);
+        assert!(
+            app.status_message.contains("1 rows") && app.status_message.contains("first"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn a_large_jsonl_opens_at_once_and_grows_to_its_end() {
+        let mut app = growing("grows.jsonl", LINES, BY_LINE);
+        assert_eq!(rows(&app), 1, "the first piece opens the sheet");
+        assert!(app.stack.active().tail.is_some());
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 3);
+        assert!(
+            app.stack.active().sample.is_none(),
+            "the whole file is held"
+        );
+        assert_eq!(app.status_message, "Loaded 3 rows");
+        assert_eq!(app.stack.active().dataframe.get_physical(2, 0), "3");
+    }
+
+    #[test]
+    fn growth_stops_at_the_memory_cap_and_says_so() {
+        // The cap is on what the table holds, checked before each piece.
+        let mut app = growing("capped.jsonl", LINES, Sampling { cap: 1, ..BY_LINE });
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 1);
+        assert_eq!(app.stack.active().sample.as_ref().unwrap().read, 8);
+        assert!(
+            app.status_message.contains("would not fit"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn a_bad_line_stops_growth_and_names_its_line() {
+        let text = "{\"a\":1}\n{\"a\":2}\n{oops}\n{\"a\":4}\n";
+        let mut app = growing("bad-line.jsonl", text, BY_LINE);
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 2, "what was read stays");
+        assert!(
+            app.status_message.contains("line 3"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn a_field_first_seen_late_becomes_a_column() {
+        let mut app = growing("late-field.jsonl", "{\"a\":1}\n{\"b\":2}\n", BY_LINE);
+        grow_all(&mut app);
+        let names: Vec<&str> = app
+            .stack
+            .active()
+            .dataframe
+            .columns
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, ["a", "b"]);
+        assert_eq!(rows(&app), 2);
+    }
+
+    /// A sheet made from it is a snapshot; the file goes on filling its own sheet once
+    /// that is on top again.
+    #[test]
+    fn growth_waits_while_another_sheet_is_on_top() {
+        let mut app = growing("paused.jsonl", LINES, BY_LINE);
+        app.handle_action(Action::OpenFrequencyTable);
+        app.handle_action(Action::OpenFrequencyTable);
+        assert!(app.stack.can_pop());
+        for _ in 0..20 {
+            app.poll_async_load();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            app.stack.active().tail.is_none(),
+            "the frequency table reads nothing"
+        );
+        assert!(
+            app.stack.active().sample.is_some(),
+            "it says it is of a sample"
+        );
+        app.handle_action(Action::PopSheet);
+        assert_eq!(rows(&app), 1, "nothing landed while it was underneath");
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 3);
+    }
+
+    /// A column the user changed is theirs: the next piece would otherwise meet it
+    /// as a type of its own and turn it into JSON text.
+    #[test]
+    fn a_column_changed_while_reading_stops_growth() {
+        let mut app = growing("retyped.jsonl", LINES, BY_LINE);
+        app.stack
+            .active_mut()
+            .dataframe
+            .set_column_type(0, crate::types::ColumnType::String)
+            .unwrap();
+        grow_all(&mut app);
+        assert!(!app.stack.active().dataframe.columns[0].json);
+        assert_eq!(rows(&app), 1);
+        assert!(
+            app.status_message.contains("columns were changed"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    /// A sort or an edit while the file is read ends the reading: later rows would land
+    /// outside the sort, or beyond what undo restores.
+    #[test]
+    fn a_sort_or_an_edit_stops_growth() {
+        let mut app = growing("sorted.jsonl", LINES, BY_LINE);
+        app.stack.active_mut().sort_keys = vec![("a".into(), true)];
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 1);
+        assert!(
+            app.status_message.contains("sorted"),
+            "{}",
+            app.status_message
+        );
+
+        let mut app = growing("edited.jsonl", LINES, BY_LINE);
+        app.stack.active_mut().push_undo();
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 1);
+        assert_eq!(
+            app.stack.active().undo_stack.len(),
+            1,
+            "the edit stays undoable"
+        );
+        assert!(
+            app.status_message.contains("edited"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    /// A sheet saved into a new database table is that table now: the file's rows stop
+    /// arriving.
+    #[test]
+    fn a_sheet_made_a_database_table_reads_no_more_of_its_file() {
+        let mut app = growing("adopted.jsonl", LINES, BY_LINE);
+        app.stack.active_mut().table_source = Some(crate::data::io::db_write::TableSource {
+            kind: crate::data::io::db_write::DbKind::Sqlite,
+            db_path: dir().join("adopted.sqlite"),
+            table: "t".into(),
+            key_col: "rowid".into(),
+            columns: Vec::new(),
+            original: polars::prelude::DataFrame::empty(),
+        });
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 1);
+        assert!(
+            app.stack.active().sample.is_none(),
+            "it holds the table, not a sample"
+        );
+    }
+
+    /// The cap counts what a piece would add — its new columns as tall as the table
+    /// included — before the piece goes in.
+    #[test]
+    fn a_piece_that_would_pass_the_cap_is_not_added() {
+        let mut app = growing("costly.jsonl", "{\"a\":1}\n{\"b\":2}\n", BY_LINE);
+        let size = app.stack.active().dataframe.df.estimated_size() as u64;
+        app.stack.active_mut().tail.as_mut().unwrap().cap = size + 1;
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 1);
+        assert!(
+            app.status_message.contains("would not fit"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    /// Blank lines after the last record end the file like any other.
+    #[test]
+    fn trailing_blank_lines_still_finish_the_file() {
+        let mut app = growing(
+            "trailing.jsonl",
+            "{\"a\":1}\n{\"a\":2}\n\n\n\n\n\n\n\n\n",
+            BY_LINE,
+        );
+        grow_all(&mut app);
+        assert_eq!(rows(&app), 2);
+        assert!(
+            app.stack.active().sample.is_none(),
+            "{}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn rows_taken_out_in_place_stop_growth() {
+        let mut app = growing("narrowed.jsonl", LINES, BY_LINE);
+        let df = &mut app.stack.active_mut().dataframe;
+        std::sync::Arc::make_mut(&mut df.row_order).clear();
+        std::sync::Arc::make_mut(&mut df.original_order).clear();
+        app.poll_async_load();
+        assert!(app.stack.active().tail.is_none());
+        assert!(
+            app.status_message.contains("filtered out"),
+            "{}",
+            app.status_message
+        );
+    }
+
+    #[test]
+    fn the_status_bar_shows_how_far_through_the_file() {
+        let mut app = growing("progress.jsonl", LINES, BY_LINE);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 10)).unwrap();
+        terminal.draw(|f| crate::ui::render(f, &mut app)).unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(screen.contains("33% · 1 rows"), "{}", screen);
     }
 }

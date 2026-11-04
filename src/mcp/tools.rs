@@ -48,7 +48,8 @@ readable; they cannot be written to. A database source always needs a 'container
 without one there is nothing to read.
 
 FILES LARGER THAN MEMORY
-CSV, TSV, Parquet, Arrow and JSONL are scanned, never loaded whole: filter, select, \
+CSV, TSV, Parquet, Arrow and JSONL (a .json holding JSON Lines too) are scanned, \
+never loaded whole: filter, select, \
 compute, sort, limit and unpivot become one plan that reads only the columns and rows \
 it needs, and group_by, aggregate and frequency stream to their groups. So start a \
 question about a big file with the steps that shrink it. A step that needs the whole \
@@ -102,8 +103,9 @@ OPERATIONS for tuitab_query
       log10, log(x, base), and 'x in (a, b)'. 'or' binds loosest, then 'and', then \
       'not'.
   {\"group_by\": {\"by\":[\"region\"],\"agg\":[{\"col\":\"amount\",\"fn\":\"sum\"}]}}
-      Exactly the aggregates you ask for. Result columns are named 'col:fn'. \
-      Use {\"col\":\"*\",\"fn\":\"count\"} for a row count. A conditional \
+      Exactly the aggregates you ask for. Result columns are named 'col:fn' \
+      ('amount:sum'). Use {\"col\":\"*\",\"fn\":\"count\"} for a row count; its \
+      column is 'count'. A conditional \
       aggregate reads only the rows its 'where' picks (filter predicates) and \
       needs 'as': {\"col\":\"*\",\"fn\":\"count\",\"as\":\"n503\",\"where\":[...]} — \
       several counters in one group_by. Also in aggregate, not in frequency.
@@ -168,7 +170,8 @@ part of the answer.
 LARGE OR SHAREABLE RESULTS
 Set output.path to write the result to a file instead of returning rows: \
 .xlsx, .csv, .tsv, .parquet, .arrow, .json, .jsonl, .yaml, .toml, .sqlite, .duckdb. \
-That file is formatted for a person to read. Use it whenever the user wants a \
+The file holds the values — numbers as numbers, a percentage as its fraction, no \
+currency symbol. Use it whenever the user wants a \
 deliverable, or when a result is too big to return. A path that does not exist yet is \
 written in one call. Replacing a file that is already there destroys it, so it takes \
 output.overwrite and a server started with --mcp-write, and the call plans rather than \
@@ -631,22 +634,17 @@ fn inspect(server: &mut Server, args: &Value) -> Result<Value, CallError> {
 
     // A file Polars scans is inspected without loading it: its columns from the scan,
     // its rows counted as they stream past, and the first few collected.
-    if !server.eager_only {
-        if let Some(scanned) = super::lazy::scan(&src).map_err(CallError::Failed)? {
-            let budget = server
-                .memory_budget
-                .unwrap_or_else(super::lazy::default_budget);
-            if let super::lazy::Outcome::Head { df, row_count } =
-                super::lazy::run(&scanned, &[], sample, None, budget).map_err(CallError::Failed)?
-            {
-                let table = render::table_of(&df, sample, row_count)?;
-                return Ok(json!({
-                    "path": src.path.to_string_lossy(),
-                    "columns": columns_json_with_schema(&df, None),
-                    "row_count": row_count,
-                    "sample_rows": table.get("rows").cloned().unwrap_or(Value::Array(vec![])),
-                }));
-            }
+    if let Some(scanned) = scan_of(server, &src)? {
+        if let super::lazy::Outcome::Head { df, row_count } =
+            super::lazy::run(&scanned, &[], sample, None, budget(server))?
+        {
+            let table = render::table_of(&df, sample, row_count)?;
+            return Ok(json!({
+                "path": src.path.to_string_lossy(),
+                "columns": columns_json_with_schema(&df, None),
+                "row_count": row_count,
+                "sample_rows": table.get("rows").cloned().unwrap_or(Value::Array(vec![])),
+            }));
         }
     }
 
@@ -867,18 +865,11 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     }
 
     // A file Polars can scan runs as a streamed plan; anything else is loaded whole.
-    let scanned = if server.eager_only {
-        None
-    } else {
-        super::lazy::scan(&src).map_err(CallError::Failed)?
+    let base = match scan_of(server, &src)? {
+        Some(scanned) => Base::Scanned(scanned),
+        None => Base::Loaded(source::load(server, &src)?),
     };
-    let budget = server
-        .memory_budget
-        .unwrap_or_else(super::lazy::default_budget);
-    let base = match &scanned {
-        Some(_) => None,
-        None => Some(source::load(server, &src)?),
-    };
+    let budget = budget(server);
     let mut results = Vec::with_capacity(pipelines.len());
 
     let mut failures = 0usize;
@@ -886,18 +877,18 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
         let label = name
             .clone()
             .unwrap_or_else(|| format!("pipeline_{}", index));
-        let outcome = match (ops, &scanned, &base) {
-            (Err(why), _, _) => Err(why.clone()),
-            (Ok(ops), Some(scanned), _) => run_streamed(
+        let outcome = match (ops, &base) {
+            (Err(why), _) => Err(why.clone()),
+            (Ok(ops), Base::Scanned(scanned)) => run_streamed(
                 scanned,
                 ops,
                 output.limit,
                 output.path.is_some().then_some("writing the result"),
                 budget,
             ),
-            (Ok(ops), None, Some(base)) => pipeline::apply_all_reporting_seeds(base.clone(), ops)
-                .map(|(df, seeds)| Answer::Table(df, seeds)),
-            (Ok(_), None, None) => Err("nothing was loaded".to_string()),
+            (Ok(ops), Base::Loaded(df)) => {
+                pipeline::apply_from(df.clone(), ops, 0).map(|(df, seeds)| Answer::Table(df, seeds))
+            }
         }
         .map_err(|e| format!("{}: {}", label, e));
         let (df, seeds) = match outcome {
@@ -967,6 +958,81 @@ fn query(server: &mut Server, args: &Value) -> Result<Value, CallError> {
     } else {
         json!({"results": results})
     })
+}
+
+/// What a query's pipelines start from: a plan over the file, or the file loaded.
+// One per call: the size of the larger variant costs nothing.
+#[allow(clippy::large_enum_variant)]
+enum Base {
+    Scanned(super::lazy::Scanned),
+    Loaded(crate::data::dataframe::DataFrame),
+}
+
+/// The source as a plan when Polars scans it and it is too big to keep in memory.
+fn scan_of(server: &Server, src: &source::Source) -> Result<Option<super::lazy::Scanned>, String> {
+    let from = server
+        .stream_from
+        .unwrap_or_else(|| crate::data::io::stream_from(budget(server)));
+    let size = |p: &std::path::Path| std::fs::metadata(p).map_or(0, |m| m.len());
+    let bytes: u64 = if crate::data::io::is_pattern(&src.path) {
+        crate::data::io::glob_matches(&src.path.to_string_lossy())
+            .unwrap_or_default()
+            .iter()
+            .map(|f| size(f))
+            .sum()
+    } else {
+        size(&src.path)
+    };
+    if bytes < from {
+        return Ok(None);
+    }
+    let scanned = super::lazy::scan(src)?;
+    // What cannot be scanned is loaded whole — but not past what the server may hold.
+    // A database, a workbook or a document is not scanned at all, and is read as ever.
+    let scannable = matches!(
+        source::extension_of(src).as_str(),
+        "csv" | "tsv" | "parquet" | "arrow" | "feather" | "ipc" | "jsonl" | "ndjson" | "ldjson"
+    ) || crate::data::doc::Format::of_file(&src.path)
+        == Some(crate::data::doc::Format::Jsonl);
+    if scanned.is_none() && scannable && src.container.is_none() && bytes > budget(server) {
+        return Err(format!(
+            "{} is {}, more than this server may hold ({}), and it cannot be streamed: its \
+             files or lines do not hold one table of one set of types. Narrow the pattern, \
+             or split the file.",
+            src.path.display(),
+            crate::data::io::format_file_size_pub(bytes),
+            crate::data::io::format_file_size_pub(budget(server))
+        ));
+    }
+    Ok(scanned)
+}
+
+/// How many bytes a pipeline may collect.
+fn budget(server: &Server) -> u64 {
+    server
+        .memory_budget
+        .unwrap_or_else(crate::data::io::memory_budget)
+}
+
+/// Every row `ops` leaves: streamed from a scanned file and held to the budget, `why`
+/// naming what wants the rows; loaded whole otherwise.
+fn whole_table(
+    server: &mut Server,
+    src: &source::Source,
+    ops: &[pipeline::Op],
+    why: &str,
+) -> Result<crate::data::dataframe::DataFrame, String> {
+    match scan_of(server, src)? {
+        Some(scanned) => {
+            match super::lazy::run(&scanned, ops, usize::MAX, Some(why), budget(server))? {
+                super::lazy::Outcome::Collected { df, next } => {
+                    pipeline::apply_from(df, ops, next).map(|(df, _)| df)
+                }
+                super::lazy::Outcome::Head { df, .. } => Ok(df),
+            }
+        }
+        None => pipeline::apply_all(source::load(server, src)?, ops),
+    }
 }
 
 /// What a pipeline came to: a table still to be shown or written, or — when the whole
@@ -1164,29 +1230,7 @@ fn describe_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> 
 
     // A scanned file is profiled from just the columns asked for, held to the memory
     // budget; anything else is loaded as before.
-    let scanned = if server.eager_only {
-        None
-    } else {
-        super::lazy::scan(&src).map_err(CallError::Failed)?
-    };
-    let df = match scanned {
-        Some(scanned) => {
-            let budget = server
-                .memory_budget
-                .unwrap_or_else(super::lazy::default_budget);
-            match run_streamed(
-                &scanned,
-                &select,
-                usize::MAX,
-                Some("tuitab_describe"),
-                budget,
-            )? {
-                Answer::Table(df, _) => df,
-                Answer::Shown(_) => unreachable!("a whole run is never shown from its head"),
-            }
-        }
-        None => pipeline::apply_all(source::load(server, &src)?, &select)?,
-    };
+    let df = whole_table(server, &src, &select, "tuitab_describe")?;
 
     let mut profile = describe::describe(&df);
 
@@ -1222,33 +1266,10 @@ fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
                 .get("col")
                 .and_then(Value::as_str)
                 .ok_or_else(|| fail("needs 'col', the column to take".into()))?;
-            let scanned = if server.eager_only {
-                None
-            } else {
-                super::lazy::scan(&src).map_err(&fail)?
-            };
-            let df = match scanned {
-                Some(scanned) => {
-                    let budget = server
-                        .memory_budget
-                        .unwrap_or_else(super::lazy::default_budget);
-                    match run_streamed(
-                        &scanned,
-                        &ops,
-                        usize::MAX,
-                        Some("tuitab_calc lists"),
-                        budget,
-                    )
-                    .map_err(&fail)?
-                    {
-                        Answer::Table(df, _) => df,
-                        Answer::Shown(_) => {
-                            unreachable!("a whole run is never shown from its head")
-                        }
-                    }
-                }
-                None => pipeline::apply_all(source::load(server, &src)?, &ops).map_err(&fail)?,
-            };
+            // Only the column taken, so a wide table is not collected whole for it.
+            let mut ops = ops;
+            ops.push(pipeline::Op::Select(vec![col.to_string()]));
+            let df = whole_table(server, &src, &ops, "tuitab_calc lists").map_err(&fail)?;
             lists.push((name.clone(), numbers_of(&df, col).map_err(&fail)?));
         }
     }
@@ -1257,28 +1278,27 @@ fn calc_tool(server: &mut Server, args: &Value) -> Result<Value, CallError> {
 
 /// A numeric column's values, NULLs left out.
 fn numbers_of(df: &crate::data::dataframe::DataFrame, col: &str) -> Result<Vec<f64>, String> {
-    use crate::types::ColumnType;
     let idx = df.column_index(col)?;
-    if !matches!(
-        df.columns[idx].col_type,
-        ColumnType::Integer | ColumnType::Float | ColumnType::Percentage | ColumnType::Currency
-    ) {
+    if !df.columns[idx].col_type.is_numeric() {
         return Err(format!(
             "'{}' is {}, and a list for a test is numbers",
             col,
             df.columns[idx].col_type.name()
         ));
     }
-    let visible = df.get_visible_df()?;
-    let floats = visible.columns()[idx]
+    // Only this column's visible rows, not every column's.
+    let visible = df.select_columns(&[col.to_string()])?.get_visible_df()?;
+    let floats = visible.columns()[0]
         .as_materialized_series()
         .cast(&polars::prelude::DataType::Float64)
         .map_err(|e| e.to_string())?;
+    // NaN and infinity are no numbers for a statistic: left out, as a missing value is.
     Ok(floats
         .f64()
         .map_err(|e| e.to_string())?
         .into_iter()
         .flatten()
+        .filter(|v| v.is_finite())
         .collect())
 }
 

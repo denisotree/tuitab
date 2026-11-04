@@ -701,10 +701,21 @@ pub fn table_to_doc(df: &DataFrame, shape: Shape, format: Format, table_name: &s
 
     let root = match shape {
         Shape::Records => {
+            let line = df.columns.iter().position(|m| m.line);
             let rows: Vec<Node> = (0..nrows)
                 .map(|r| {
+                    // A JSON Lines line that was not an object goes back as it was.
+                    if let Some(c) = line {
+                        let v = cell_node(df, r, c);
+                        if !matches!(v, Node::Null) {
+                            return v;
+                        }
+                    }
                     let mut obj = IndexMap::new();
                     for (c, name) in names.iter().enumerate() {
+                        if Some(c) == line {
+                            continue;
+                        }
                         let v = cell_node(df, r, c);
                         // Every column is kept on the first row so the output carries a
                         // full header even when later rows are sparse — the same reason
@@ -814,10 +825,13 @@ fn cell_node(df: &DataFrame, display_row: usize, col: usize) -> Node {
 /// string.  We deliberately do not sniff numbers out of text columns — a zip code must
 /// not become an integer on export.
 fn scalar_from_text(df: &DataFrame, col: usize, s: &str) -> Node {
-    if s.is_empty() {
-        return Node::Null;
+    let meta = df.columns.get(col);
+    if meta.is_some_and(|m| m.json) {
+        if let Some(node) = Node::from_json_text(s) {
+            return node;
+        }
     }
-    match df.columns.get(col).map(|c| c.col_type) {
+    match meta.map(|c| c.col_type) {
         Some(ColumnType::Date) | Some(ColumnType::Datetime) => Node::DateTime(s.to_string()),
         _ => Node::Str(s.to_string()),
     }

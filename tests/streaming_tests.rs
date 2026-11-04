@@ -32,7 +32,7 @@ const JSONL: &str = "{\"class\":\"app\",\"ms\":10,\"geo\":{\"lat\":1.5,\"city\":
 
 fn server(eager_only: bool) -> Server {
     Server {
-        eager_only,
+        stream_from: Some(if eager_only { u64::MAX } else { 0 }),
         ..Server::new()
     }
 }
@@ -340,6 +340,423 @@ fn a_jsonl_the_scan_takes_is_still_streamed() {
     );
 }
 
+/// A `.json` file holding JSON Lines is scanned as the lines it holds, and jq reads it.
+#[test]
+fn a_json_file_holding_json_lines_is_streamed() {
+    let path = write("sentinel-lines.json", JSONL);
+    let pattern = dir().join("sentinel-lines*.json");
+    for source in [&path, &pattern] {
+        let mut tight = Server {
+            memory_budget: Some(64),
+            ..Server::new()
+        };
+        let out = call(
+            &mut tight,
+            "tuitab_query",
+            json!({"source": source, "ops": [{"dedup": {"by": ["class"], "keep": "first"}}]}),
+        );
+        assert!(
+            out["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("dedup"),
+            "{}",
+            out
+        );
+    }
+    let out = call(
+        &mut server(true),
+        "tuitab_jq",
+        json!({"source": path, "program": "length"}),
+    );
+    assert_ne!(out["isError"], json!(true), "{}", out);
+    assert!(
+        out["content"][0]["text"].as_str().unwrap().contains('3'),
+        "{}",
+        out
+    );
+}
+
+/// A nested JSONL field is its JSON on both paths: `json_get` and `expand_json` read
+/// it, and `output.path` writes it back as the object it was.
+#[test]
+fn a_nested_jsonl_field_is_json_on_both_paths() {
+    let text = "{\"id\":1,\"client\":{\"country\":\"RU\",\"n\":2},\"tags\":[\"a\"]}\n\
+                {\"id\":2,\"client\":{\"country\":\"DE\",\"n\":3},\"tags\":[]}\n";
+    let path = write("nested-fields.jsonl", text);
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"select": ["client", "tags"]}]}),
+    );
+    assert_eq!(
+        out["structuredContent"]["rows"][0],
+        json!(["{\"country\":\"RU\",\"n\":2}", "[\"a\"]"])
+    );
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"compute": {"name": "c", "expr": "json_get(client, \"$.country\")"}},
+            {"select": ["c"]}]}),
+    );
+    assert_eq!(out["structuredContent"]["rows"], json!([["RU"], ["DE"]]));
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"expand_json": {"col": "client", "prefix": "client_"}},
+            {"select": ["client_country"]}]}),
+    );
+    assert_eq!(out["structuredContent"]["rows"], json!([["RU"], ["DE"]]));
+    for eager in [true, false] {
+        let target = dir().join(format!("nested-fields-out-{}.jsonl", eager));
+        let _ = std::fs::remove_file(&target);
+        let out = call(
+            &mut server(eager),
+            "tuitab_query",
+            json!({"source": path, "ops": [], "output": {"path": target}}),
+        );
+        assert_ne!(out["isError"], json!(true), "{}", out);
+        let parse = |t: &str| -> Vec<Value> {
+            t.lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+        assert_eq!(
+            parse(&std::fs::read_to_string(&target).unwrap()),
+            parse(text)
+        );
+    }
+}
+
+/// A Parquet list or struct reads the same streamed as loaded.
+#[test]
+fn a_parquet_list_and_struct_read_alike_on_both_paths() {
+    use polars::prelude::*;
+    let tags = Series::new(
+        "tags".into(),
+        [
+            Series::new("".into(), ["a", "b"]),
+            Series::new("".into(), Vec::<&str>::new()),
+        ],
+    );
+    let geo = StructChunked::from_series(
+        "geo".into(),
+        2,
+        [
+            Series::new("lat".into(), [1.5, 2.5]),
+            Series::new("city".into(), [Some("X"), None]),
+        ]
+        .iter(),
+    )
+    .unwrap()
+    .into_series();
+    let mut df = DataFrame::new(
+        2,
+        vec![
+            Series::new("id".into(), [1i64, 2]).into(),
+            tags.into(),
+            geo.into(),
+        ],
+    )
+    .unwrap();
+    let path = dir().join("nested.parquet");
+    ParquetWriter::new(std::fs::File::create(&path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    agree("tuitab_query", json!({"source": path, "ops": []}));
+    agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"frequency": {"by": ["tags"]}}]}),
+    );
+}
+
+/// A pattern is profiled once over all its files, on both paths: an epoch column in
+/// one file and small integers in the same column of another stack as integers.
+#[test]
+fn a_pattern_is_profiled_over_all_its_files() {
+    write("prof-a.csv", "ts,v\n1700000000000,1.5\n1700000001000,2\n");
+    write("prof-b.csv", "ts,v\n5,3.5\n6,4.5\n");
+    let pattern = dir().join("prof-*.csv").to_string_lossy().into_owned();
+    let out = agree("tuitab_query", json!({"source": pattern, "ops": []}));
+    assert_eq!(out["structuredContent"]["row_count"], json!(4), "{}", out);
+    write("unit-a.csv", "created_at\n1787569800000\n");
+    write("unit-b.csv", "created_at\n1787569800\n");
+    let pattern = dir().join("unit-*.csv").to_string_lossy().into_owned();
+    agree("tuitab_query", json!({"source": pattern, "ops": []}));
+}
+
+/// A moment past 2262 or before 1677 — `9999-12-31`, an SCD's open end — compares,
+/// rather than failing the call.
+#[test]
+fn a_moment_outside_the_nanosecond_range_compares() {
+    let path = write("events-far.csv", CSV);
+    for (op, value, rows) in [
+        ("lt", "2300-01-01 00:00", 5),
+        ("gt", "2300-01-01 00:00", 0),
+        ("gt", "1600-01-01T00:00", 5),
+        ("lt", "9999-12-31", 5),
+    ] {
+        let out = agree(
+            "tuitab_query",
+            json!({"source": path, "ops": [{"filter": {"col": "Time", "op": op, "value": value}}]}),
+        );
+        assert_eq!(
+            out["structuredContent"]["row_count"],
+            json!(rows),
+            "{} {} {}",
+            op,
+            value,
+            out
+        );
+    }
+    // A column held in nanoseconds, as Parquet often holds one.
+    use polars::prelude::*;
+    let ts = Series::new(
+        "ts".into(),
+        [1_700_000_000_000_000_000i64, 1_700_000_001_000_000_000],
+    )
+    .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))
+    .unwrap();
+    let mut df = DataFrame::new(2, vec![ts.into()]).unwrap();
+    let path = dir().join("ns.parquet");
+    ParquetWriter::new(std::fs::File::create(&path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    for (op, value, rows) in [("lt", "2300-01-01 00:00", 2), ("gt", "1600-01-01T00:00", 2)] {
+        let out = agree(
+            "tuitab_query",
+            json!({"source": path, "ops": [{"filter": {"col": "ts", "op": op, "value": value}}]}),
+        );
+        assert_eq!(
+            out["structuredContent"]["row_count"],
+            json!(rows),
+            "{} {} {}",
+            op,
+            value,
+            out
+        );
+    }
+}
+
+/// A CSV pattern whose files use different separators reads each file by its own.
+#[test]
+fn a_csv_pattern_reads_each_file_by_its_own_separator() {
+    write("sep-a.csv", "k,v\nx,1\n");
+    write("sep-b.csv", "k;v\ny;2\n");
+    let pattern = dir().join("sep-*.csv").to_string_lossy().into_owned();
+    let out = agree("tuitab_query", json!({"source": pattern, "ops": []}));
+    assert_eq!(
+        out["structuredContent"]["rows"],
+        json!([["x", 1], ["y", 2]]),
+        "{}",
+        out
+    );
+}
+
+/// A file whose name holds `[`, `]`, `?` or `*` is that file, not a pattern.
+#[test]
+fn a_file_named_like_a_pattern_is_read_as_itself() {
+    let csv: String = std::iter::once("a\n".to_string())
+        .chain((0..200).map(|i| format!("{}\n", i)))
+        .collect();
+    let jsonl: String = (0..200).map(|i| format!("{{\"a\":{}}}\n", i)).collect();
+    for (name, text) in [("report[1].csv", csv), ("events[1].jsonl", jsonl)] {
+        let path = write(name, &text);
+        let out = agree("tuitab_query", json!({"source": path, "ops": []}));
+        assert_eq!(out["structuredContent"]["row_count"], json!(200), "{}", out);
+        // Scanned, not loaded: only the scan refuses a dedup past the budget.
+        let out = call(
+            &mut Server {
+                memory_budget: Some(64),
+                ..Server::new()
+            },
+            "tuitab_query",
+            json!({"source": path, "ops": [{"dedup": {"by": ["a"], "keep": "first"}}]}),
+        );
+        assert!(
+            out["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("dedup"),
+            "{} {}",
+            name,
+            out
+        );
+    }
+}
+
+/// A limit past what a row index holds is no limit at all, not a wrapped-around one.
+#[test]
+fn a_limit_past_the_row_index_reads_every_row() {
+    let path = write("limit-far.csv", CSV);
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"limit": 4294967297u64}], "output": {"limit": 4294967296u64}}),
+    );
+    assert_eq!(out["structuredContent"]["row_count"], json!(5), "{}", out);
+}
+
+/// A step that compares with a nested column reads it as the in-memory path does.
+#[test]
+fn a_comparison_with_a_nested_column_reads_it_alike() {
+    let path = write("nested-cmp.jsonl", JSONL);
+    agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"filter": {"col": "msg", "op": "ne", "value": {"col": "geo"}}}]}),
+    );
+}
+
+/// A compute that reads no nested column streams beside one: a JSON Lines log with an
+/// object field still counts in the budget.
+#[test]
+fn a_compute_beside_a_nested_column_streams() {
+    let mut text = String::new();
+    for i in 0..2000 {
+        text.push_str(&format!("{{\"ms\":{},\"geo\":{{\"lat\":{}}}}}\n", i, i % 7));
+    }
+    let path = write("nested-compute.jsonl", &text);
+    let mut tight = Server {
+        memory_budget: Some(4096),
+        ..Server::new()
+    };
+    let out = call(
+        &mut tight,
+        "tuitab_query",
+        json!({"source": path, "ops": [
+            {"compute": {"name": "slow", "expr": "ms > 1000"}},
+            {"frequency": {"by": ["slow"]}}]}),
+    );
+    assert_ne!(out["isError"], json!(true), "{}", out);
+}
+
+/// A large `output.limit` is held to the budget like any other result.
+#[test]
+fn a_large_output_limit_is_held_to_the_budget() {
+    let text: String = std::iter::once("id,name\n".to_string())
+        .chain((0..5000).map(|i| format!("{},row number {}\n", i, i)))
+        .collect();
+    let path = write("many-rows.csv", &text);
+    let out = call(
+        &mut Server {
+            memory_budget: Some(4096),
+            ..Server::new()
+        },
+        "tuitab_query",
+        json!({"source": path, "ops": [], "output": {"limit": 100000}}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", out);
+}
+
+/// A file past the budget that cannot be scanned is refused with the reason, not read
+/// whole into memory.
+#[test]
+fn a_file_too_large_to_load_that_cannot_be_scanned_is_refused() {
+    let mut text = String::new();
+    for i in 0..300 {
+        if i % 2 == 0 {
+            text.push_str(&format!("{{\"g\":{}}}\n", i));
+        } else {
+            text.push_str(&format!("{{\"g\":{{\"x\":{}}}}}\n", i));
+        }
+    }
+    let path = write("shape-shifting.jsonl", &text);
+    let out = call(
+        &mut Server {
+            memory_budget: Some(1024),
+            ..Server::new()
+        },
+        "tuitab_query",
+        json!({"source": path, "ops": []}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    let message = out["content"][0]["text"].as_str().unwrap();
+    assert!(message.contains("stream"), "{}", message);
+}
+
+/// `NaN` in a CSV is a missing value, as the documented null tokens are: it is not
+/// counted, and it does not turn an average into NaN.
+#[test]
+fn nan_in_a_csv_is_missing_on_both_paths() {
+    let path = write("nan.csv", "v,w\n1.5,1\nNaN,NaN\n3.5,3\n");
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"aggregate": [
+            {"col": "v", "fn": "avg"}, {"col": "v", "fn": "count"}, {"col": "w", "fn": "sum"}]}]}),
+    );
+    assert_eq!(
+        out["structuredContent"]["rows"],
+        json!([[2.5, 2, 4.0]]),
+        "{}",
+        out
+    );
+}
+
+/// A `date_format` pattern chrono cannot read is refused when the expression is read —
+/// on both paths, and not as a failure to read the file.
+#[test]
+fn a_bad_date_format_is_refused_alike() {
+    let path = write("dates-format.csv", CSV);
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"compute": {"name": "f", "expr": "date_format(ts, \"%Q\")"}}]}),
+    );
+    assert_eq!(out["isError"], json!(true), "{}", out);
+    let message = out["content"][0]["text"].as_str().unwrap();
+    assert!(
+        message.contains("%Q") && !message.contains("Could not read"),
+        "{}",
+        message
+    );
+}
+
+/// A DECIMAL column — DuckDB, Spark and Arrow write them — reads as numbers on both
+/// paths.
+#[test]
+fn a_parquet_decimal_column_reads_as_numbers() {
+    use polars::prelude::*;
+    let amount = Series::new("amount".into(), [1.25f64, 10.5])
+        .cast(&DataType::Decimal(5, 2))
+        .unwrap();
+    let mut df = DataFrame::new_infer_height(vec![amount.into()]).unwrap();
+    let path = dir().join("decimal.parquet");
+    ParquetWriter::new(std::fs::File::create(&path).unwrap())
+        .finish(&mut df)
+        .unwrap();
+    let out = agree(
+        "tuitab_query",
+        json!({"source": path, "ops": [{"aggregate": [{"col": "amount", "fn": "sum"}]}]}),
+    );
+    assert_eq!(
+        out["structuredContent"]["rows"],
+        json!([[11.75]]),
+        "{}",
+        out
+    );
+}
+
+/// Whole numbers at the head of a JSON Lines file and a decimal past it are one column
+/// of floats on both paths, so the file still streams.
+#[test]
+fn a_decimal_past_the_head_still_streams() {
+    let mut text = "{\"ms\":1}\n".repeat(120_000);
+    text.push_str("{\"ms\":1.5}\n");
+    assert!(text.len() > 1 << 20);
+    let path = write("late-decimal.jsonl", &text);
+    let out = call(
+        &mut Server {
+            memory_budget: Some(4096),
+            ..Server::new()
+        },
+        "tuitab_query",
+        json!({"source": path, "ops": [{"dedup": {"by": ["ms"], "keep": "first"}}]}),
+    );
+    let message = out["content"][0]["text"].as_str().unwrap();
+    assert!(
+        message.contains("'dedup'"),
+        "it did not stream: {}",
+        message
+    );
+}
+
 /// `in` and `not_in` over a datetime column match the moments their literals name,
 /// as `eq` does.
 #[test]
@@ -448,6 +865,23 @@ fn numeric_aggregates_over_booleans_are_numbers() {
         "{}",
         out
     );
+    // A window over the same column reads it the same way.
+    for (function, kind) in [("sum", "integer"), ("avg", "float"), ("median", "float")] {
+        let out = agree(
+            "tuitab_query",
+            json!({"source": path, "ops": [
+                {"window": {"fn": function, "col": "flag", "over": ["class"], "as": "w"}},
+                {"select": ["w"]}]}),
+        );
+        assert_ne!(out["isError"], json!(true), "{} {}", function, out);
+        assert_eq!(
+            out["structuredContent"]["columns"][0]["type"],
+            json!(kind),
+            "{} {}",
+            function,
+            out
+        );
+    }
 }
 
 /// A file is written with the values the rows carry, and the answer does not claim
@@ -585,4 +1019,60 @@ fn a_jsonl_pattern_streams_like_its_files_loaded() {
         json!({"source": pattern, "ops": [{"group_by": {"by": ["k"], "agg": [{"col": "v", "fn": "sum"}]}}]}),
     );
     assert_eq!(out["structuredContent"]["row_count"], json!(2), "{}", out);
+}
+
+/// A pattern's files are typed with the `null_values` the source names, as each file
+/// alone is.
+#[test]
+fn a_csv_pattern_types_its_files_with_the_null_values_given() {
+    write("nulls-a.csv", "k,v\nx,1\ny,-\n");
+    write("nulls-b.csv", "k,v\nz,3\nw,-\n");
+    let pattern = dir().join("nulls-*.csv").to_string_lossy().into_owned();
+    let out = agree(
+        "tuitab_query",
+        json!({"source": {"path": pattern, "null_values": ["-"]},
+               "ops": [{"aggregate": [{"col": "v", "fn": "sum"}]}]}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    assert_eq!(out["structuredContent"]["rows"][0][0], json!(4), "{}", out);
+}
+
+/// A pattern's profile is kept per version of every file it matches: rewriting one of
+/// them is read afresh, by a server that has seen the pattern before.
+#[test]
+fn a_pattern_is_profiled_again_when_one_of_its_files_changes() {
+    write("versions-a.csv", "k,v\nx,1\n");
+    write("versions-b.csv", "k,v\ny,2\n");
+    let pattern = dir().join("versions-*.csv").to_string_lossy().into_owned();
+    let mut s = server(false);
+    let args = json!({"source": pattern, "ops": [{"aggregate": [{"col": "v", "fn": "sum"}]}]});
+    let out = call(&mut s, "tuitab_query", args.clone());
+    assert_eq!(out["structuredContent"]["rows"][0][0], json!(3), "{}", out);
+    write("versions-b.csv", "k,v\ny,20\nz,30\n");
+    let out = call(&mut s, "tuitab_query", args);
+    assert_eq!(out["structuredContent"]["rows"][0][0], json!(51), "{}", out);
+}
+
+/// A file far smaller than the memory budget is loaded once and kept, as before
+/// streaming: a repeated query answers from memory instead of reading it again.
+#[test]
+fn a_small_file_is_loaded_and_kept_rather_than_streamed() {
+    let path = write("kept.csv", CSV);
+    let mut s = Server::new();
+    let args = json!({"source": path, "ops": [{"frequency": {"by": ["class"]}}]});
+    let out = call(&mut s, "tuitab_query", args);
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    assert_eq!(s.cache.len(), 1, "the frame is kept");
+    // Past a sixteenth of the budget it streams, and nothing is kept.
+    let mut tight = Server {
+        memory_budget: Some(16 * 8),
+        ..Server::new()
+    };
+    let out = call(
+        &mut tight,
+        "tuitab_query",
+        json!({"source": path, "ops": [{"limit": 1}]}),
+    );
+    assert_eq!(out["isError"], json!(false), "{}", out);
+    assert!(tight.cache.is_empty());
 }

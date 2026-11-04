@@ -2422,7 +2422,7 @@ fn a_caller_can_ask_for_more_statements_than_the_default() {
 fn two_sources_read_in_turn_do_not_evict_each_other() {
     // The table cache is the in-memory path's; a CSV otherwise streams and is not held.
     let mut server = Server {
-        eager_only: true,
+        stream_from: Some(u64::MAX),
         ..Server::new()
     };
     let a = tmp("cache-a.csv");
@@ -2739,4 +2739,51 @@ fn a_declared_format_wins_over_a_db_extension() {
         .map(|c| c["name"].as_str().unwrap())
         .collect();
     assert_eq!(cols, vec!["a", "b"]);
+}
+
+/// The instructions say what a written file holds: the values, as the answer does.
+#[test]
+fn the_instructions_say_a_written_file_holds_values() {
+    let message = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "t", "version": "0"}}});
+    let out = handle_message(&mut Server::new(), &message.to_string()).unwrap();
+    let instructions = out["result"]["instructions"].as_str().unwrap();
+    assert!(
+        !instructions.contains("formatted for a person"),
+        "{}",
+        instructions
+    );
+    assert!(
+        instructions.contains("a .json holding JSON Lines"),
+        "{}",
+        instructions
+    );
+}
+
+/// The instructions name the columns a `group_by` makes — a row count included — as
+/// the server names them, so a model sorting on one does not guess `*:count`.
+#[test]
+fn the_instructions_name_the_columns_group_by_makes() {
+    let mut server = Server::new();
+    let result = query(
+        &mut server,
+        json!([{"group_by": {"by": ["department"],
+                             "agg": [{"col": "*", "fn": "count"}, {"col": "salary", "fn": "sum"}]}}]),
+    );
+    let names: Vec<&str> = result["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect();
+    let instructions = tuitab::mcp::tools::instructions(false);
+    for name in &names[1..] {
+        // `salary:sum` is the 'col:fn' pattern; anything else is named as it is.
+        let written = if name.contains(':') { "col:fn" } else { name };
+        assert!(
+            instructions.contains(&format!("'{written}'")),
+            "the instructions do not name {name:?}; the result has {names:?}"
+        );
+    }
 }

@@ -482,7 +482,8 @@ pub fn mannwhitney(
             numerator -= 0.5 * sign;
             let z = numerator / s;
             match alternative {
-                Alternative::Less => 1.0 - norm_sf(z),
+                // The lower tail as a survival function: `1 - sf` cancels to zero there.
+                Alternative::Less => norm_sf(-z),
                 Alternative::Greater => norm_sf(z),
                 Alternative::TwoSided => 2.0 * norm_sf(z.abs()),
             }
@@ -646,30 +647,140 @@ fn ks_exact(n1: usize, n2: usize, d: f64, alternative: Alternative) -> Option<f6
     (p.is_finite() && (0.0..=1.0).contains(&p)).then_some(p)
 }
 
-/// P(D_n <= d) for the one-sample KS statistic — Marsaglia, Tsang and Wang (2003),
-/// exact; for a matrix too large to raise, Stephens' approximation to the limit.
-fn kolmogorov_cdf(n: usize, d: f64) -> f64 {
-    let nf = n as f64;
-    if d <= 0.0 {
+/// Pelz and Good's approximation to P(D_n <= d), as scipy computes it
+/// (`_kolmogn_PelzGood`): Li-Chien and Korolyuk's series in z = d·√n, each term
+/// rewritten through Jacobi theta functions for small z.
+fn pelz_good(n: f64, d: f64) -> f64 {
+    use std::f64::consts::PI;
+    let z = n.sqrt() * d;
+    let (z2, z3, z4, z6) = (z * z, z.powi(3), z.powi(4), z.powi(6));
+    let qlog = -PI * PI / 8.0 / z2;
+    if qlog < f64::MIN_POSITIVE.ln() {
         return 0.0;
     }
-    if d >= 1.0 {
+    let q = qlog.exp();
+    let (pi2, pi4, pi6) = (PI * PI, PI.powi(4), PI.powi(6));
+    let k1a = -z2;
+    let k1b = pi2 / 4.0;
+    let k2a = 6.0 * z6 + 2.0 * z4;
+    let k2b = (2.0 * z4 - 5.0 * z2) * pi2 / 4.0;
+    let k2c = pi4 * (1.0 - 2.0 * z2) / 16.0;
+    let k3d = pi6 * (5.0 - 30.0 * z2) / 64.0;
+    let k3c = pi4 * (-60.0 * z2 + 212.0 * z4) / 16.0;
+    let k3b = pi2 * (135.0 * z4 - 96.0 * z6) / 4.0;
+    let k3a = -30.0 * z6 - 90.0 * z.powi(8);
+
+    let mut kk = [0.0f64; 4];
+    let maxk = (16.0 * z / PI).ceil() as i64;
+    // Horner over the odd integers: sum c_i q^(i^2).
+    for k in (1..=maxk).rev() {
+        let m = (2 * k - 1) as f64;
+        let (m2, m4, m6) = (m * m, m.powi(4), m.powi(6));
+        let qpower = q.powf(8.0 * k as f64);
+        let coeffs = [
+            1.0,
+            k1a + k1b * m2,
+            k2a + k2b * m2 + k2c * m4,
+            k3a + k3b * m2 + k3c * m4 + k3d * m6,
+        ];
+        for (v, c) in kk.iter_mut().zip(coeffs) {
+            *v = *v * qpower + c;
+        }
+    }
+    let scale = (2.0 * PI).sqrt();
+    let divisors = [z, 6.0 * z4, 72.0 * z.powi(7), 6480.0 * z.powi(10)];
+    for (v, div) in kk.iter_mut().zip(divisors) {
+        *v = *v * q * scale / div;
+    }
+    // The terms over every integer k, for K2 and K3.
+    let q = (-pi2 / 2.0 / z2).exp();
+    let sqrt3z = 3.0f64.sqrt() * z;
+    let (mut k2extra, mut k3extra) = (0.0, 0.0);
+    for k in (1..=maxk).rev() {
+        let kf = k as f64;
+        let qp = q.powf(kf * kf);
+        k2extra += kf * kf * qp;
+        k3extra += (sqrt3z + PI * kf) * (sqrt3z - PI * kf) * kf * kf * qp;
+    }
+    kk[2] += k2extra * pi2 * scale / (-36.0 * z3);
+    kk[3] += k3extra * pi2 * scale / (216.0 * z6);
+    kk.iter()
+        .enumerate()
+        .map(|(i, v)| v / n.powf(i as f64 / 2.0))
+        .sum()
+}
+
+/// P(D_n >= d) for the one-sample two-sided KS statistic, split the way scipy's
+/// `kstwo.sf` splits it (Simard and L'Ecuyer, 2011).  The exact matrix grows with n·d
+/// and is raised to the n-th power, so it is used only where it stays small — past
+/// that, a sample of a million took most of a minute.  A small p is twice Smirnov's
+/// one-sided tail, whose terms are all positive; `1 − cdf` would cancel it away.
+fn kolmogorov_sf(n: usize, d: f64) -> f64 {
+    let nf = n as f64;
+    if d <= 0.0 {
         return 1.0;
     }
+    if d >= 1.0 {
+        return 0.0;
+    }
+    let t = nf * d;
+    let nxsquared = t * d;
+    if t >= nf - 1.0 {
+        return 2.0 * (1.0 - d).powf(nf);
+    }
+    if d >= 0.5 {
+        return 2.0 * smirnov_sf(n, d);
+    }
+    if n <= 140 {
+        return if nxsquared <= 4.0 {
+            1.0 - mtw_cdf(n, d)
+        } else {
+            2.0 * smirnov_sf(n, d)
+        };
+    }
+    if nxsquared >= 370.0 {
+        return 0.0;
+    }
+    if nxsquared >= 2.2 {
+        return 2.0 * smirnov_sf(n, d);
+    }
+    if n <= 100_000 && nf * d.powf(1.5) <= 1.4 {
+        1.0 - mtw_cdf(n, d)
+    } else {
+        1.0 - pelz_good(nf, d)
+    }
+}
+
+/// P(D_n^+ >= d), Smirnov's one-sided statistic, exactly (Birnbaum and Tingey):
+/// d · Σ_{j=0}^{⌊n(1−d)⌋} C(n,j) (d + j/n)^(j−1) (1 − d − j/n)^(n−j), summed in logs.
+fn smirnov_sf(n: usize, d: f64) -> f64 {
+    let nf = n as f64;
+    let last = (nf * (1.0 - d)).floor() as usize;
+    let mut logs = Vec::with_capacity(last + 1);
+    let mut ln_choose = 0.0f64;
+    for j in 0..=last.min(n) {
+        let jf = j as f64;
+        if j > 0 {
+            ln_choose += ((nf - jf + 1.0) / jf).ln();
+        }
+        let rest = 1.0 - d - jf / nf;
+        if rest <= 0.0 {
+            break;
+        }
+        logs.push(ln_choose + (jf - 1.0) * (d + jf / nf).ln() + (nf - jf) * rest.ln());
+    }
+    let top = logs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if !top.is_finite() {
+        return 0.0;
+    }
+    (d * top.exp() * logs.iter().map(|l| (l - top).exp()).sum::<f64>()).clamp(0.0, 1.0)
+}
+
+/// P(D_n <= d), exactly — Marsaglia, Tsang and Wang (2003).
+fn mtw_cdf(n: usize, d: f64) -> f64 {
+    let nf = n as f64;
     let k = (nf * d) as usize + 1;
     let m = 2 * k - 1;
-    if m > 600 {
-        let lambda = (nf.sqrt() + 0.12 + 0.11 / nf.sqrt()) * d;
-        let mut sum = 0.0;
-        for j in 1..200 {
-            let term = (-2.0 * (j * j) as f64 * lambda * lambda).exp();
-            sum += if j % 2 == 1 { term } else { -term };
-            if term < 1e-17 {
-                break;
-            }
-        }
-        return 1.0 - 2.0 * sum;
-    }
     let h = k as f64 - nf * d;
     let mut hm = vec![0.0f64; m * m];
     for i in 0..m {
@@ -750,15 +861,31 @@ pub fn ks_2samp(x: &[f64], y: &[f64], alternative: Alternative, method: Method) 
     }
     let (n1, n2) = (x.len(), y.len());
     let d = ks_statistic(x, y, alternative);
+    // As scipy: past a lattice of i32::MAX points the exact count is not attempted —
+    // its cost grows with the product of the sizes.
+    let g = gcd(n1, n2);
+    let reachable = ((n1 / g) as u64) * ((n2 / g) as u64) < i32::MAX as u64;
+    let explicit = method == Method::Exact;
     let mut method = match method {
-        Method::Auto if n1.max(n2) <= 10_000 => Method::Exact,
+        Method::Auto if n1.max(n2) <= 10_000 && reachable => Method::Exact,
         Method::Auto => Method::Asymptotic,
         m => m,
     };
+    let refused = || -> Res<(f64, f64)> {
+        Err(
+            "ks2(): the exact distribution of samples this large is out of reach; use \
+             asymptotic"
+                .into(),
+        )
+    };
+    if explicit && !reachable {
+        return refused();
+    }
     let mut p = f64::NAN;
     if method == Method::Exact {
         match ks_exact(n1, n2, d, alternative) {
             Some(exact) => p = exact,
+            None if explicit => return refused(),
             None => method = Method::Asymptotic,
         }
     }
@@ -766,7 +893,7 @@ pub fn ks_2samp(x: &[f64], y: &[f64], alternative: Alternative, method: Method) 
         let (m, n) = (n1.max(n2) as f64, n1.min(n2) as f64);
         let en = m * n / (m + n);
         p = match alternative {
-            Alternative::TwoSided => 1.0 - kolmogorov_cdf(en.round() as usize, d),
+            Alternative::TwoSided => kolmogorov_sf(en.round() as usize, d),
             _ => {
                 let z = en.sqrt() * d;
                 (-2.0 * z * z - 2.0 * z * (m + 2.0 * n) / (m * n * (m + n)).sqrt() / 3.0).exp()

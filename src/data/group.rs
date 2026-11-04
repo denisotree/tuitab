@@ -77,9 +77,6 @@ fn build_aggregates(
         } else {
             let expr = crate::data::filter::clauses_to_expr(df, &spec.where_)?
                 .ok_or("an empty 'where' picks every row — leave it out")?;
-            for p in spec.where_.iter().flat_map(|c| c.predicates()) {
-                df.column_index(&p.col)?;
-            }
             Some(
                 expr.to_polars_expr_with(Some(df.df.schema().as_ref()))?
                     .fill_null(lit(false)),

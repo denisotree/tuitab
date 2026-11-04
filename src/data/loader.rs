@@ -7,27 +7,54 @@ use std::path::Path;
 /// Load a CSV or TSV file into a DataFrame.
 /// Delimiter is auto-detected from the first line if not supplied.
 pub fn load_csv(path: &Path, delimiter: Option<u8>) -> Result<DataFrame> {
-    load_csv_opts(path, &crate::data::io::LoadOpts::with_delimiter(delimiter))
+    load_csv_as(
+        path,
+        &crate::data::io::LoadOpts::with_delimiter(delimiter),
+        "csv",
+    )
 }
 
-pub fn load_csv_opts(path: &Path, opts: &crate::data::io::LoadOpts) -> Result<DataFrame> {
-    let delim = opts.delimiter.unwrap_or_else(|| detect_delimiter(path));
-
-    let mut reader = LazyCsvReader::new(
-        PlRefPath::try_from_path(path).map_err(|e| color_eyre::eyre::eyre!("{}", e))?,
-    )
-    .with_separator(delim)
-    .with_has_header(true)
-    .with_infer_schema_length(None);
-    if !opts.null_values.is_empty() {
-        reader = reader.with_null_values(Some(NullValues::AllColumns(
-            opts.null_values.iter().map(|v| v.as_str().into()).collect(),
-        )));
-    }
-    let lf = reader.finish()?;
-
-    let pdf = lf.collect()?;
+/// Load a file read as `ext` (`csv` or `tsv`).
+pub(crate) fn load_csv_as(
+    path: &Path,
+    opts: &crate::data::io::LoadOpts,
+    ext: &str,
+) -> Result<DataFrame> {
+    let file = PlRefPath::try_from_path(path).map_err(|e| color_eyre::eyre::eyre!("{}", e))?;
+    let pdf = csv_reader(file, separator(opts, ext, path), opts)
+        .finish()?
+        .collect()?;
     crate::data::io::wrap_polars_df(pdf)
+}
+
+/// The separator a file is read with: the one given, a tab for a tsv — sniffing a file
+/// whose text holds commas would split it on them — or what its first lines suggest.
+pub(crate) fn separator(opts: &crate::data::io::LoadOpts, ext: &str, file: &Path) -> u8 {
+    opts.delimiter
+        .or((ext == "tsv").then_some(b'\t'))
+        .unwrap_or_else(|| detect_delimiter(file))
+}
+
+/// How every path reads a CSV: a header, each column typed from all its rows, and
+/// the text the caller named read as NULL.
+pub(crate) fn csv_reader(
+    path: PlRefPath,
+    sep: u8,
+    opts: &crate::data::io::LoadOpts,
+) -> LazyCsvReader {
+    // A pattern is expanded; a real file whose name holds `[1]` is not.
+    let glob = crate::data::io::is_pattern(std::path::Path::new(path.as_str()));
+    let reader = LazyCsvReader::new(path)
+        .with_glob(glob)
+        .with_separator(sep)
+        .with_has_header(true)
+        .with_infer_schema_length(None);
+    if opts.null_values.is_empty() {
+        return reader;
+    }
+    reader.with_null_values(Some(NullValues::AllColumns(
+        opts.null_values.iter().map(|v| v.as_str().into()).collect(),
+    )))
 }
 
 /// Detect the most likely delimiter by reading the first 8 KB of the file.

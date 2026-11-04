@@ -76,6 +76,16 @@ pub struct ColumnMeta {
     /// that store one.
     #[serde(default)]
     pub time_zone: Option<String>,
+    /// Each cell holds the JSON text of a value — a column of JSON Lines records whose
+    /// values are nested or of more than one kind, strings quoted so `"5"` stays apart
+    /// from `5`.  Saving writes the values, not the text: reading a file never changes
+    /// what it holds.
+    #[serde(default)]
+    pub json: bool,
+    /// The column of JSON Lines lines that are not objects: each such line's value, the
+    /// record itself rather than a field of it.
+    #[serde(default)]
+    pub line: bool,
 }
 
 /// The unit of an integer epoch column.
@@ -135,32 +145,32 @@ impl EpochUnit {
         }
     }
 
-    /// Integers in this unit as a datetime column (UTC, no zone), and back.
-    pub fn to_datetime(
-        self,
-        s: &polars::prelude::Series,
-    ) -> polars::prelude::PolarsResult<polars::prelude::Series> {
-        use polars::prelude::{DataType, TimeUnit};
-        let ints = s.cast(&DataType::Int64)?;
-        match self {
-            EpochUnit::Seconds => {
-                (&ints * 1000i64).cast(&DataType::Datetime(TimeUnit::Milliseconds, None))
-            }
-            EpochUnit::Millis => ints.cast(&DataType::Datetime(TimeUnit::Milliseconds, None)),
-            EpochUnit::Micros => ints.cast(&DataType::Datetime(TimeUnit::Microseconds, None)),
-            EpochUnit::Nanos => ints.cast(&DataType::Datetime(TimeUnit::Nanoseconds, None)),
-        }
-    }
-
+    /// A datetime column back to the integers it was read from, in this unit.
     pub fn to_integers(
         self,
         s: &polars::prelude::Series,
     ) -> polars::prelude::PolarsResult<polars::prelude::Series> {
         use polars::prelude::{DataType, TimeUnit};
-        let ns = s
-            .cast(&DataType::Datetime(TimeUnit::Nanoseconds, None))?
+        // In the column's own unit: through nanoseconds, anything past 2262 overflows.
+        let held = match s.dtype() {
+            DataType::Datetime(tu, _) => *tu,
+            _ => TimeUnit::Microseconds,
+        };
+        let held_nanos = match held {
+            TimeUnit::Nanoseconds => 1,
+            TimeUnit::Microseconds => 1_000,
+            TimeUnit::Milliseconds => 1_000_000,
+        };
+        let ticks = s
+            .cast(&DataType::Datetime(held, None))?
+            .to_physical_repr()
             .cast(&DataType::Int64)?;
-        Ok(&ns / self.nanos())
+        let want = self.nanos();
+        Ok(if held_nanos >= want {
+            &ticks * (held_nanos / want)
+        } else {
+            &ticks / (want / held_nanos)
+        })
     }
 }
 
@@ -199,6 +209,8 @@ impl ColumnMeta {
             db_retype: None,
             epoch_unit: None,
             time_zone: None,
+            json: false,
+            line: false,
         }
     }
 }
