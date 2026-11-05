@@ -17,21 +17,12 @@ leaving the terminal.
 
 </div>
 
-> **tuitab becomes qrow in the next release, 0.12.0.** 0.11.1 is the last release
-> under this name. In 0.12.0:
->
-> - the commands are `qrow` and its short alias `qrw`; `tuitab`, `ttab` and `ttb` go away;
-> - the MCP server is named `qrow` and its tools `qrow_inspect`, `qrow_query`,
->   `qrow_describe`, `qrow_jq`, `qrow_calc`, `qrow_write` and `qrow_write_apply` — an
->   MCP client's config and tool permissions need the new names;
-> - the repository moves to [denisotree/qrow](https://github.com/denisotree/qrow) and the
->   crate to `qrow` on crates.io;
-> - Homebrew moves an installed `tuitab` to `qrow` on upgrade, and on the AUR `qrow` and
->   `qrow-bin` replace `tuitab` and `tuitab-bin`;
-> - the APT repository moves to `https://qrow.dev/apt`. The old address stops answering,
->   so `apt update` warns about it; the installed `tuitab` keeps working. Replace the
->   source list once, as the 0.12.0 notes and [qrow.dev](https://qrow.dev) describe, and
->   `apt install qrow` removes `tuitab`.
+> **tuitab stays at 0.11.1; development continues as [qrow](https://github.com/denisotree/qrow).**
+> tuitab 0.11.1 remains available on every channel — crates.io, Homebrew
+> (`denisotree/tuitab`), the AUR, the APT repository below and the release archives — and
+> keeps working. New features and fixes go to **qrow**, a separate project starting at 1.0.0:
+> the same engine with the commands `qrow` and `qrw` and the MCP tools `qrow_*`. Both can be
+> installed side by side; see [qrow.dev](https://qrow.dev) to install it.
 
 ```sh
 tuitab data.csv                   # open a file

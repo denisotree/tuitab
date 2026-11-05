@@ -11,15 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notice
 
-- **tuitab becomes qrow in 0.12.0; this is the last release under the name tuitab.**
-  The commands become `qrow` and `qrw` (`tuitab`, `ttab` and `ttb` go away), the MCP
-  server and its tools become `qrow` and `qrow_*` — an MCP client's config and tool
-  permissions need the new names — and the repository moves to `denisotree/qrow`.
-  Homebrew moves an installed `tuitab` to `qrow` on upgrade; on the AUR `qrow` and
-  `qrow-bin` replace `tuitab` and `tuitab-bin`. The APT repository moves to
-  `https://qrow.dev/apt`: after the move `apt update` warns that the old address is
-  gone, the installed `tuitab` keeps working, and one change to the source list —
-  described in the 0.12.0 notes and on qrow.dev — brings `qrow` in its place.
+- **tuitab stays at 0.11.1; development continues as the separate project qrow.**
+  This release remains available on every channel and keeps working. qrow starts at
+  1.0.0 with the same engine, the commands `qrow` and `qrw` and the MCP tools `qrow_*`;
+  it installs side by side with tuitab. See https://github.com/denisotree/qrow and
+  https://qrow.dev.
 
 ### Added
 
