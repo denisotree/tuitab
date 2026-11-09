@@ -14,5 +14,8 @@ fn the_apt_job_installs_apt_ftparchive_before_using_it() {
         .find("apt-get install -y --no-install-recommends apt-utils")
         .expect("apt.yml does not install apt-utils");
     let build = workflow.find("packaging/apt/publish.sh").unwrap();
-    assert!(install < build, "apt-utils is installed after publish.sh runs");
+    assert!(
+        install < build,
+        "apt-utils is installed after publish.sh runs"
+    );
 }
