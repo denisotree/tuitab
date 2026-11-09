@@ -17,8 +17,8 @@ leaving the terminal.
 
 </div>
 
-> **tuitab stays at 0.11.1; development continues as [rowq](https://github.com/denisotree/rowq).**
-> tuitab 0.11.1 remains available on every channel — crates.io, Homebrew
+> **tuitab stays at 0.11.2; development continues as [rowq](https://github.com/denisotree/rowq).**
+> tuitab 0.11.2 remains available on every channel — crates.io, Homebrew
 > (`denisotree/tuitab`), the AUR, the APT repository below and the release archives — and
 > keeps working. New features and fixes go to **rowq**, a separate project starting at 1.0.0:
 > the same engine with the command `rowq` and the MCP tools `rowq_*`. Both can be

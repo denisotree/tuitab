@@ -1,6 +1,6 @@
 [package]
 name = "tuitab"
-version = "0.11.1"
+version = "0.11.2"
 edition = "2021"
 authors = ["denisotree"]
 description = "Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite viewer with filtering, sorting, pivot tables, and charts"
@@ -58,7 +58,7 @@ polars = { version = "0.53", default-features = false, features = ["csv", "lazy"
 libc = "0.2"
 calamine = { version = "0.38", features = ["chrono"] }
 glob = "0.3"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 duckdb = { version = "1" }
 rust_xlsxwriter = "0.101"
 serde_json = { version = "1", features = ["preserve_order"] }

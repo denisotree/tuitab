@@ -284,7 +284,6 @@ fn read_sqlite_table(
     let skip = usize::from(with_rowid);
     let column_names: Vec<String> = stmt
         .column_names()
-        .into_iter()
         .skip(skip)
         .map(|s| s.to_string())
         .collect();

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-11-09
+
+### Security
+
+- The SQLite built into tuitab is 3.54.1 (rusqlite 0.41). SQLite before 3.54.0 could
+  return uninitialised memory when a database was opened beside a `-wal` file with a
+  different page size, so a crafted database and WAL pair could leak process memory into
+  query results (CVE-2026-119375, RUSTSEC-2026-0459). Nothing else changes: tuitab stays
+  frozen, now at 0.11.2, and development continues as
+  [rowq](https://github.com/denisotree/rowq).
+
 ## [0.11.1] - 2026-11-04
 
 ### Notice
@@ -1485,7 +1496,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.2...HEAD
+[0.11.2]: https://github.com/denisotree/tuitab/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/denisotree/tuitab/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/denisotree/tuitab/compare/v0.10.3...v0.11.0
 [0.10.3]: https://github.com/denisotree/tuitab/compare/v0.10.2...v0.10.3
