@@ -73,6 +73,14 @@ jobs:
           fi
           touch site/.nojekyll
 
+      # apt-ftparchive comes from apt-utils, which ubuntu-latest stopped carrying with
+      # Ubuntu 26.04.
+      - name: Install apt-ftparchive
+        if: steps.key.outputs.ok == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends apt-utils
+
       - name: Build repository
         if: steps.key.outputs.ok == 'true'
         run: packaging/apt/publish.sh debs site/apt
