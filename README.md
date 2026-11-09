@@ -17,12 +17,12 @@ leaving the terminal.
 
 </div>
 
-> **tuitab stays at 0.11.1; development continues as [qrow](https://github.com/denisotree/qrow).**
+> **tuitab stays at 0.11.1; development continues as [rowq](https://github.com/denisotree/rowq).**
 > tuitab 0.11.1 remains available on every channel — crates.io, Homebrew
 > (`denisotree/tuitab`), the AUR, the APT repository below and the release archives — and
-> keeps working. New features and fixes go to **qrow**, a separate project starting at 1.0.0:
-> the same engine with the commands `qrow` and `qrw` and the MCP tools `qrow_*`. Both can be
-> installed side by side; see [qrow.dev](https://qrow.dev) to install it.
+> keeps working. New features and fixes go to **rowq**, a separate project starting at 1.0.0:
+> the same engine with the command `rowq` and the MCP tools `rowq_*`. Both can be
+> installed side by side; see [rowq.dev](https://rowq.dev) to install it.
 
 ```sh
 tuitab data.csv                   # open a file

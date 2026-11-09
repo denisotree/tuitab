@@ -11,11 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notice
 
-- **tuitab stays at 0.11.1; development continues as the separate project qrow.**
-  This release remains available on every channel and keeps working. qrow starts at
-  1.0.0 with the same engine, the commands `qrow` and `qrw` and the MCP tools `qrow_*`;
-  it installs side by side with tuitab. See https://github.com/denisotree/qrow and
-  https://qrow.dev.
+- **tuitab stays at 0.11.1; development continues as the separate project rowq.**
+  This release remains available on every channel and keeps working. rowq starts at
+  1.0.0 with the same engine, the command `rowq` and the MCP tools `rowq_*`; it installs
+  side by side with tuitab. See https://github.com/denisotree/rowq and https://rowq.dev.
 
 ### Added
 
