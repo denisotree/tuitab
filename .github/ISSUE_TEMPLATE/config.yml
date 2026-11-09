@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: rowq
+    url: https://github.com/denisotree/rowq/issues
+    about: tuitab is frozen at 0.11.2 and development continues as rowq. Report bugs and ask for features there.
