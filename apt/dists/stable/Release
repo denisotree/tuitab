@@ -1,0 +1,27 @@
+Architectures: amd64 arm64
+Codename: stable
+Components: main
+Date: Mon, 09 Nov 2026 17:07:14 +0000
+Label: tuitab
+Origin: tuitab
+Suite: stable
+MD5Sum:
+ ab0a360ec43953be2dec9e30e9525b14             3537 main/binary-amd64/Packages
+ 7c57aeb8e95f41dd508d6b6571416fd7             1195 main/binary-amd64/Packages.gz
+ 5ce8818c520b10522a5816ec412b1c34             3537 main/binary-arm64/Packages
+ ef318051b7e613e23da336af6b53dbf5             1199 main/binary-arm64/Packages.gz
+SHA1:
+ 15aa5240252779a90a5cf3918fc967cb96d33fcc             3537 main/binary-amd64/Packages
+ 9805be2eaf190cafdc9b3a42d5d896dd4aadf2d3             1195 main/binary-amd64/Packages.gz
+ 4816f2221d2e598e54a5dd363a6a11898e06fd50             3537 main/binary-arm64/Packages
+ 8f178881e21222a9294a1f67297c89bfee13dab5             1199 main/binary-arm64/Packages.gz
+SHA256:
+ 76e9221295d7a59a2831710b8a62dcc22afdf60ff20ef58920ec02b5bfe9b636             3537 main/binary-amd64/Packages
+ ffe5681647931b2b9138e391bcf9dca9f18eb39fd081ea63da35029aa6a9fa72             1195 main/binary-amd64/Packages.gz
+ 395471ec615e9f0159e1f41e51821fecafcfc2c59c9582946914acaca1f0bbd2             3537 main/binary-arm64/Packages
+ 218cc4ce791f9e35ced583278e74dcd294803f848983af8f1d6e9777167368df             1199 main/binary-arm64/Packages.gz
+SHA512:
+ f2866c4c1d8042bb5f97901dde1d7cdfa08d14eb18de24b9e9857cc80cfe441e9cfec9acd44bd234c4eb248da54792f6555e8e1b13b9f8f07510da8d2151ae6c             3537 main/binary-amd64/Packages
+ d65860f609b7548ac362f81a8e1b109757b10d3281b094386be79a2db5d8b3552a10e8a817de839b146bcb5a658600eeedec62a3d4193a3ec5a45ea8fa154cda             1195 main/binary-amd64/Packages.gz
+ 9a2446c4a53cc9c7abb6124e5db8f995f6e4b3baad6cac008dd1ce901ac2f02d27539f8d0dccf54c4c14af860ca677f4f4e18fa4ecf9eef4a58711cc972d5c00             3537 main/binary-arm64/Packages
+ 7dc68d4b0edeb0a558cd87276b6bb678f326e961e52311b67e57a8d1c4fc100475efca6d0169b49ae38963a77404f037dbbc44c6cafdb67ffc2b6a55e6110f9c             1199 main/binary-arm64/Packages.gz

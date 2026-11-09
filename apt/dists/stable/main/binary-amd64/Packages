@@ -1,0 +1,72 @@
+Package: tuitab
+Architecture: amd64
+Version: 0.11.0-1
+Priority: optional
+Section: utils
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Installed-Size: 129510
+Depends: libc6 (>= 2.34), libstdc++6 (>= 12)
+Filename: pool/main/t/tuitab/tuitab_0.11.0-1_amd64.deb
+Size: 29231088
+MD5sum: 2758799f74c288b5c35e3ed373bc61d2
+SHA1: 51d0aa19c2ea1fdaccac228c5b99165d44c27705
+SHA256: 5600907baaa23b690bbc4d74929aa8dc44cb85a4d199d72731838eba3f3b6c53
+SHA512: 7d4bf6471066462f3a6567e1835694d90b0fee8975c4d6032baeabae0eedc1d9012c4ace742fd478d2a4b7d3f45b8db241d8aceae468ed1f6bf342000d6b74b8
+Homepage: https://github.com/denisotree/tuitab
+Description: Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite
+ viewer with filtering, sorting, pivot tables, and charts
+ A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+ JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+ TOML open as a table over the parsed document, so nested data can be browsed,
+ edited and converted between formats. Installs `tuitab` plus the aliases
+ `ttab` and `ttb`.
+
+Package: tuitab
+Architecture: amd64
+Version: 0.11.1-1
+Priority: optional
+Section: utils
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Installed-Size: 134089
+Depends: libc6 (>= 2.34), libstdc++6 (>= 12)
+Filename: pool/main/t/tuitab/tuitab_0.11.1-1_amd64.deb
+Size: 30112956
+MD5sum: 294d129d0d83a008607240f97e9559f7
+SHA1: a65f462b27202b666bda5969e39bd3f9e05905ab
+SHA256: fa60fc0b3175158713305c7b39c685680f0c03b8f03b823d116f3163ff11012b
+SHA512: 6951a0da7c94276a4803f3557e0e233f99da2dc25464cb26134d77e4050d6e3a90a7a2c1f05f994e8c99e1d5951e40580b106ef850b0f0d2c03711e370102af4
+Homepage: https://github.com/denisotree/tuitab
+Description: Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite
+ viewer with filtering, sorting, pivot tables, and charts
+ A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+ JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+ TOML open as a table over the parsed document, so nested data can be browsed,
+ edited and converted between formats. Installs `tuitab` plus the aliases
+ `ttab` and `ttb`.
+
+Package: tuitab
+Architecture: amd64
+Version: 0.11.2-1
+Priority: optional
+Section: utils
+Maintainer: denisotree <denisotree@users.noreply.github.com>
+Installed-Size: 134121
+Depends: libc6 (>= 2.34), libstdc++6 (>= 12)
+Filename: pool/main/t/tuitab/tuitab_0.11.2-1_amd64.deb
+Size: 30136708
+MD5sum: 7df6699e5769694c5903664df047cf26
+SHA1: 32da53694167ce6bbe2c987f3b7450081101f0fc
+SHA256: e88c31b9b39502e9618dbc51de49b2c0ae1e633bc36f3c091a1f125980ee9eea
+SHA512: b60eb9e654f386a4da931fa50b62a7b3d5ebadb5ccc89fcd75bc9a99c9b747e71b204e8c4af272eb0bfa784614b5d7fd0914ce3da2b0f8eda4c3b55891333068
+Homepage: https://github.com/denisotree/tuitab
+Description: Terminal tabular data explorer — CSV/JSON/YAML/TOML/Parquet/Excel/SQLite
+ viewer with filtering, sorting, pivot tables, and charts
+ A fast, keyboard-driven terminal viewer for tabular data: CSV, TSV, JSON,
+ JSONL, YAML, TOML, Parquet, Arrow, Excel, SQLite and DuckDB. Filtering,
+ sorting, pivot tables, computed columns, statistics and charts. JSON, YAML and
+ TOML open as a table over the parsed document, so nested data can be browsed,
+ edited and converted between formats. Installs `tuitab` plus the aliases
+ `ttab` and `ttb`.
+
