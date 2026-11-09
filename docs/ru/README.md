@@ -6,6 +6,11 @@ SQLite · DuckDB**.
 
 > 🇬🇧 This documentation is also available in [English](../en/README.md).
 
+> **tuitab остаётся на версии 0.11.1; разработка продолжается в [rowq](https://github.com/denisotree/rowq)**
+> — тот же движок с командой `rowq` и MCP-инструментами `rowq_*`. tuitab продолжает работать,
+> и обе программы ставятся рядом. Установка rowq — на [rowq.dev](https://rowq.dev), документация —
+> в [denisotree/rowq](https://github.com/denisotree/rowq/tree/master/docs/ru).
+
 ## Содержание
 
 | Руководство | О чём |

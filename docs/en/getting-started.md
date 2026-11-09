@@ -2,6 +2,11 @@
 
 > 🇷🇺 [Эта страница на русском](../ru/getting-started.md) · [← Documentation index](README.md)
 
+> **tuitab stays at 0.11.1; development continues as [rowq](https://github.com/denisotree/rowq)**
+> — the same engine with the command `rowq` and the MCP tools `rowq_*`. tuitab keeps working,
+> and the two install side by side. Install rowq from [rowq.dev](https://rowq.dev); its docs are
+> in [denisotree/rowq](https://github.com/denisotree/rowq/tree/master/docs/en).
+
 ## Install
 
 The quickest route is Cargo:
