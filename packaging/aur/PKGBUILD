@@ -12,7 +12,7 @@ license=('Apache-2.0')
 depends=()
 makedepends=('rust' 'cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('fc031830f7303a93df2fa7b4f4b25f2159003766b68911f87ce7e2d5c680df31')
 
 prepare() {
     cd "$pkgname-$pkgver"

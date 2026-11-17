@@ -18,8 +18,8 @@ _base_url="https://github.com/denisotree/tuitab/releases/download/v${pkgver}"
 source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::${_base_url}/tuitab-v${pkgver}-x86_64-unknown-linux-gnu.tar.gz")
 source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::${_base_url}/tuitab-v${pkgver}-aarch64-unknown-linux-gnu.tar.gz")
 
-sha256sums_x86_64=('SKIP')
-sha256sums_aarch64=('SKIP')
+sha256sums_x86_64=('5a06ed2aa29e56669e41a11aaa1d87d5b4368ad42111526b1b6823e75ba7049a')
+sha256sums_aarch64=('71b8f281d6187050cb473485f42866e646fdb52ac346db42e81f8fa7fc224f7c')
 
 package() {
     local _src_dir="tuitab-v${pkgver}-${CARCH}-unknown-linux-gnu"

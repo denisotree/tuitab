@@ -9,8 +9,8 @@ pkgbase = tuitab-bin
 	provides = tuitab
 	conflicts = tuitab
 	source_x86_64 = tuitab-bin-0.11.3-x86_64.tar.gz::https://github.com/denisotree/tuitab/releases/download/v0.11.3/tuitab-v0.11.3-x86_64-unknown-linux-gnu.tar.gz
-	sha256sums_x86_64 = SKIP
+	sha256sums_x86_64 = 5a06ed2aa29e56669e41a11aaa1d87d5b4368ad42111526b1b6823e75ba7049a
 	source_aarch64 = tuitab-bin-0.11.3-aarch64.tar.gz::https://github.com/denisotree/tuitab/releases/download/v0.11.3/tuitab-v0.11.3-aarch64-unknown-linux-gnu.tar.gz
-	sha256sums_aarch64 = SKIP
+	sha256sums_aarch64 = 71b8f281d6187050cb473485f42866e646fdb52ac346db42e81f8fa7fc224f7c
 
 pkgname = tuitab-bin
