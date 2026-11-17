@@ -63,7 +63,7 @@ fn cargo_audit_runs_weekly_and_keeps_its_schedule_alive() {
 #[test]
 fn the_security_policy_names_the_frozen_release() {
     let policy = read("SECURITY.md");
-    assert!(policy.contains("0.11.2"));
+    assert!(policy.contains("0.11.3"));
     assert!(policy.contains("https://github.com/denisotree/rowq"));
     assert!(!policy.contains("| latest"));
 }

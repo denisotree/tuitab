@@ -4,10 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.11.2  | Security fixes only |
-| < 0.11.2 | No |
+| 0.11.3  | Security fixes only |
+| < 0.11.3 | No |
 
-tuitab is frozen at 0.11.2; development continues as
+tuitab is frozen at 0.11.3; development continues as
 [rowq](https://github.com/denisotree/rowq). A vulnerability in tuitab or in a dependency
 it ships can still get a security-only release; everything else goes to rowq.
 

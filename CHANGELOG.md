@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-17
+
+### Security
+
+- quinn-udp 0.5.16, pulled in by polars' HTTP client. Before 0.5.16 its receive loop
+  could spin after a truncated datagram (RUSTSEC-2026-0538). tuitab opens local files
+  only and never makes that request, but the fixed version is what ships now. The same
+  lockfile update takes the patched releases of tokio (RUSTSEC-2026-0386), rustix
+  (RUSTSEC-2026-0486), memmap2 (RUSTSEC-2026-0186), lru (RUSTSEC-2026-0253), anyhow
+  (RUSTSEC-2026-0190) and event-listener (RUSTSEC-2026-0221). Nothing else changes:
+  tuitab stays frozen, now at 0.11.3, and development continues as
+  [rowq](https://github.com/denisotree/rowq).
+
 ## [0.11.2] - 2026-11-09
 
 ### Security
@@ -1496,7 +1509,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-English keyboard remapping
 - Three binary aliases: `tuitab`, `ttab`, `tt`
 
-[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/denisotree/tuitab/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/denisotree/tuitab/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/denisotree/tuitab/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/denisotree/tuitab/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/denisotree/tuitab/compare/v0.10.3...v0.11.0

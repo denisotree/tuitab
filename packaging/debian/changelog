@@ -1,3 +1,9 @@
+tuitab (0.11.3-1) unstable; urgency=medium
+
+  * Security release: quinn-udp 0.5.16 (RUSTSEC-2026-0538).
+
+ -- denisotree <denisotree@users.noreply.github.com>  Tue, 17 Nov 2026 12:00:00 +0000
+
 tuitab (0.11.2-1) unstable; urgency=medium
 
   * Security release: bundled SQLite 3.54.1 (RUSTSEC-2026-0459).
